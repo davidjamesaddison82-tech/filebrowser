@@ -55,13 +55,13 @@ describe("AC12 — external services that are unavailable are handled safely (Gi
   }, 15_000);
 
   it.each([
-    [401, {}, "unauthorised"],
-    [403, {}, "forbidden"],
-    [403, { "x-ratelimit-remaining": "0" }, "rate_limited"],
-    [404, {}, "not_found"],
-    [429, {}, "rate_limited"],
-    [500, {}, "unexpected_response"],
-  ] as const)("maps HTTP %i to a named failure", async (status, headers, reason) => {
+    [401, "unauthorised", {}],
+    [403, "forbidden", {}],
+    [403, "rate_limited", { "x-ratelimit-remaining": "0" }],
+    [404, "not_found", {}],
+    [429, "rate_limited", {}],
+    [500, "unexpected_response", {}],
+  ] as const)("maps HTTP %i to the named failure '%s'", async (status, reason, headers) => {
     const { impl } = fakeFetch(() => jsonResponse({ message: "x" }, status, headers));
     expect(await new GitHubAdapter(config, impl).resolveRef(REPO, "main")).toMatchObject({ ok: false, reason });
   });

@@ -42,7 +42,7 @@ use no network: the GitHub and Drive adapters are tested with injected failures.
 | 10 | Browser navigation and functional controls | `tests/e2e/01-auth`, `02-navigation`, `05-governance` |
 | 11 | Responsive laptop layouts without overlays covering content | `tests/e2e/03-layout.spec.ts` — measured in the browser at 1366×768, 1280×720, 1440×900 and 390×844 |
 | 12 | Safe handling of unavailable external services | `tests/unit/integrations.test.ts`; `tests/db/determinism.test.ts` (database down); `tests/api/rest.test.ts` (integrations) |
-| 13 | Deterministic repeatability of critical acceptance tests | `tests/db/determinism.test.ts`; `npm run test:repeat` (`test-results/repeatability.json`) |
+| 13 | Deterministic repeatability of critical acceptance tests | `tests/db/determinism.test.ts`; `npm run test:repeat` → [REPEATABILITY.md](REPEATABILITY.md) |
 
 ## Negative tests
 

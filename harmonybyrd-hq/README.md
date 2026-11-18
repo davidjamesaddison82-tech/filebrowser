@@ -72,6 +72,7 @@ Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.m
 | [docs/CONNECTING-AI-CLIENTS.md](docs/CONNECTING-AI-CLIENTS.md) | Connecting Claude and ChatGPT: what is tested, what is not |
 | [docs/TESTING.md](docs/TESTING.md) | What each suite proves, the acceptance checks, what is not tested |
 | [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | Generated report of the last run |
+| [docs/REPEATABILITY.md](docs/REPEATABILITY.md) | Generated report of the last run-twice comparison |
 | [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) | Gaps, blocked integrations, limits |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Engineering decisions and their reasons |
 | [docs/PROGRESS-REGISTER.md](docs/PROGRESS-REGISTER.md) | What was done, in order, with evidence |
