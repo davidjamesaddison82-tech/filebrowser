@@ -2,12 +2,16 @@
  * Pure derived views over a Dataset. No I/O, no clock, no randomness: the same Dataset always
  * yields the same result, which is what makes pinned-revision retrieval reproducible.
  */
-import { citedSourceIds, collectCitations, Dataset, type Envelope, outgoingRefs, type RecordRef } from "./dataset";
+import { citedSourceIds, collectCitations, Dataset, type Envelope, outgoingRefs, type RecordRef, refKey } from "./dataset";
+import { normaliseForQuote } from "./quote";
 import {
   type AnyRecord,
   type BuildRecord,
   type Citation,
+  type Epistemic,
+  FOUNDER_ACCEPTED_BASES,
   LIFECYCLE_DIMENSIONS,
+  LIFECYCLE_LABEL,
   type LifecycleDimension,
   type ModuleRecord,
   RECORD_TYPE_LABEL,
@@ -118,6 +122,7 @@ export function incomingRefs(ds: Dataset, id: string): RecordRef[] {
 
 export type StandingHeadline =
   | "accepted_in_hq"
+  | "rejected_in_hq"
   | "acceptance_reported"
   | "tested_not_accepted"
   | "prototype_untested"
@@ -127,6 +132,7 @@ export type StandingHeadline =
 
 export const STANDING_LABEL: Record<StandingHeadline, string> = {
   accepted_in_hq: "Founder acceptance recorded in HQ",
+  rejected_in_hq: "Founder rejected in HQ",
   acceptance_reported: "Acceptance reported in a source — not recorded in HQ",
   tested_not_accepted: "Tested — not accepted",
   prototype_untested: "Prototype — no test evidence on record",
@@ -145,28 +151,63 @@ export interface ModuleStanding {
     test_evidence: boolean;
     acceptance_reported: boolean;
     acceptance_recorded_in_hq: boolean;
+    /** A founder decision recorded in HQ rejected it. Outranks everything a source reports. */
+    rejected_in_hq: boolean;
   };
+  /**
+   * Dimensions stated as "yes" or "partial" that do not count towards the standing, because
+   * nothing supports them (a submitter's claim, no citation, or a basis a source cannot give).
+   */
+  claimed_only: LifecycleDimension[];
   caution: string | null;
 }
 
 const positive = (state: string | undefined) => state === "yes" || state === "partial";
 
+/** Bases that come from a source; they count only with at least one citation. */
+const SOURCED_BASES: readonly string[] = ["reported", "design_intention", "source_recommendation", "founder_statement"];
+
+type LifecycleEntryLike = { state?: string; basis?: string; citations?: unknown } | undefined;
+
+/**
+ * Does a lifecycle entry raise a module's standing? Only a positive state that a cited source
+ * supports, or that HQ's build checked itself ("verified"). A submitter's claim never does.
+ * A reported founder acceptance must additionally have a basis a source can give.
+ */
+export function lifecycleEntryCounts(dimension: LifecycleDimension, entry: LifecycleEntryLike): boolean {
+  if (!entry || !positive(entry.state)) return false;
+  const cited = Array.isArray(entry.citations) && entry.citations.length > 0;
+  if (dimension === "founder_accepted") {
+    return (FOUNDER_ACCEPTED_BASES as readonly string[]).includes(entry.basis ?? "") && cited;
+  }
+  if (entry.basis === "verified") return true;
+  return SOURCED_BASES.includes(entry.basis ?? "") && cited;
+}
+
+type AcceptanceLike = { state?: string; decision_id?: string; scope_note?: string | null } | undefined;
+
+const acceptanceOf = (data: unknown): AcceptanceLike => {
+  const value = (data as { hq_acceptance?: unknown } | null)?.hq_acceptance;
+  return value && typeof value === "object" ? (value as AcceptanceLike) : undefined;
+};
+
 export function moduleStanding(module: ModuleRecord): ModuleStanding {
-  const lc = module.lifecycle;
+  const lc = (module.lifecycle ?? {}) as Partial<ModuleRecord["lifecycle"]>;
+  const counts = (dimension: LifecycleDimension) => lifecycleEntryCounts(dimension, lc[dimension]);
+  const hq = acceptanceOf(module);
   const flags = {
-    documented: positive(lc.documented?.state),
-    designed: positive(lc.designed?.state),
-    runnable: positive(lc.prototyped?.state) || positive(lc.implemented?.state),
-    test_evidence:
-      positive(lc.automated_tests?.state) ||
-      positive(lc.browser_tested?.state) ||
-      positive(lc.hardware_tested?.state) ||
-      positive(lc.independently_assessed?.state),
-    acceptance_reported: positive(lc.founder_accepted?.state),
-    acceptance_recorded_in_hq: module.hq_acceptance?.state === "accepted",
+    documented: counts("documented"),
+    designed: counts("designed"),
+    runnable: counts("prototyped") || counts("implemented"),
+    test_evidence: counts("automated_tests") || counts("browser_tested") || counts("hardware_tested") || counts("independently_assessed"),
+    acceptance_reported: counts("founder_accepted"),
+    acceptance_recorded_in_hq: hq?.state === "accepted",
+    rejected_in_hq: hq?.state === "rejected",
   };
+  const claimed_only = LIFECYCLE_DIMENSIONS.filter((d) => positive(lc[d]?.state) && !counts(d));
   let headline: StandingHeadline = "named_only";
-  if (flags.acceptance_recorded_in_hq) headline = "accepted_in_hq";
+  if (flags.rejected_in_hq) headline = "rejected_in_hq";
+  else if (flags.acceptance_recorded_in_hq) headline = "accepted_in_hq";
   else if (flags.acceptance_reported) headline = "acceptance_reported";
   else if (flags.test_evidence) headline = "tested_not_accepted";
   else if (flags.runnable) headline = "prototype_untested";
@@ -174,7 +215,11 @@ export function moduleStanding(module: ModuleRecord): ModuleStanding {
   else if (flags.documented) headline = "documented_only";
 
   let caution: string | null = null;
-  if (headline === "acceptance_reported") {
+  if (headline === "rejected_in_hq") {
+    caution = flags.acceptance_reported
+      ? `A source reports founder acceptance, but founder decision ${hq?.decision_id ?? "(unknown)"} rejected it in HQ.`
+      : `Founder decision ${hq?.decision_id ?? "(unknown)"} rejected it in HQ.`;
+  } else if (headline === "acceptance_reported") {
     caution =
       lc.founder_accepted?.state === "partial"
         ? "A source reports a scoped or partial founder acceptance. Read its scope; it is not recorded in HQ."
@@ -182,7 +227,10 @@ export function moduleStanding(module: ModuleRecord): ModuleStanding {
   } else if (headline === "tested_not_accepted") {
     caution = "Test results are on record. Passing tests are not founder acceptance.";
   }
-  return { headline, label: STANDING_LABEL[headline], flags, caution };
+  if (caution === null && claimed_only.length > 0) {
+    caution = `Not counted, because no source supports it: ${claimed_only.map((d) => LIFECYCLE_LABEL[d].label.toLowerCase()).join(", ")}.`;
+  }
+  return { headline, label: STANDING_LABEL[headline], flags, claimed_only, caution };
 }
 
 export interface AcceptanceStatus {
@@ -203,6 +251,10 @@ export function acceptanceStatus(ds: Dataset, type: RecordType, id: string): Acc
   const data = envelope.data as Record<string, unknown>;
   const hq = (data.hq_acceptance as AcceptanceStatus["recorded_in_hq"]) ?? null;
   const base = { ref: { type, id }, title: recordTitle(type, envelope.data), recorded_in_hq: hq };
+  // An acceptance or rejection cleared by a later founder decision is shown as cleared, not as absent.
+  const cleared = hq?.state === "none" ? `Founder decision ${hq.decision_id} cleared an earlier acceptance or rejection recorded in HQ.` : null;
+  const withCleared = (caution: string | null) => (cleared ? (caution ? `${caution} ${cleared}` : cleared) : caution);
+
 
   if (type === "module") {
     const module = envelope.data as ModuleRecord;
@@ -218,13 +270,27 @@ export function acceptanceStatus(ds: Dataset, type: RecordType, id: string): Acc
         state: module.lifecycle[dimension]?.state ?? "unknown",
         note: module.lifecycle[dimension]?.note ?? "",
       })),
-      caution: standing.caution,
+      caution: withCleared(standing.caution),
     };
   }
 
   if (type === "build") {
     const build = envelope.data as BuildRecord;
     const accepted = hq?.state === "accepted";
+    const rejected = hq?.state === "rejected";
+    if (rejected) {
+      return {
+        ...base,
+        headline: "rejected_in_hq",
+        label: STANDING_LABEL.rejected_in_hq,
+        reported_in_sources: { state: build.standing, note: build.statement.text, citations: build.statement.citations },
+        tests: [],
+        caution:
+          build.standing === "accepted_reported"
+            ? `A source reports this build as accepted, but founder decision ${hq.decision_id} rejected it in HQ.`
+            : `Founder decision ${hq.decision_id} rejected this build in HQ.`,
+      };
+    }
     const headline = accepted
       ? "accepted_in_hq"
       : build.standing === "accepted_reported"
@@ -245,22 +311,33 @@ export function acceptanceStatus(ds: Dataset, type: RecordType, id: string): Acc
       label,
       reported_in_sources: { state: build.standing, note: build.statement.text, citations: build.statement.citations },
       tests: [],
-      caution:
+      caution: withCleared(
         build.standing === "accepted_reported" && !accepted
           ? "The acceptance is as reported by the source, within the scope the source states."
           : build.standing === "candidate_not_accepted"
             ? "A candidate is not an accepted build, however many tests it passes."
             : null,
+      ),
     };
   }
 
+  if (hq?.state === "rejected") {
+    return {
+      ...base,
+      headline: "rejected_in_hq",
+      label: STANDING_LABEL.rejected_in_hq,
+      reported_in_sources: null,
+      tests: [],
+      caution: `Founder decision ${hq.decision_id} rejected it in HQ.`,
+    };
+  }
   return {
     ...base,
     headline: hq?.state === "accepted" ? "accepted_in_hq" : "not_applicable",
     label: hq?.state === "accepted" ? STANDING_LABEL.accepted_in_hq : "No founder acceptance recorded in HQ",
     reported_in_sources: null,
     tests: [],
-    caution: null,
+    caution: withCleared(null),
   };
 }
 
@@ -377,7 +454,9 @@ export interface HealthItem extends RecordRef {
 export interface DevelopmentHealth {
   /** Founder acceptance recorded in HQ by a founder decision. The only thing HQ calls "accepted". */
   accepted_in_hq: HealthItem[];
-  /** Evidence HQ produced or re-checked itself. */
+  /** Records a founder decision in HQ rejected. Never counted as reported or pending acceptance. */
+  rejected_in_hq: HealthItem[];
+  /** Evidence marked as checked by the build that produced this dataset. */
   hq_verified: HealthItem[];
   /** Acceptance that a source reports but that no founder decision in HQ confirms. */
   acceptance_reported_only: HealthItem[];
@@ -390,21 +469,34 @@ export interface DevelopmentHealth {
   unresolved_dependencies: HealthItem[];
 }
 
+/**
+ * Did this version of the record enter through the proposal inbox, with no founder acceptance
+ * recorded since? Its content is then the submitter's, filed by the founder, not a source's.
+ */
+export function enteredThroughInbox(envelope: Envelope<AnyRecord>): boolean {
+  return envelope.meta.origin === "proposal_acceptance" && acceptanceOf(envelope.data)?.state !== "accepted";
+}
+
 export function developmentHealth(ds: Dataset): DevelopmentHealth {
   const item = (envelope: Envelope<AnyRecord>, note: string): HealthItem => ({
     type: envelope.meta.type,
     id: envelope.meta.id,
     title: recordTitle(envelope.meta.type, envelope.data),
-    note,
+    note: enteredThroughInbox(envelope)
+      ? `Reported through the inbox${envelope.meta.proposal_id ? ` (${envelope.meta.proposal_id})` : ""}; not verified. ${note}`
+      : note,
   });
+  const decisionNote = (acc: AcceptanceLike) => `Decision ${acc?.decision_id ?? "(unknown)"}${acc?.scope_note ? ` — ${acc.scope_note}` : ""}`;
 
   const accepted_in_hq = ds
     .all()
-    .filter((e) => (e.data as { hq_acceptance?: { state?: string } }).hq_acceptance?.state === "accepted")
-    .map((e) => {
-      const acc = (e.data as { hq_acceptance: { decision_id: string; scope_note?: string | null } }).hq_acceptance;
-      return item(e, `Decision ${acc.decision_id}${acc.scope_note ? ` — ${acc.scope_note}` : ""}`);
-    });
+    .filter((e) => acceptanceOf(e.data)?.state === "accepted")
+    .map((e) => item(e, decisionNote(acceptanceOf(e.data))));
+
+  const rejected_in_hq = ds
+    .all()
+    .filter((e) => acceptanceOf(e.data)?.state === "rejected")
+    .map((e) => item(e, decisionNote(acceptanceOf(e.data))));
 
   const hq_verified = ds.evidence
     .filter((e) => e.data.verification === "hq_verified")
@@ -412,7 +504,8 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
 
   const acceptance_reported_only: HealthItem[] = [];
   for (const b of ds.builds) {
-    if (b.data.standing === "accepted_reported" && b.data.hq_acceptance?.state !== "accepted") {
+    const decided = acceptanceOf(b.data)?.state === "accepted" || acceptanceOf(b.data)?.state === "rejected";
+    if (b.data.standing === "accepted_reported" && !decided) {
       acceptance_reported_only.push(item(b, b.data.statement.text));
     }
   }
@@ -428,35 +521,65 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
 
   const open_defects = ds.defects.filter((d) => d.data.status === "open").map((d) => item(d, d.data.statement.text));
 
-  const blocked: HealthItem[] = ds.openItems
-    .filter((o) => o.data.kind === "blocker" || o.data.kind === "not_authorised")
-    .map((o) => item(o, o.data.statement.text));
+  // A blocker recorded both as an open item and on the module it names, quoting the same
+  // sentence, is one blocker: the module's copy is not counted again.
+  const blockerItems = ds.openItems.filter((o) => o.data.kind === "blocker" || o.data.kind === "not_authorised");
+  const quotedBy = (citations: Citation[]) => citations.map((c) => `${c.source_id}|${normaliseForQuote(c.quote)}`);
+  const blocked: HealthItem[] = blockerItems.map((o) => item(o, o.data.statement.text));
   for (const m of ds.modules) {
-    for (const blocker of m.data.blockers) blocked.push(item(m, blocker.text));
+    const alreadyListed = new Set(
+      blockerItems.filter((o) => o.data.module_ids.includes(m.meta.id)).flatMap((o) => quotedBy(collectCitations(o.data))),
+    );
+    for (const blocker of m.data.blockers) {
+      const quotes = quotedBy(blocker.citations);
+      if (quotes.length > 0 && quotes.every((q) => alreadyListed.has(q))) continue;
+      blocked.push(item(m, blocker.text));
+    }
   }
 
-  const unverified_claims: HealthItem[] = [
-    ...ds.evidence
-      .filter((e) => e.data.verification === "agent_submitted_unverified" || e.data.verification === "submitted_unverified")
-      .map((e) => item(e, "Submitted through the proposal inbox; not independently verified.")),
-    ...ds.openItems
-      .filter((o) => o.data.kind === "unverified_claim" || o.data.kind === "missing_evidence")
-      .map((o) => item(o, o.data.statement.text)),
-  ];
+  const unverified_claims: HealthItem[] = [];
+  const claimed = new Set<string>();
+  const addClaim = (envelope: Envelope<AnyRecord>, note: string) => {
+    const key = refKey(envelope.meta.type, envelope.meta.id);
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    unverified_claims.push(item(envelope, note));
+  };
+  for (const e of ds.evidence) {
+    if (e.data.verification === "agent_submitted_unverified" || e.data.verification === "submitted_unverified") {
+      addClaim(e, "Submitted through the proposal inbox; not independently verified.");
+    }
+  }
+  for (const o of ds.openItems) {
+    if (o.data.kind === "unverified_claim" || o.data.kind === "missing_evidence") addClaim(o, o.data.statement.text);
+  }
+  for (const envelope of ds.all()) {
+    const d = envelope.data as { statement?: { epistemic?: Epistemic; text?: string }; result?: { epistemic?: Epistemic; text?: string } };
+    const primary = d.statement ?? d.result;
+    if (primary?.epistemic === "submitter_claim") addClaim(envelope, primary.text ?? "A submitter's claim.");
+    else if (enteredThroughInbox(envelope)) addClaim(envelope, "Its content was proposed through the inbox and filed by the founder.");
+  }
+  for (const m of ds.modules) {
+    const { claimed_only } = moduleStanding(m.data);
+    if (claimed_only.length > 0) {
+      addClaim(m, `Lifecycle states with no source behind them: ${claimed_only.map((d) => LIFECYCLE_LABEL[d].label.toLowerCase()).join(", ")}.`);
+    }
+  }
 
+  // One entry per pending decision: an open item that points at a decision already listed is
+  // folded into that decision's entry instead of being counted a second time.
   const resolved = resolvedByHqDecisions(ds);
+  const pendingDecisions = ds.decisions.filter(
+    (d) => d.data.recorded_in === "source" && ["unissued", "pending", "held"].includes(d.data.status) && !resolved.has(d.meta.id),
+  );
+  const pendingIds = new Set(pendingDecisions.map((d) => d.meta.id));
+  const pendingItems = ds.openItems.filter((o) => o.data.kind === "pending_founder_decision" && !resolved.has(o.meta.id));
   const pending_founder_decisions: HealthItem[] = [
-    ...ds.decisions
-      .filter(
-        (d) =>
-          d.data.recorded_in === "source" &&
-          ["unissued", "pending", "held"].includes(d.data.status) &&
-          !resolved.has(d.meta.id),
-      )
-      .map((d) => item(d, `${d.data.status.toUpperCase()} — ${d.data.statement.text}`)),
-    ...ds.openItems
-      .filter((o) => o.data.kind === "pending_founder_decision" && !resolved.has(o.meta.id))
-      .map((o) => item(o, o.data.statement.text)),
+    ...pendingDecisions.map((d) => {
+      const alsoAs = pendingItems.filter((o) => o.data.decision_id === d.meta.id).map((o) => o.meta.id);
+      return item(d, `${d.data.status.toUpperCase()} — ${d.data.statement.text}${alsoAs.length ? ` (also recorded as ${alsoAs.join(", ")})` : ""}`);
+    }),
+    ...pendingItems.filter((o) => !(o.data.decision_id && pendingIds.has(o.data.decision_id))).map((o) => item(o, o.data.statement.text)),
   ];
 
   const unresolved_dependencies = ds.openItems
@@ -465,6 +588,7 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
 
   return {
     accepted_in_hq,
+    rejected_in_hq,
     hq_verified,
     acceptance_reported_only,
     tested_not_accepted,
@@ -476,13 +600,19 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
   };
 }
 
-/** Ids that an HQ-recorded founder decision says it resolves. */
+/**
+ * Ids that an HQ-recorded founder decision says it resolves, plus every open item that points
+ * at a decision so resolved (resolving a decision also settles the items waiting on it).
+ */
 export function resolvedByHqDecisions(ds: Dataset): Set<string> {
   const resolved = new Set<string>();
   for (const d of ds.decisions) {
     if (d.data.recorded_in === "hq" && d.data.status === "issued") {
       for (const id of d.data.resolves) resolved.add(id);
     }
+  }
+  for (const o of ds.openItems) {
+    if (o.data.decision_id && resolved.has(o.data.decision_id)) resolved.add(o.meta.id);
   }
   return resolved;
 }
@@ -521,13 +651,11 @@ export function missingWork(ds: Dataset, windowDays = 21): MissingWork {
   const modulesWithBuild = new Set(ds.builds.map((b) => b.data.module_id).filter(Boolean) as string[]);
 
   // Recency: which modules do the most recent sources still talk about?
-  const sourceDate = (s: SourceRecord) => s.doc_date ?? s.updated ?? null;
   const ingested = ds.sources.filter((s) => s.data.access === "read_full" || s.data.access === "read_partial");
-  const newest = ingested.map((s) => sourceDate(s.data)).filter(Boolean).sort().at(-1) ?? null;
-  let cutoff: string | null = null;
+  const newest = ingested.map((s) => sourceDate(s.data)).filter((d): d is string => d !== null).sort().at(-1) ?? null;
+  const cutoff: string | null = newest ? shiftDate(newest, -windowDays) : null;
   const stale: HealthItem[] = [];
-  if (newest) {
-    cutoff = shiftDate(newest, -windowDays);
+  if (newest && cutoff) {
     const lastSeen = moduleLastSeen(ds);
     for (const m of ds.modules) {
       const seen = lastSeen.get(m.meta.id) ?? null;
@@ -543,9 +671,15 @@ export function missingWork(ds: Dataset, windowDays = 21): MissingWork {
     requirements_without_implementation_record: live
       .filter((r) => r.data.implementation_state === "no_record")
       .map((r) => item(r, "No implementation record is linked or reported.")),
-    requirements_without_test_evidence: live
-      .filter((r) => r.data.linked_evidence_ids.length === 0)
-      .map((r) => item(r, "No test or acceptance evidence is linked.")),
+    requirements_without_test_evidence: live.flatMap((r) => {
+      const evidence = requirementTestEvidence(ds, r.data);
+      if (evidence.verified.length > 0) return [];
+      const parts: string[] = [];
+      if (evidence.unverified.length > 0) parts.push(`only unverified claims are linked (${evidence.unverified.join(", ")})`);
+      if (evidence.missing.length > 0) parts.push(`linked ids that are not evidence records: ${evidence.missing.join(", ")}`);
+      const note = parts.length === 0 ? "No test or acceptance evidence is linked." : `No verified evidence: ${parts.join("; ")}.`;
+      return [item(r, note)];
+    }),
     requirements_unreviewed: ds.requirements
       .filter((r) => r.data.disposition === "unreviewed")
       .map((r) => item(r, "Registered from a source; the founder has not confirmed its standing in HQ.")),
@@ -575,11 +709,27 @@ export function missingWork(ds: Dataset, windowDays = 21): MissingWork {
   };
 }
 
+/** "YYYY-MM-DD…" with a real month and day. Only such strings are treated as dates. */
+export function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return false;
+  const [, y, m, d] = match.map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
+/** A source's date for recency: its document date, else its last update; a malformed value is ignored. */
+function sourceDate(s: SourceRecord): string | null {
+  for (const value of [s.doc_date, s.updated]) if (isIsoDate(value)) return value.slice(0, 10);
+  return null;
+}
+
 /** For each module, the latest date of any source that a record about that module cites. */
 export function moduleLastSeen(ds: Dataset): Map<string, string> {
   const dateOf = new Map<string, string>();
   for (const s of ds.sources) {
-    const date = s.data.doc_date ?? s.data.updated;
+    const date = sourceDate(s.data);
     if (date) dateOf.set(s.meta.id, date);
   }
   const lastSeen = new Map<string, string>();
@@ -603,11 +753,13 @@ export function moduleLastSeen(ds: Dataset): Map<string, string> {
   return lastSeen;
 }
 
-function shiftDate(isoDate: string, days: number): string {
+/** Shift an ISO date by whole days; null (never an exception) for anything that is not one. */
+function shiftDate(isoDate: string, days: number): string | null {
+  if (!isIsoDate(isoDate)) return null;
   const [y, m, d] = isoDate.slice(0, 10).split("-").map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
   date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +773,7 @@ export type ReviewKind =
   | "tests_without_acceptance"
   | "agent_claim_unverified"
   | "dangling_reference"
+  | "tested_without_evidence"
   | "superseded_without_successor"
   | "possible_duplicate_module"
   | "governing_source_missing";
@@ -632,6 +785,7 @@ export const REVIEW_KIND_LABEL: Record<ReviewKind, string> = {
   tests_without_acceptance: "Tests on record, acceptance not on record",
   agent_claim_unverified: "Agent-submitted claim awaiting verification",
   dangling_reference: "Reference to a record that does not exist",
+  tested_without_evidence: "Implementation state claims tests but no evidence record is linked",
   superseded_without_successor: "Superseded requirement with no successor named",
   possible_duplicate_module: "Modules that may be the same thing under two names",
   governing_source_missing: "Governing document named but not accessible",
@@ -707,14 +861,11 @@ export function reviewItems(ds: Dataset): ReviewItem[] {
   }
 
   // Acceptance reported for a build with no acceptance instrument or decision on record.
+  // A build the founder has accepted or rejected in HQ is decided; nothing is pending for it.
   for (const b of ds.builds) {
-    if (b.data.standing !== "accepted_reported" || b.data.hq_acceptance?.state === "accepted") continue;
-    const hasInstrument =
-      ds.evidence.some((e) => e.data.build_id === b.meta.id && e.data.type === "founder_acceptance") ||
-      ds.decisions.some(
-        (d) => d.data.status === "issued" && collectCitations(d.data).some((c) => b.data.citations.some((bc) => bc.source_id === c.source_id)),
-      );
-    if (!hasInstrument) {
+    const state = acceptanceOf(b.data)?.state;
+    if (b.data.standing !== "accepted_reported" || state === "accepted" || state === "rejected") continue;
+    if (!hasAcceptanceInstrument(ds, b)) {
       items.push({
         key: `acc:${b.meta.id}`,
         kind: "missing_acceptance_evidence",
@@ -724,6 +875,23 @@ export function reviewItems(ds: Dataset): ReviewItem[] {
         refs: [ref(b.meta.id)],
       });
     }
+  }
+
+  // An implementation state that claims tests, with no evidence record behind it.
+  for (const r of ds.requirements) {
+    if (r.data.implementation_state !== "implemented_tested") continue;
+    const evidence = requirementTestEvidence(ds, r.data);
+    if (evidence.verified.length + evidence.unverified.length > 0) continue;
+    items.push({
+      key: `tnoev:${r.meta.id}`,
+      kind: "tested_without_evidence",
+      title: `${r.meta.id} is marked "implemented and tested", but no evidence record is linked`,
+      detail:
+        evidence.missing.length > 0
+          ? `The linked ids are not evidence records in the register: ${evidence.missing.join(", ")}.`
+          : "Link the evidence record that shows the tests, or change the implementation state.",
+      refs: [ref(r.meta.id)],
+    });
   }
 
   // Tests without acceptance.
@@ -806,6 +974,29 @@ export function reviewItems(ds: Dataset): ReviewItem[] {
   }
 
   return items.sort((a, b) => a.kind.localeCompare(b.kind) || a.key.localeCompare(b.key));
+}
+
+/**
+ * What counts as an acceptance instrument for a build that a source reports as accepted:
+ * founder-acceptance evidence that a source reports or HQ's build checked (never an unverified
+ * submission), or an issued decision that is about this build or its module. A decision that
+ * merely cites the same document is not one.
+ */
+export function hasAcceptanceInstrument(ds: Dataset, b: Envelope<BuildRecord>): boolean {
+  const evidence = ds.evidence.some(
+    (e) =>
+      e.data.build_id === b.meta.id &&
+      e.data.type === "founder_acceptance" &&
+      (e.data.verification === "source_reported" || e.data.verification === "hq_verified"),
+  );
+  if (evidence) return true;
+  const buildRefs = new Set(outgoingRefs("build", b.data));
+  return ds.decisions.some((d) => {
+    if (d.data.status !== "issued") return false;
+    if (b.data.module_id && d.data.module_ids.includes(b.data.module_id)) return true;
+    if (buildRefs.has(d.meta.id) || outgoingRefs("decision", d.data).includes(b.meta.id)) return true;
+    return d.data.effects.some((effect) => effect.record_id === b.meta.id);
+  });
 }
 
 function normaliseWording(text: string): string {
@@ -913,10 +1104,36 @@ export interface RequirementFilter {
   outstanding?: boolean;
 }
 
-/** A requirement is outstanding while it is live and has no linked test evidence or no implementation record. */
-export function isOutstanding(r: RequirementRecord): boolean {
+export interface RequirementTestEvidence {
+  /** Linked evidence that a source reports or HQ's build checked. */
+  verified: string[];
+  /** Linked evidence that is only a submission through the inbox. */
+  unverified: string[];
+  /** Linked ids that are not evidence records in this dataset. */
+  missing: string[];
+}
+
+/** Resolve a requirement's linked evidence ids against the dataset and sort them by what they prove. */
+export function requirementTestEvidence(ds: Dataset, r: RequirementRecord): RequirementTestEvidence {
+  const out: RequirementTestEvidence = { verified: [], unverified: [], missing: [] };
+  for (const id of Array.isArray(r.linked_evidence_ids) ? r.linked_evidence_ids : []) {
+    const e = ds.get("evidence", id);
+    if (!e) out.missing.push(id);
+    else if (e.data.verification === "source_reported" || e.data.verification === "hq_verified") out.verified.push(id);
+    else out.unverified.push(id);
+  }
+  return out;
+}
+
+/**
+ * A requirement is outstanding while it is live and is not both implemented-and-tested and backed
+ * by verified evidence. Pass the dataset: without it the linked ids cannot be resolved, and only
+ * their number is checked (the older, weaker rule).
+ */
+export function isOutstanding(r: RequirementRecord, ds?: Dataset): boolean {
   if (!LIVE_DISPOSITIONS.has(r.disposition)) return false;
-  return r.implementation_state !== "implemented_tested" || r.linked_evidence_ids.length === 0;
+  if (r.implementation_state !== "implemented_tested") return true;
+  return ds ? requirementTestEvidence(ds, r).verified.length === 0 : r.linked_evidence_ids.length === 0;
 }
 
 export function filterRequirements(ds: Dataset, filter: RequirementFilter): Envelope<RequirementRecord>[] {
@@ -930,7 +1147,7 @@ export function filterRequirements(ds: Dataset, filter: RequirementFilter): Enve
   if (filter.disposition) list = list.filter((r) => r.data.disposition === filter.disposition);
   if (filter.implementation_state) list = list.filter((r) => r.data.implementation_state === filter.implementation_state);
   if (filter.source_id) list = list.filter((r) => r.data.source_id === filter.source_id);
-  if (filter.outstanding) list = list.filter((r) => isOutstanding(r.data));
+  if (filter.outstanding) list = list.filter((r) => isOutstanding(r.data, ds));
   return list;
 }
 
@@ -1014,7 +1231,7 @@ export function moduleBrief(ds: Dataset, id: string): ModuleBrief | null {
         ref: ref(r.meta.id),
         disposition: r.data.disposition,
         implementation_state: r.data.implementation_state,
-        outstanding: isOutstanding(r.data),
+        outstanding: isOutstanding(r.data, ds),
       })),
     decisions: ds.decisions
       .filter((d) => d.data.module_ids.includes(id))

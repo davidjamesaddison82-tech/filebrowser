@@ -154,8 +154,11 @@ export function collectCitations(value: unknown, out: Citation[] = []): Citation
     for (const item of value) collectCitations(item, out);
   } else if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    if (typeof obj.source_id === "string" && typeof obj.quote === "string") {
-      out.push({ source_id: obj.source_id, quote: obj.quote, locator: (obj.locator as string | null) ?? null });
+    // Only a citation-shaped object whose locator is text (or absent) is a citation; anything else
+    // would be passed to the screens as a locator they cannot display.
+    const locatorOk = obj.locator === undefined || obj.locator === null || typeof obj.locator === "string";
+    if (typeof obj.source_id === "string" && typeof obj.quote === "string" && locatorOk) {
+      out.push({ source_id: obj.source_id, quote: obj.quote, locator: (obj.locator as string | null | undefined) ?? null });
     }
     for (const [key, child] of Object.entries(obj)) {
       if (key === "source_id" || key === "quote" || key === "locator") continue;

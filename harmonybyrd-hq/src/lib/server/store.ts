@@ -308,6 +308,29 @@ export async function listChanges(principal: Principal, limit = 30): Promise<Cha
   });
 }
 
+export interface HeadSeal {
+  rev: number;
+  content_hash: string;
+  /** Links every seal back to revision 1. A copy kept outside the database reveals a rewrite of history and seals together. */
+  seal_hash: string | null;
+}
+
+/** The seals of the latest sealed revision, or null before the first import. */
+export async function headSeal(principal: Principal): Promise<HeadSeal | null> {
+  return readAs(claimsFor(principal), async (q) => {
+    const rows = await q.query<{ rev: string; content_hash: string; seal_hash: string | null }>(
+      "select rev, content_hash, seal_hash from hq.head_seal()",
+    );
+    const row = rows.rows[0];
+    return row ? { rev: Number(row.rev), content_hash: row.content_hash, seal_hash: row.seal_hash } : null;
+  });
+}
+
+/**
+ * Every problem hq.verify_chain() finds: broken version links and hashes, and (since migration 0006) revision
+ * seals that no longer match the records, gaps in revision numbering and breaks in the seal chain. Revision
+ * problems have record_type "dataset_revision", record_id the revision number and version 0.
+ */
 export async function chainProblems(principal: Principal): Promise<{ record_type: string; record_id: string; version: number; problem: string }[]> {
   return readAs(claimsFor(principal), async (q) => {
     const rows = await q.query<{ record_type: string; record_id: string; version: number; problem: string }>(

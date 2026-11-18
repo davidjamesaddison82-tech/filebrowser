@@ -40,6 +40,7 @@ export interface MapLayout {
 /** Matches the legend wording, so the node and the legend say the same thing. */
 export const STANDING_SHORT: Record<StandingHeadline, string> = {
   accepted_in_hq: "Acceptance recorded in HQ",
+  rejected_in_hq: "Rejected in HQ",
   acceptance_reported: "Acceptance reported in a source",
   tested_not_accepted: "Tested, not accepted",
   prototype_untested: "Prototype, untested",

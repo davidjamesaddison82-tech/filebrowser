@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { canonicalJson, normaliseForQuote, packContentHash, SourceTexts, validateRecords } from "@/lib/domain/pack";
+import {
+  canonicalJson,
+  normaliseForQuote,
+  packContentHash,
+  quoteProblem,
+  RESERVED_ID,
+  SourceTexts,
+  validateRecords,
+  wordingProblem,
+} from "@/lib/domain/pack";
 import { safeParseRecord } from "@/lib/domain/schemas";
 import { FIXTURE_DIR, fixturePack } from "../helpers/fixture";
 
@@ -104,5 +113,122 @@ describe("record schemas enforce epistemic discipline", () => {
     const build = raw("build", "BLD-FX-01");
     build.data.id = "FR-FX-099";
     expect(safeParseRecord("build", build.data).ok).toBe(false);
+  });
+});
+
+describe("degenerate quotations are rejected (evidence-1, tests-2)", () => {
+  const knownIds = () => new Set(fixturePack().records.map((r) => r.id));
+  const check = (records: { type: string; data: unknown }[]) => validateRecords(records, texts(), { knownIds: knownIds() });
+  const withStatementQuote = (quote: string) => {
+    const item = raw("open_item", "OPEN-FX-02");
+    (item.data.statement as { citations: { quote: string }[] }).citations[0].quote = quote;
+    return item;
+  };
+
+  const padded: [string, string][] = [
+    ["twelve spaces", " ".repeat(12)],
+    ['"a" and eleven spaces', `a${" ".repeat(11)}`],
+    ["tabs and newlines", "\t\n".repeat(6)],
+    ["no-break spaces", " ".repeat(12)],
+    ['a padded "the"', "     the    "],
+  ];
+  for (const [name, quote] of padded) {
+    it(`refuses a citation whose quotation is ${name}`, () => {
+      const result = check([withStatementQuote(quote)]);
+      expect(result.valid.map((r) => r.id)).not.toContain("OPEN-FX-02");
+      const messages = result.problems.filter((p) => p.severity === "error").map((p) => p.message);
+      expect(messages.join(" ")).toMatch(/quotation is (empty|too short)/);
+      expect(result.verified).toBe(0);
+    });
+  }
+
+  for (const [name, wording] of [
+    ["three spaces", "   "],
+    ['"the"', "the"],
+    ["three newlines", "\n\n\n"],
+    ['a padded "a"', "  a  "],
+  ] as const) {
+    it(`refuses a requirement whose exact wording is ${name}`, () => {
+      const requirement = raw("requirement", "FR-FX-002");
+      requirement.data.exact_wording = wording;
+      const result = check([requirement]);
+      expect(result.valid).toEqual([]);
+      expect(result.problems.filter((p) => p.severity === "error").map((p) => p.message).join(" ")).toMatch(/exact wording is (empty|too short)/);
+    });
+  }
+
+  it("refuses a padded quotation in a field the schema does not declare", () => {
+    // The schema never sees this object, but the pack gate still verifies it as a citation.
+    const build = raw("build", "BLD-FX-01");
+    build.data.notes = [{ source_id: "SRC-F01", quote: `a${" ".repeat(11)}` }];
+    const result = check([build]);
+    expect(result.valid).toEqual([]);
+    expect(result.problems[0].message).toMatch(/citation of SRC-F01: the quotation is too short/);
+    expect(result.verified).toBe(result.citations - 1);
+  });
+
+  it("an empty quotation is never contained in a source", () => {
+    expect(texts().contains("SRC-F01", " ".repeat(12))).toBe(false);
+    expect(texts().contains("SRC-F01", "")).toBe(false);
+    expect(texts().contains("SRC-F01", " \t\n")).toBe(false);
+    expect(texts().contains("SRC-F01", "Never show a score out of ten.")).toBe(true);
+  });
+
+  it("counts length after normalisation, at the documented minimums", () => {
+    expect(quoteProblem("abcdefghijkl")).toBeNull();
+    expect(quoteProblem("abcdefghijk")).toMatch(/too short/);
+    expect(quoteProblem("abc    defgh")).toMatch(/too short/); // 9 characters once spaces collapse
+    expect(wordingProblem("abcd efgh")).toBeNull();
+    expect(wordingProblem("abc defg")).toMatch(/too short/);
+    expect(wordingProblem("   ")).toMatch(/empty/);
+    // normaliseForQuote itself is unchanged: the database mirrors it exactly.
+    expect(normaliseForQuote("  a \t b  ")).toBe("a b");
+  });
+
+  it("the record schemas apply the same minimums, so proposals are refused too", () => {
+    const build = raw("build", "BLD-FX-01");
+    (build.data.statement as { citations: { quote: string }[] }).citations[0].quote = " ".repeat(12);
+    const result = safeParseRecord("build", build.data);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.issues.join(" ")).toMatch(/statement\.citations\.0\.quote: the quotation is empty/);
+    const requirement = raw("requirement", "FR-FX-002");
+    requirement.data.exact_wording = "the";
+    const req = safeParseRecord("requirement", requirement.data);
+    expect(req.ok).toBe(false);
+    if (!req.ok) expect(req.issues.join(" ")).toMatch(/exact_wording: the exact wording is too short/);
+  });
+});
+
+describe("ids issued by HQ cannot be imported (evidence-6)", () => {
+  const knownIds = () => new Set(fixturePack().records.map((r) => r.id));
+  const renamed = (type: string, id: string, newId: string) => {
+    const record = raw(type, id);
+    record.data.id = newId;
+    return record;
+  };
+
+  for (const [type, id, reserved] of [
+    ["evidence", "EV-FX-01", "EV-HQ-0001"],
+    ["decision", "FD-FX-01", "FD-HQ-0001"],
+    ["requirement", "FR-FX-002", "FR-HQ-0001"],
+    ["open_item", "OPEN-FX-02", "OPEN-HQ-12"],
+  ] as const) {
+    it(`refuses ${reserved}`, () => {
+      const result = validateRecords([renamed(type, id, reserved)], texts(), { knownIds: knownIds() });
+      expect(result.valid).toEqual([]);
+      expect(result.problems).toEqual([expect.objectContaining({ severity: "error", id: reserved, message: expect.stringMatching(/issued by HQ itself/) })]);
+    });
+  }
+
+  it("accepts the build's own ids, which are not of that form", () => {
+    for (const [type, id, own] of [
+      ["evidence", "EV-FX-01", "EV-HQ-CHK-01"],
+      ["build", "BLD-FX-01", "BLD-HQ-P02R1"],
+      ["recommendation", "REC-FX-01", "REC-P02-01"],
+    ] as const) {
+      const result = validateRecords([renamed(type, id, own)], texts(), { knownIds: knownIds() });
+      expect(result.valid.map((r) => r.id)).toEqual([own]);
+      expect(RESERVED_ID.test(own)).toBe(false);
+    }
   });
 });

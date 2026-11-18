@@ -86,21 +86,41 @@ export function asAuthRole<T>(fn: (q: Queryer) => Promise<T>): Promise<T> {
   return run("hq_auth", null, false, fn);
 }
 
-/** Append an audit event in its own transaction, so that denials are recorded even though the request failed. */
+/** hq.log_refusal refuses a detail over 8192 bytes; stay well under it so a refusal is never lost. */
+const AUDIT_DETAIL_MAX_BYTES = 6000;
+
+/** The detail as JSON text, or a short preview of it when it is too large to store whole. */
+export function auditDetailJson(detail: unknown): string | null {
+  if (detail === undefined || detail === null) return null;
+  const text = JSON.stringify(detail);
+  if (text === undefined) return null;
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= AUDIT_DETAIL_MAX_BYTES) return text;
+  // 1500 characters are at most 6000 bytes in UTF-8, so the preview always fits.
+  return JSON.stringify({ truncated: true, original_bytes: bytes, preview: text.slice(0, 1500) });
+}
+
+/**
+ * Append an audit event in its own transaction, so that denials are recorded even though the request failed.
+ * Refusals go through hq.log_refusal and allowed uses through hq.log_access: the database decides who the
+ * caller is from the claims, and an allowed use is recorded only for an active principal (no detail).
+ */
 export async function audit(
   claims: DbClaims | null,
   event: { action: string; objectType?: string | null; objectId?: string | null; outcome: "allowed" | "denied" | "error"; detail?: unknown; requestId?: string | null },
 ): Promise<void> {
   try {
     await run(claims ? "authenticated" : "anon", claims, false, (q) =>
-      q.query("select hq.log_event($1, $2, $3, $4, $5::jsonb, $6)", [
-        event.action,
-        event.objectType ?? null,
-        event.objectId ?? null,
-        event.outcome,
-        event.detail === undefined ? null : JSON.stringify(event.detail),
-        event.requestId ?? null,
-      ]),
+      event.outcome === "allowed"
+        ? q.query("select hq.log_access($1, $2, $3, $4)", [event.action, event.objectType ?? null, event.objectId ?? null, event.requestId ?? null])
+        : q.query("select hq.log_refusal($1, $2, $3, $4, $5::jsonb, $6)", [
+            event.action,
+            event.objectType ?? null,
+            event.objectId ?? null,
+            event.outcome,
+            auditDetailJson(event.detail),
+            event.requestId ?? null,
+          ]),
     );
   } catch {
     /* auditing must never turn a refusal into a different error */

@@ -15,7 +15,17 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { collectCitations, outgoingRefs } from "./dataset";
+import { normaliseForQuote, quoteProblem, wordingProblem } from "./quote";
 import { type AnyRecord, RECORD_TYPES, type RecordType, safeParseRecord } from "./schemas";
+
+export { MIN_QUOTE_CHARS, MIN_WORDING_NON_SPACE_CHARS, normaliseForQuote, quoteProblem, wordingProblem } from "./quote";
+
+/**
+ * Ids of this form (FD-HQ-0001, EV-HQ-12 …) are issued by HQ itself when the founder accepts a
+ * proposal or records a decision. A pack that used one would merge two unrelated records into one
+ * history, so the pack gate refuses them (the database refuses them too).
+ */
+export const RESERVED_ID = /^[A-Z]{2,5}-HQ-[0-9]+$/;
 
 export interface PackManifest {
   pack_id: string;
@@ -55,11 +65,6 @@ export interface LoadedPack {
   };
 }
 
-/** Whitespace-insensitive comparison: line wrapping in an export must not defeat verification. */
-export function normaliseForQuote(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 export class SourceTexts {
   private cache = new Map<string, string | null>();
   constructor(private readonly dir: string) {}
@@ -76,9 +81,11 @@ export class SourceTexts {
     return this.cache.get(sourceId) ?? null;
   }
 
+  /** True when the quotation occurs in the source. An empty quotation is never "contained": every text contains "". */
   contains(sourceId: string, quote: string): boolean {
     const text = this.get(sourceId);
-    return text !== null && text.includes(normaliseForQuote(quote));
+    const normalised = normaliseForQuote(quote);
+    return text !== null && normalised !== "" && text.includes(normalised);
   }
 
   count(): number {
@@ -116,6 +123,10 @@ export function validateRecords(
       continue;
     }
     seen.add(parsed.data.id);
+    if (RESERVED_ID.test(parsed.data.id)) {
+      problems.push({ severity: "error", type, id, message: "ids of this form are issued by HQ itself; a pack cannot use one" });
+      continue;
+    }
     if ("hq_acceptance" in (raw.data as object)) {
       problems.push({ severity: "error", type, id, message: "hq_acceptance cannot be supplied by a pack; it is recorded only by founder decision" });
       continue;
@@ -128,6 +139,13 @@ export function validateRecords(
     let recordOk = true;
     for (const citation of collectCitations(parsed.data)) {
       citations += 1;
+      // The schema checks declared citations; this also covers citation-shaped objects in undeclared fields.
+      const weak = quoteProblem(citation.quote);
+      if (weak) {
+        problems.push({ severity: "error", type, id, message: `citation of ${citation.source_id}: ${weak}` });
+        recordOk = false;
+        continue;
+      }
       if (!texts.has(citation.source_id)) {
         const mustHave = options.requireSourceText ? options.requireSourceText(citation.source_id) : true;
         problems.push({
@@ -156,7 +174,11 @@ export function validateRecords(
     if (type === "requirement") {
       const r = parsed.data as { exact_wording: string; source_id: string };
       citations += 1;
-      if (!texts.contains(r.source_id, r.exact_wording)) {
+      const weak = wordingProblem(r.exact_wording);
+      if (weak) {
+        problems.push({ severity: "error", type, id, message: weak });
+        recordOk = false;
+      } else if (!texts.contains(r.source_id, r.exact_wording)) {
         problems.push({
           severity: "error",
           type,

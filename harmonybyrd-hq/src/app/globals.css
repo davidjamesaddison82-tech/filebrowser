@@ -886,6 +886,9 @@ svg.map .dim {
 .st-accepted_in_hq {
   fill: var(--ok-wash);
 }
+.st-rejected_in_hq {
+  fill: var(--bad-wash);
+}
 .st-acceptance_reported {
   fill: var(--founder-wash);
 }
@@ -907,6 +910,9 @@ svg.map .dim {
 }
 .sw.st-accepted_in_hq {
   background: var(--ok-wash);
+}
+.sw.st-rejected_in_hq {
+  background: var(--bad-wash);
 }
 .sw.st-acceptance_reported {
   background: var(--founder-wash);

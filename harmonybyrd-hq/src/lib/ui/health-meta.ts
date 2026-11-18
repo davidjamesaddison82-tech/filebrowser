@@ -6,9 +6,15 @@ export const HEALTH_META: Record<keyof DevelopmentHealth, { title: string; descr
     description: "Records carrying an acceptance made by a founder decision inside HQ. The only thing HQ itself calls accepted.",
     tone: "ok",
   },
+  rejected_in_hq: {
+    title: "Founder rejected in HQ",
+    description: "Records a founder decision inside HQ rejected. Whatever a source reports, the rejection recorded in HQ stands.",
+    tone: "bad",
+  },
   hq_verified: {
-    title: "Evidence verified by HQ",
-    description: "Checks HQ performed itself, such as recomputing a checksum from the bytes it retrieved.",
+    title: "Checks made by HQ's build",
+    description:
+      "Recorded by the build that produced this dataset (checksums recomputed, quotations verified, test runs). The running application re-verifies quotations at import; it does not re-run the other checks.",
     tone: "ok",
   },
   acceptance_reported_only: {
@@ -21,16 +27,22 @@ export const HEALTH_META: Record<keyof DevelopmentHealth, { title: string; descr
     description: "Test evidence is on record and acceptance is not. Passing tests are not founder acceptance.",
     tone: "info",
   },
-  open_defects: { title: "Open defects", description: "Defects the sources record as open.", tone: "bad" },
+  open_defects: {
+    title: "Open defects",
+    description: "Defects recorded as open: from the sources, or reported through the proposal inbox and filed by the founder (those are marked as not verified).",
+    tone: "bad",
+  },
   blocked: { title: "Blocked or not authorised", description: "Blockers and explicit not-authorised boundaries recorded in the sources.", tone: "bad" },
   unverified_claims: {
     title: "Unverified claims",
-    description: "Agent- or person-submitted claims, and claims the sources themselves mark as unverified or lacking evidence.",
+    description:
+      "Claims submitted through the proposal inbox (by an agent or a person) and filed by the founder, lifecycle states no source supports, and claims the sources themselves mark as unverified or lacking evidence.",
     tone: "warn",
   },
   pending_founder_decisions: {
     title: "Pending founder decisions",
-    description: "Decisions the sources record as unissued, pending or held, and that no HQ decision has resolved.",
+    description:
+      "Decisions the sources record as unissued, pending or held, and that no HQ decision has resolved. An open item about the same decision is listed with it, not counted again.",
     tone: "warn",
   },
   unresolved_dependencies: { title: "Unresolved dependencies", description: "Dependencies the sources record as unresolved.", tone: "warn" },

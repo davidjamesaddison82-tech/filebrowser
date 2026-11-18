@@ -107,6 +107,28 @@ export async function freshWorld(): Promise<TestWorld> {
   }
 }
 
+/** What a refused write must leave untouched: sealed head, every record version, every proposal and its events. */
+export interface WorldState {
+  head: number;
+  versions: number;
+  proposals: number;
+  events: number;
+}
+
+export async function worldState(): Promise<WorldState> {
+  const client = await admin();
+  try {
+    const row = await client.query<{ head: string; versions: number; proposals: number; events: number }>(
+      `select hq.head_rev() as head, (select count(*)::int from hq.record_versions) as versions,
+              (select count(*)::int from hq.proposals) as proposals, (select count(*)::int from hq.proposal_events) as events`,
+    );
+    const r = row.rows[0];
+    return { head: Number(r.head), versions: r.versions, proposals: r.proposals, events: r.events };
+  } finally {
+    await client.end();
+  }
+}
+
 /** Expect a promise to reject with an HqError of the given HTTP status; returns the error. */
 export async function expectStatus(promise: Promise<unknown>, status: number): Promise<{ status: number; code: string; message: string; detail?: unknown }> {
   try {

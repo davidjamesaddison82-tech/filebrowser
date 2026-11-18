@@ -3,7 +3,8 @@
  *
  *   npm run setup
  *
- * 1. Creates .env.local with generated secrets if it does not exist.
+ * 1. Creates .env.local with generated secrets if it does not exist, fills in any generated-value
+ *    placeholders still left in an existing one, and makes it owner-only (0600) on every run.
  * 2. Applies database migrations and creates the application login role.
  * 3. Creates the local identities: founder (human), developer (human), reader (human),
  *    and two AI clients — claude and chatgpt — each with its own API token.
@@ -12,28 +13,26 @@
  * Generated passphrases and tokens are printed once and saved to .hq-local-credentials.json
  * (ignored by git) so a local installation can be signed into. Nothing here is a production secret store.
  */
-import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { generatePassphrase } from "../src/lib/auth/secrets";
 import { adminClient } from "./lib/admin";
 import { loadEnv, projectRoot } from "./lib/env";
 import { createCredential, ensurePrincipal, setPassphrase } from "./lib/principals";
+import { ensureEnvFile, environmentProblem, type PrivateFileResult, writePrivateFile } from "./lib/setup-files";
 import { migrate } from "./migrate";
 import { seed } from "./seed";
 
 async function main() {
   const root = projectRoot();
   const envFile = path.join(root, ".env.local");
-  if (!existsSync(envFile)) {
-    const appPassword = randomBytes(18).toString("base64url");
-    const template = readFileSync(path.join(root, ".env.example"), "utf8")
-      .replace("__GENERATED_JWT_SECRET__", randomBytes(48).toString("base64url"))
-      .replaceAll("__GENERATED_APP_DB_PASSWORD__", appPassword);
-    writeFileSync(envFile, template, { mode: 0o600 });
-    console.log("Created .env.local with generated secrets.");
-  }
+  const env = ensureEnvFile(envFile, path.join(root, ".env.example"));
+  if (env.created) console.log("Created .env.local with generated secrets (owner-only).");
+  else if (env.filled.length > 0) console.log(`Filled in generated values in .env.local: ${env.filled.join(", ")}.`);
+  warnAboutPermissions(".env.local", env);
   loadEnv();
+  const problem = environmentProblem(process.env);
+  if (problem) throw new Error(problem);
 
   await migrate({ reset: process.argv.includes("--reset") });
 
@@ -72,11 +71,21 @@ async function main() {
   } finally {
     await client.end();
   }
-  writeFileSync(credentialFile, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
+  warnAboutPermissions(".hq-local-credentials.json", writePrivateFile(credentialFile, `${JSON.stringify(saved, null, 2)}\n`));
 
   await seed({});
   console.log("\nSetup complete. Start the application with:  npm run dev   (http://localhost:3210)");
   console.log("Sign in as  founder  with the passphrase above (also saved in .hq-local-credentials.json).");
+}
+
+function warnAboutPermissions(name: string, result: PrivateFileResult) {
+  if (result.wasExposed) {
+    console.warn(
+      `WARNING: ${name} was readable by other users of this computer. It is now owner-only (0600), ` +
+        "but anyone who read it may have its secrets: consider generating new ones.",
+    );
+  }
+  if (!result.tightened) console.warn(`WARNING: could not make ${name} owner-only on this system; restrict access to it yourself.`);
 }
 
 main().catch((error) => {

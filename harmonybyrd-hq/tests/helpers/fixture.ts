@@ -1,6 +1,6 @@
 /** Build a Dataset straight from the fixture pack on disk (no database). */
 import path from "node:path";
-import { Dataset, type Envelope, type RevisionInfo } from "@/lib/domain/dataset";
+import { Dataset, type Envelope, type RecordMeta, type RevisionInfo } from "@/lib/domain/dataset";
 import { loadPack, type PackRecord } from "@/lib/domain/pack";
 import type { AnyRecord } from "@/lib/domain/schemas";
 
@@ -18,7 +18,12 @@ const REVISION: RevisionInfo = {
   content_hash: "0".repeat(64),
 };
 
-export function datasetFrom(records: PackRecord[]): Dataset {
+/**
+ * Build a Dataset from records as given (no parsing, so a test can model data that was stored
+ * before a rule existed). `meta` overrides envelope fields per record, e.g. to model a record
+ * that entered through the proposal inbox ({ origin: "proposal_acceptance" }).
+ */
+export function datasetFrom(records: PackRecord[], meta?: (record: PackRecord) => Partial<RecordMeta> | undefined): Dataset {
   const envelopes: Envelope<AnyRecord>[] = records.map((r) => ({
     meta: {
       type: r.type,
@@ -30,6 +35,7 @@ export function datasetFrom(records: PackRecord[]): Dataset {
       created_at: REVISION.created_at,
       created_by: "hq-import",
       proposal_id: null,
+      ...(meta?.(r) ?? {}),
     },
     data: r.data,
   }));
@@ -38,6 +44,11 @@ export function datasetFrom(records: PackRecord[]): Dataset {
 
 export function fixturePack() {
   return loadPack(FIXTURE_DIR);
+}
+
+/** A deep copy of the fixture's validated records, safe to change in a test. */
+export function fixtureRecords(): PackRecord[] {
+  return structuredClone(fixturePack().records);
 }
 
 export function fixtureDataset(): Dataset {

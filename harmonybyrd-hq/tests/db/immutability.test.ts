@@ -92,12 +92,53 @@ describe("AC9 — source lineage and immutable historical records", () => {
         "delete from hq.audit_log",
         "update hq.audit_log set outcome = 'allowed'",
         "truncate hq.audit_log",
+        // tests-5: the proposal history and the revision log, every operation.
+        "update hq.proposals set title = 'rewritten after review', payload = '{}'",
+        "delete from hq.proposal_events",
+        "truncate hq.proposal_events",
+        "truncate hq.proposals cascade",
+        "truncate hq.dataset_revisions cascade",
       ];
-      for (const sql of refused) await expect(client.query(sql), sql).rejects.toMatchObject({ code: "HQ405" });
+      // Row triggers do not fire on an empty table, so the refusals below prove something only if there are rows.
+      const sizes = (await client.query<{ p: number; e: number; a: number }>(
+        "select (select count(*)::int from hq.proposals) as p, (select count(*)::int from hq.proposal_events) as e, (select count(*)::int from hq.audit_log) as a",
+      )).rows[0];
+      expect(sizes.p > 0 && sizes.e > 0 && sizes.a > 0).toBe(true);
+      // Each statement runs in its own rolled-back transaction, so a regression cannot destroy the data later tests use.
+      for (const sql of refused) {
+        await client.query("begin");
+        try {
+          await expect(client.query(sql), sql).rejects.toMatchObject({ code: "HQ405" });
+        } finally {
+          await client.query("rollback");
+        }
+      }
     } finally {
       await client.end();
     }
     expect(await chainProblems(w.founder)).toEqual([]);
+  });
+
+  it("tests-5: every history table has a row trigger refusing UPDATE and DELETE, and a TRUNCATE trigger", async () => {
+    const client = await admin();
+    try {
+      const rows = (
+        await client.query<{ table: string; row_ud: boolean; truncate: boolean }>(
+          `select c.relname as table,
+                  bool_or(t.tgtype & 1 = 1 and t.tgtype & 2 = 2 and t.tgtype & 8 = 8 and t.tgtype & 16 = 16) as row_ud,
+                  bool_or(t.tgtype & 32 = 32 and t.tgtype & 2 = 2) as truncate
+             from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'hq' and not t.tgisinternal and t.tgenabled <> 'D'
+              and c.relname in ('record_versions', 'dataset_revisions', 'proposals', 'proposal_events', 'audit_log')
+            group by c.relname order by c.relname`,
+        )
+      ).rows;
+      expect(rows).toEqual(
+        ["audit_log", "dataset_revisions", "proposal_events", "proposals", "record_versions"].map((table) => ({ table, row_ud: true, truncate: true })),
+      );
+    } finally {
+      await client.end();
+    }
   });
 
   it("a requirement's original wording and provenance cannot be changed by any write path", async () => {

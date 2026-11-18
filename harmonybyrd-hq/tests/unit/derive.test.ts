@@ -67,7 +67,9 @@ describe("AC4 — proposal, prototype, tested and accepted are never collapsed",
     expect(health.acceptance_reported_only.map((i) => i.id).sort()).toEqual(["BLD-FX-02", "MOD-FX-BETA"]);
     expect(health.hq_verified.map((i) => i.id)).toEqual(["EV-FX-02"]);
     expect(health.open_defects.map((i) => i.id)).toEqual(["DEF-FX-01"]);
-    expect(health.pending_founder_decisions.map((i) => i.id).sort()).toEqual(["FD-FX-02", "OPEN-FX-01"]);
+    // OPEN-FX-01 is the open item for decision FD-FX-02: one decision, listed once (honesty-9).
+    expect(health.pending_founder_decisions.map((i) => i.id)).toEqual(["FD-FX-02"]);
+    expect(health.pending_founder_decisions[0].note).toMatch(/also recorded as OPEN-FX-01/);
   });
 
   it("the lifecycle matrix has every dimension for every module and no aggregate figure", () => {

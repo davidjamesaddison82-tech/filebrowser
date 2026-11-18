@@ -3,7 +3,7 @@ import type { Epistemic } from "@/lib/domain/schemas";
 export type Tone = "ok" | "warn" | "bad" | "info" | "design" | "founder" | "accent" | "ghost" | "outline" | "plain";
 
 export const EPISTEMIC_TONE: Record<Epistemic, { tone: Tone; glyph: string; short: string }> = {
-  verified: { tone: "ok", glyph: "✓", short: "Verified by HQ" },
+  verified: { tone: "ok", glyph: "✓", short: "Checked by HQ's build" },
   reported: { tone: "plain", glyph: "❝", short: "Reported in source" },
   design_intention: { tone: "design", glyph: "✎", short: "Design intention" },
   source_recommendation: { tone: "info", glyph: "➜", short: "Source author's view" },
@@ -48,6 +48,8 @@ const STATUS_TONE: Record<string, Tone> = {
   rejected: "bad",
   superseded: "ghost",
   unknown: "ghost",
+  // standings
+  rejected_in_hq: "bad",
   // builds
   accepted_reported: "founder",
   candidate_not_accepted: "info",
@@ -94,11 +96,12 @@ export function statusTone(value: string): Tone {
 
 const STATUS_LABEL: Record<string, string> = {
   accepted_reported: "Acceptance reported in source",
+  rejected_in_hq: "Founder rejected in HQ",
   candidate_not_accepted: "Candidate — not accepted",
   no_record: "No implementation record",
   implemented_unverified: "Implemented — unverified",
   implemented_tested: "Implemented and tested",
-  hq_verified: "Verified by HQ",
+  hq_verified: "Checked by HQ's build",
   source_reported: "Reported in source",
   submitted_unverified: "Submitted — unverified",
   agent_submitted_unverified: "Agent-submitted — unverified",

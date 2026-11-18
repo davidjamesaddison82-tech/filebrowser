@@ -201,7 +201,9 @@ describe("the founder's own decision path works, and is the only one that record
 
   it("an invalid decision changes nothing", async () => {
     const before = (await getDataset(w.founder)).head;
-    await expectStatus(recordFounderDecision(w.founder, { title: "Bad", exact_text: "x x x", effects: [{ type: "set_acceptance", record_type: "build", record_id: "BLD-NOPE", state: "accepted" }] }), 404);
+    // An effect naming a record that does not exist is invalid input (422), refused before anything is written.
+    const missing = await expectStatus(recordFounderDecision(w.founder, { title: "Bad", exact_text: "x x x", effects: [{ type: "set_acceptance", record_type: "build", record_id: "BLD-NOPE", state: "accepted" }] }), 422);
+    expect(missing.message).toContain("BLD-NOPE");
     await expectStatus(recordFounderDecision(w.founder, { title: "", exact_text: "" }), 422);
     expect((await getDataset(w.founder)).head).toBe(before);
   });

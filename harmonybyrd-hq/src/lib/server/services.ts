@@ -371,10 +371,14 @@ export async function listSources(principal: Principal, options: ServiceOptions 
   return envelope(principal, ctx, { sources: ctx.ds.sources.map((s) => s.data) }, null);
 }
 
+/** At most this many hits are returned; `total` always counts every match. */
+export const SEARCH_LIMIT = 60;
+
 export async function searchRecords(principal: Principal, query: string, types: string[] | undefined, options: ServiceOptions = {}) {
   const ctx = await getDataset(principal, options.rev);
-  const hits = search(ctx.ds, query, { types: types?.map(requireType), limit: 60 });
-  return envelope(principal, ctx, { query, total: hits.length, hits }, null);
+  const all = search(ctx.ds, query, { types: types?.map(requireType), limit: Number.POSITIVE_INFINITY });
+  const hits = all.slice(0, SEARCH_LIMIT);
+  return envelope(principal, ctx, { query, total: all.length, returned: hits.length, truncated: all.length > hits.length, hits }, null);
 }
 
 export async function getReviewItems(principal: Principal, options: ServiceOptions = {}) {
@@ -467,6 +471,180 @@ async function requireProposer(principal: Principal, action: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// What a proposal may assert. These mirror the database's rules (migration 0005: hq._validate_payload,
+// hq._validate_against_target) so a refusal comes back early with a clear message; the database
+// refuses the same proposals on its own, at submission and again at acceptance.
+// ---------------------------------------------------------------------------
+
+/** Labels only HQ itself assigns. A proposal can never use them (403). */
+const HQ_ONLY_LABELS: readonly string[] = ["verified", "hq_recommendation"];
+/** Labels that say a source supports the statement. Allowed in a proposal only with citations, which are then verified. */
+const SOURCED_LABELS: readonly string[] = ["reported", "design_intention", "source_recommendation", "founder_statement"];
+
+/** Fields no proposal may set on any record type (mirrors hq.protected_fields()). */
+export const PROPOSAL_PROTECTED_FIELDS: readonly string[] = [
+  ...new Set<string>([...PROTECTED_FIELDS, "hq_checks", "made_by", "recorded_from_cluster"]),
+];
+/** On create, a requirement's original wording and provenance are given by the proposer (and then verified). */
+const CREATE_MAY_GIVE: readonly string[] = ["source_id", "locator", "source_date", "attribution", "exact_wording"];
+
+/**
+ * Fields only HQ's build writes, per record type (mirrors hq.build_only_fields(type); the union over
+ * all types is BUILD_ONLY_FIELDS in schemas.ts). code_ref is build-only on builds only: inbox test
+ * evidence legitimately carries one.
+ */
+export function buildOnlyFieldsFor(type: RecordType): readonly string[] {
+  const perType: Partial<Record<RecordType, string[]>> = {
+    module: ["addenda_from_clusters", "commission_entry", "lifecycle_other_reports"],
+    decision: ["other_mentions"],
+    build: ["other_mentions", "possibly_same_as", "code_ref"],
+    evidence: ["search_results"],
+    requirement: ["linked_tests"],
+    source: ["doc_kind", "content_kind", "importance", "identifiers", "other_names"],
+  };
+  return ["recorded_from_cluster", ...(perType[type] ?? [])];
+}
+
+/** What an existing source says about the snapshot HQ read (mirrors hq.source_integrity_fields()). */
+const SOURCE_INTEGRITY_FIELDS: readonly string[] = ["sha256", "bytes", "text_snapshot", "access", "kind", "authority", "retrieved_at", "parts", "version", "location"];
+/** Evidence types recorded only by the founder or by HQ's build. */
+const HQ_EVIDENCE_TYPES: readonly string[] = ["founder_acceptance", "hq_check"];
+/** Evidence fields that cannot be rewritten once a source reports the evidence or HQ's build checked it. */
+const LOCKED_EVIDENCE_FIELDS: readonly string[] = ["type", "result", "sha256", "date", "build_id"];
+
+type Json = Record<string, unknown>;
+const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** Every object in a document, the document itself included (depth first). */
+function objectsIn(value: unknown, out: Json[] = []): Json[] {
+  if (Array.isArray(value)) for (const item of value) objectsIn(item, out);
+  else if (isObject(value)) {
+    out.push(value);
+    for (const child of Object.values(value)) objectsIn(child, out);
+  }
+  return out;
+}
+
+const hasCitations = (obj: Json) => Array.isArray(obj.citations) && obj.citations.length > 0;
+
+/**
+ * D1b: HQ's own labels anywhere (keys "epistemic" / "basis", and a loop's top-level "standing") are a
+ * permission refusal; a source-backed label without citations is invalid. The top level of an update
+ * ("set") is checked against the merged record, so `merged` is given for updates.
+ */
+function labelProblem(type: RecordType, doc: Json, merged: Json | null): HqError | null {
+  for (const obj of objectsIn(doc)) {
+    const top = obj === doc;
+    const keys = type === "loop" && top ? ["epistemic", "basis", "standing"] : ["epistemic", "basis"];
+    for (const key of keys) {
+      const value = obj[key];
+      if (typeof value !== "string") continue;
+      if (HQ_ONLY_LABELS.includes(value)) {
+        return forbidden(`The label "${value}" is HQ's own and cannot be used in a proposal (field "${key}"). Use "submitter_claim".`, {
+          field: key,
+          label: value,
+        });
+      }
+      const citedHere = top && merged ? hasCitations(merged) : hasCitations(obj);
+      if (SOURCED_LABELS.includes(value) && !citedHere) {
+        return invalid(`A "${value}" statement must cite at least one source (field "${key}"). Without a source, use "submitter_claim".`, {
+          field: key,
+          label: value,
+        });
+      }
+    }
+  }
+  return null;
+}
+
+interface QuoteCheck {
+  source_id: string;
+  quote: string;
+  kind: "quote" | "wording";
+}
+
+/** D1a: every citation-shaped object at any depth, and the shape of every citation list. */
+function quotationsIn(doc: Json): { checks: QuoteCheck[]; malformed: boolean } {
+  const checks: QuoteCheck[] = [];
+  let malformed = false;
+  for (const obj of objectsIn(doc)) {
+    for (const key of ["citations", "named_in"]) {
+      const list = obj[key];
+      if (list === undefined || list === null) continue;
+      if (!Array.isArray(list) || list.some((c) => !isObject(c) || typeof c.source_id !== "string" || typeof c.quote !== "string")) malformed = true;
+    }
+    if (typeof obj.source_id === "string" && typeof obj.quote === "string") checks.push({ source_id: obj.source_id, quote: obj.quote, kind: "quote" });
+  }
+  return { checks, malformed };
+}
+
+/**
+ * Check quotations against the source texts stored at import, through hq.quotes_ok: the same data
+ * and the same rule the database applies on submission. The application never reads the texts.
+ */
+async function unverifiedQuotations(principal: Principal, checks: QuoteCheck[]): Promise<{ index: number; source_id: string; reason: string; message: string }[]> {
+  if (checks.length === 0) return [];
+  const failures: { index: number; source_id: string; reason: string; message: string }[] = [];
+  for (let start = 0; start < checks.length; start += 500) {
+    const chunk = checks.slice(start, start + 500);
+    const rows = await readAs(claimsFor(principal), (q) => q.query<{ r: typeof failures }>("select hq.quotes_ok($1::jsonb) as r", [JSON.stringify(chunk)]));
+    for (const f of rows.rows[0].r) failures.push({ ...f, index: f.index + start });
+  }
+  return failures;
+}
+
+/** Refuse a proposal before it reaches the database, and record the refusal. */
+async function refuse(principal: Principal, target: { type?: string | null; id?: string | null }, error: HqError): Promise<never> {
+  await audit(claimsFor(principal), {
+    action: "proposal.submit",
+    objectType: target.type ?? null,
+    objectId: target.id ?? null,
+    outcome: "denied",
+    detail: { code: error.code, status: error.status, message: error.message, detail: error.detail },
+  });
+  throw error;
+}
+
+/** D1a/D1b for a proposed document, then the verbatim check against the stored source texts. */
+async function checkAssertions(principal: Principal, type: RecordType, doc: Json, merged: Json | null, target: { type?: string | null; id?: string | null }) {
+  const label = labelProblem(type, doc, merged);
+  if (label) await refuse(principal, target, label);
+  const { checks, malformed } = quotationsIn(doc);
+  if (malformed) await refuse(principal, target, invalid("Each citation needs a source_id and a verbatim quote."));
+  if (!merged && type === "requirement" && typeof doc.source_id === "string" && typeof doc.exact_wording === "string") {
+    checks.push({ source_id: doc.source_id, quote: doc.exact_wording, kind: "wording" });
+  }
+  const failures = await unverifiedQuotations(principal, checks);
+  if (failures.length > 0) {
+    await refuse(
+      principal,
+      target,
+      invalid(`${failures[0].message.charAt(0).toUpperCase()}${failures[0].message.slice(1)}.${failures.length > 1 ? ` (${failures.length - 1} more quotation(s) also failed.)` : ""}`, {
+        unverified_quotations: failures,
+      }),
+    );
+  }
+}
+
+/** D2: a record carrying a founder acceptance (accepted or rejected) cannot be changed by proposal. */
+export function acceptanceBlock(type: string, id: string, data: unknown): HqError | null {
+  const acceptance = isObject(data) && isObject(data.hq_acceptance) ? data.hq_acceptance : null;
+  if (!acceptance || (acceptance.state !== "accepted" && acceptance.state !== "rejected")) return null;
+  return conflict(
+    `${type}/${id} carries a founder acceptance recorded in HQ (${String(acceptance.decision_id ?? "decision unknown")}). ` +
+      "Record a founder decision that clears it first, or propose a new record.",
+    { acceptance },
+  );
+}
+
+/** The standard answer envelope for an inbox tool, at the current head (proposals change no revision). */
+async function inboxAnswer<T extends Json>(principal: Principal, data: T, ctx?: DatasetContext): Promise<ServiceEnvelope<T> & T> {
+  const at = ctx ?? (await getDataset(principal));
+  // The result's own fields stay at the top level as well, for callers written before the envelope.
+  return { ...envelope(principal, at, data, null, "Inbox answers carry no authority: nothing here is a record until the founder accepts it."), ...data };
+}
+
 async function submit(
   principal: Principal,
   args: {
@@ -506,7 +684,7 @@ async function submit(
       note: "This proposal is held in the isolated inbox. It has changed no record and carries no authority until the founder reviews it.",
     };
   } catch (error) {
-    if (error instanceof HqError && (error.status === 403 || error.status === 409)) {
+    if (error instanceof HqError && (error.status === 403 || error.status === 409 || error.status === 422)) {
       await audit(claims, {
         action: "proposal.submit",
         objectType: args.target?.type,
@@ -530,26 +708,44 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
   if (body.set) {
     if (!body.target) throw invalid('A "set" proposal needs a target: { type, id, base_version }.');
     const type = requireType(body.target.type);
+    const target = { type, id: body.target.id };
     if (type === "decision") {
       throw forbidden("Decision records are written only by a founder decision; they cannot be changed by proposal.");
     }
-    const blocked = Object.keys(body.set).filter((key) => (PROTECTED_FIELDS as readonly string[]).includes(key));
+    const protectedHere = [...PROPOSAL_PROTECTED_FIELDS, ...buildOnlyFieldsFor(type), ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : [])];
+    const blocked = Object.keys(body.set).filter((key) => protectedHere.includes(key));
     if (blocked.length > 0) {
-      await audit(claimsFor(principal), {
-        action: "proposal.submit",
-        objectType: type,
-        objectId: body.target.id,
-        outcome: "denied",
-        detail: { reason: "protected fields", fields: blocked },
-      });
-      throw forbidden(
-        `Protected fields cannot be changed by a proposal: ${blocked.join(", ")}. ` +
-          "Original wording and provenance never change; dispositions and acceptance change only by founder decision.",
-        { protected_fields: blocked },
+      await refuse(
+        principal,
+        target,
+        forbidden(
+          `Protected fields cannot be changed by a proposal: ${blocked.join(", ")}. ` +
+            "Original wording and provenance never change; dispositions and acceptance change only by founder decision; HQ's own checks, attribution and source snapshots are written only by HQ.",
+          { protected_fields: blocked },
+        ),
       );
+    }
+    if (type === "evidence" && typeof body.set.type === "string" && HQ_EVIDENCE_TYPES.includes(body.set.type)) {
+      await refuse(principal, target, forbidden(`Evidence of type "${body.set.type}" cannot be made by proposal: it is recorded by the founder or by HQ's build.`));
     }
     const current = ctx.ds.get(type, body.target.id);
     if (!current) throw notFound(`No ${type} "${body.target.id}" to change.`);
+    const currentData = current.data as Json;
+    const accepted = acceptanceBlock(type, body.target.id, currentData);
+    if (accepted) await refuse(principal, target, accepted);
+    if (
+      type === "evidence" &&
+      ["hq_verified", "source_reported"].includes(String(currentData.verification)) &&
+      Object.keys(body.set).some((key) => LOCKED_EVIDENCE_FIELDS.includes(key))
+    ) {
+      await refuse(
+        principal,
+        target,
+        forbidden("Evidence that a source reports or that HQ's build checked cannot be rewritten by proposal; submit new evidence instead.", {
+          locked_fields: Object.keys(body.set).filter((key) => LOCKED_EVIDENCE_FIELDS.includes(key)),
+        }),
+      );
+    }
     if (current.meta.version !== body.target.base_version) {
       await audit(claimsFor(principal), {
         action: "proposal.submit",
@@ -563,46 +759,72 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
         { current_version: current.meta.version, base_version: body.target.base_version, head_rev: ctx.head },
       );
     }
-    const merged = { ...(current.data as Record<string, unknown>), ...body.set };
+    const merged = { ...currentData, ...body.set };
+    await checkAssertions(principal, type, body.set, merged, target);
     const check = safeParseRecord(type, merged);
     if (!check.ok) throw invalid(`The proposed change would make ${body.target.id} invalid.`, check.issues);
-    return submit(principal, {
-      kind: body.kind,
-      title: body.title,
-      rationale: body.rationale,
-      baseRev: body.base_rev,
-      target: { type, id: body.target.id, baseVersion: body.target.base_version },
-      payload: { op: "update", set: body.set },
-      evidence: body.evidence,
-      idempotencyKey: body.idempotency_key,
-    });
+    return inboxAnswer(
+      principal,
+      await submit(principal, {
+        kind: body.kind,
+        title: body.title,
+        rationale: body.rationale,
+        baseRev: body.base_rev,
+        target: { type, id: body.target.id, baseVersion: body.target.base_version },
+        payload: { op: "update", set: body.set },
+        evidence: body.evidence,
+        idempotencyKey: body.idempotency_key,
+      }),
+      ctx,
+    );
   }
 
   const create = body.create!;
   const type = requireType(create.record_type);
+  const target = { type, id: null };
   if (!(CREATABLE_TYPES as readonly string[]).includes(type)) {
     throw forbidden(`Records of type "${type}" cannot be created by proposal.`);
   }
   const blocked = Object.keys(create.record).filter(
-    (key) =>
-      (PROTECTED_FIELDS as readonly string[]).includes(key) &&
-      !["source_id", "locator", "source_date", "attribution", "exact_wording"].includes(key),
+    (key) => (PROPOSAL_PROTECTED_FIELDS.includes(key) && !CREATE_MAY_GIVE.includes(key)) || buildOnlyFieldsFor(type).includes(key),
   );
   if (blocked.length > 0) {
-    throw forbidden(`Protected fields cannot be set by a proposal: ${blocked.join(", ")}.`, { protected_fields: blocked });
+    await refuse(principal, target, forbidden(`Protected fields cannot be set by a proposal: ${blocked.join(", ")}.`, { protected_fields: blocked }));
   }
+  if (type === "source") {
+    const r = create.record;
+    const snapshot = ["sha256", "bytes", "text_snapshot", "parts"].filter((key) => key in r);
+    if (r.kind !== "named_not_accessible" || r.access !== "not_accessible" || r.authority !== "referenced_only" || snapshot.length > 0) {
+      await refuse(
+        principal,
+        target,
+        forbidden(
+          'A proposal can only add a source that is named but not accessible (kind "named_not_accessible", access "not_accessible", authority "referenced_only", with no checksum or snapshot). Sources HQ has read come only from an import.',
+          snapshot.length > 0 ? { protected_fields: snapshot } : undefined,
+        ),
+      );
+    }
+  }
+  if (type === "evidence" && typeof create.record.type === "string" && HQ_EVIDENCE_TYPES.includes(create.record.type)) {
+    await refuse(principal, target, forbidden(`Evidence of type "${create.record.type}" cannot be made by proposal: it is recorded by the founder or by HQ's build.`));
+  }
+  await checkAssertions(principal, type, create.record, null, target);
   const candidate = withPlaceholders(type, create.record);
   const check = safeParseRecord(type, candidate);
   if (!check.ok) throw invalid(`The proposed ${type} record is not valid.`, check.issues);
-  return submit(principal, {
-    kind: body.kind,
-    title: body.title,
-    rationale: body.rationale,
-    baseRev: body.base_rev,
-    payload: { op: "create", record_type: type, record: create.record },
-    evidence: body.evidence,
-    idempotencyKey: body.idempotency_key,
-  });
+  return inboxAnswer(
+    principal,
+    await submit(principal, {
+      kind: body.kind,
+      title: body.title,
+      rationale: body.rationale,
+      baseRev: body.base_rev,
+      payload: { op: "create", record_type: type, record: create.record },
+      evidence: body.evidence,
+      idempotencyKey: body.idempotency_key,
+    }),
+    ctx,
+  );
 }
 
 /** Fill in the fields the database assigns at acceptance, so a proposed record can be validated now. */
@@ -625,6 +847,7 @@ function withPlaceholders(type: RecordType, record: Record<string, unknown>): Re
     id: `${prefix[type]}-HQ-0000`,
     ...(type === "requirement" ? { disposition: "unreviewed" } : {}),
     ...(type === "evidence" ? { verification: "agent_submitted_unverified" } : {}),
+    ...(type === "recommendation" ? { made_by: "Proposed through the inbox" } : {}),
   };
 }
 
@@ -652,20 +875,27 @@ export async function submitDefectReport(principal: Principal, input: unknown) {
   };
   const check = safeParseRecord("defect", withPlaceholders("defect", record));
   if (!check.ok) throw invalid("The defect report is not valid.", check.issues);
-  return submit(principal, {
-    kind: "defect_report",
-    title: body.title,
-    rationale: body.description,
-    baseRev: body.base_rev,
-    payload: { op: "create", record_type: "defect", record },
-    evidence: body.evidence,
-    idempotencyKey: body.idempotency_key,
-  });
+  return inboxAnswer(
+    principal,
+    await submit(principal, {
+      kind: "defect_report",
+      title: body.title,
+      rationale: body.description,
+      baseRev: body.base_rev,
+      payload: { op: "create", record_type: "defect", record },
+      evidence: body.evidence,
+      idempotencyKey: body.idempotency_key,
+    }),
+    ctx,
+  );
 }
 
 export async function recordTestEvidence(principal: Principal, input: unknown) {
   await requireProposer(principal, "evidence.submit");
   const body = parseInput(TestEvidenceInput, input);
+  if (HQ_EVIDENCE_TYPES.includes(body.type)) {
+    await refuse(principal, { type: "evidence" }, forbidden(`Evidence of type "${body.type}" cannot be submitted: it is recorded by the founder or by HQ's build.`));
+  }
   const ctx = await getDataset(principal);
   assertModulesExist(ctx.ds, body.module_ids);
   if (body.build_id && !ctx.ds.get("build", body.build_id)) throw invalid(`Unknown build id: ${body.build_id}.`);
@@ -692,12 +922,16 @@ export async function recordTestEvidence(principal: Principal, input: unknown) {
     evidence: [],
     idempotencyKey: body.idempotency_key,
   });
-  return {
-    ...result,
-    note:
-      "Recorded as a SUBMISSION in the isolated inbox. Even after the founder files it, it stays labelled as an unverified submission: " +
-      "a statement that tests passed is a claim, not evidence of completion, and never implies founder acceptance.",
-  };
+  return inboxAnswer(
+    principal,
+    {
+      ...result,
+      note:
+        "Recorded as a SUBMISSION in the isolated inbox. Even after the founder files it, it stays labelled as an unverified submission: " +
+        "a statement that tests passed is a claim, not evidence of completion, and never implies founder acceptance.",
+    },
+    ctx,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -752,6 +986,15 @@ export async function listProposals(principal: Principal, filter: { status?: str
     return result.rows.map(toProposalView);
   });
   return filter.status ? rows.filter((p) => p.status === filter.status) : rows;
+}
+
+/**
+ * The list_my_proposals tool: the caller's own proposals (all of them for the founder), in the standard
+ * answer envelope at the current head. Proposals are not records, so this cannot be pinned to a revision.
+ */
+export async function listMyProposals(principal: Principal, filter: { status?: string } = {}) {
+  const proposals = await listProposals(principal, filter);
+  return inboxAnswer(principal, { proposals });
 }
 
 export async function getProposal(principal: Principal, id: string): Promise<ProposalView> {
@@ -848,10 +1091,37 @@ const DecisionInput = z.object({
 });
 export type DecisionInput = z.input<typeof DecisionInput>;
 
+/**
+ * D13: the ids a decision names must exist at head, with the right type (the database checks the same,
+ * under the write lock; this gives the same refusal early, with every bad id listed).
+ */
+function decisionReferenceProblems(ds: Dataset, body: z.output<typeof DecisionInput>): string[] {
+  const problems: string[] = [];
+  for (const id of body.resolves) {
+    if (!ds.get("decision", id) && !ds.get("open_item", id)) problems.push(`resolves: "${id}" is not a decision or open item in HQ`);
+  }
+  for (const id of body.module_ids) {
+    if (!ds.module(id)) problems.push(`module_ids: "${id}" is not a module in HQ`);
+  }
+  for (const effect of body.effects) {
+    if (effect.type === "set_requirement_disposition" && !ds.get("requirement", effect.requirement_id)) {
+      problems.push(`effect target requirement "${effect.requirement_id}" does not exist`);
+    }
+    if (effect.type === "set_acceptance" && !ds.get(effect.record_type, effect.record_id)) {
+      problems.push(`effect target ${effect.record_type}/${effect.record_id} does not exist`);
+    }
+  }
+  return problems;
+}
+
 export async function recordFounderDecision(principal: Principal, input: unknown) {
   await requireFounder(principal, "decision.record", "decision", null);
   const body = parseInput(DecisionInput, input);
   const claims = claimsFor(principal);
+  const problems = decisionReferenceProblems((await getDataset(principal)).ds, body);
+  if (problems.length > 0) {
+    throw invalid(`The decision names records that are not in HQ: ${problems.join("; ")}.`, { problems });
+  }
   try {
     return await writeAs(claims, async (q) => {
       const row = await q.query<{ r: Record<string, unknown> }>(
@@ -899,7 +1169,8 @@ export async function proposalImpact(principal: Principal, proposal: ProposalVie
       affected: lin?.downstream ?? [],
       depends_on: deps?.depends_on ?? [],
       sources: lin?.sources ?? [],
-      sensitive_fields: changes.map((c) => c.field).filter((f) => ["status", "standing", "implementation_state", "lifecycle"].includes(f)),
+      sensitive_fields: changes.map((c) => c.field).filter((f) => SENSITIVE_FIELDS.includes(f)),
+      target_acceptance: targetAcceptance(current?.data),
     };
   }
   const record = (payload.record ?? {}) as Record<string, unknown>;
@@ -914,9 +1185,29 @@ export async function proposalImpact(principal: Principal, proposal: ProposalVie
     changes: [],
     depends_on: [],
     sources: [],
-    sensitive_fields: [],
+    sensitive_fields: Object.keys(record).filter((f) => SENSITIVE_FIELDS.includes(f)),
     target: null,
+    target_acceptance: null,
   };
+}
+
+/** Fields whose change alters what HQ shows as tested, accepted, verified or decided (D1d). Flagged for the founder. */
+const SENSITIVE_FIELDS: readonly string[] = [
+  "status",
+  "standing",
+  "implementation_state",
+  "lifecycle",
+  "type",
+  "result",
+  "statement",
+  "sha256",
+  "severity",
+  "exact_text",
+];
+
+/** The founder acceptance the target carries, if any: accepting a change to such a record is refused (D2). */
+function targetAcceptance(data: unknown): Json | null {
+  return isObject(data) && isObject(data.hq_acceptance) ? data.hq_acceptance : null;
 }
 
 export type { AnyRecord };

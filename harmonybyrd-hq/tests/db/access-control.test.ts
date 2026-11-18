@@ -116,7 +116,9 @@ describe("AC7 — cross-role and unauthorised access is prevented", () => {
     await expect(asAppRole("authenticated", claimsFor(w.developer), (c) => c.query("select * from hq.founder_list_credentials()"))).rejects.toMatchObject({ code: "HQ403" });
   });
 
-  it("denied attempts are written to the audit log with who tried", async () => {
+  // The application writes these rows in a separate transaction (db.ts audit()); a refusal raised inside a
+  // database function cannot write its own (see tests/db/audit-log.test.ts).
+  it("denied attempts made through the application are written to the audit log, by the application, with who tried", async () => {
     const rows = await asAppRole("authenticated", claimsFor(w.founder), async (c) =>
       (await c.query<{ principal_handle: string; action: string }>("select principal_handle, action from hq.audit_log where outcome = 'denied' order by id")).rows,
     );

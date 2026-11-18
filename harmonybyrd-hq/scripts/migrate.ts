@@ -87,6 +87,10 @@ async function ensureAppLoginRole(client: import("pg").Client, appUrl: string, l
   const password = decodeURIComponent(u.password);
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) throw new Error(`Unsupported application role name "${role}"`);
   if (!password) throw new Error("DATABASE_URL must include a password for the application role");
+  // The placeholder is published in .env.example: it must never become a real password.
+  if (/__GENERATED_[A-Z_]*__/.test(password)) {
+    throw new Error("DATABASE_URL still contains the placeholder password from .env.example. Run `npm run setup` (it fills it in) or set a long random password.");
+  }
   const exists = (await client.query("select 1 from pg_roles where rolname = $1", [role])).rowCount;
   const literal = (await client.query<{ q: string }>("select quote_literal($1) as q", [password])).rows[0].q;
   if (!exists) {

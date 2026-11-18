@@ -9,6 +9,9 @@
  * always says what kind of statement it is and where it came from.
  */
 import { z } from "zod";
+import { quoteProblem, wordingProblem } from "./quote";
+
+export { normaliseForQuote, quoteProblem, wordingProblem } from "./quote";
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -16,7 +19,7 @@ import { z } from "zod";
 
 /** What kind of statement a claim is. Never collapse these into one "status". */
 export const EPISTEMIC = [
-  "verified", // checked directly by HQ in this build (e.g. a checksum recomputed from the bytes)
+  "verified", // checked by the build that produced this dataset (e.g. a checksum recomputed from the bytes)
   "reported", // a source document states it as fact or history; HQ has not independently verified it
   "design_intention", // a source states it as a plan, design, proposal or specification
   "source_recommendation", // the recommendation or opinion of a source document's author
@@ -28,7 +31,7 @@ export const EPISTEMIC = [
 export type Epistemic = (typeof EPISTEMIC)[number];
 
 export const EPISTEMIC_LABEL: Record<Epistemic, string> = {
-  verified: "Verified by HQ",
+  verified: "Checked by HQ's build",
   reported: "Reported in source",
   design_intention: "Design intention",
   source_recommendation: "Source author's recommendation",
@@ -143,11 +146,26 @@ const id = (prefix: string) =>
 export const SourceId = id("SRC");
 export const ModuleId = id("MOD");
 
-/** A verbatim excerpt of a source. `quote` is machine-checked against the source snapshot. */
+/**
+ * A date as HQ stores it: an ISO date, optionally followed by a time ("2031-04-12", "2031-04-12T09:00Z").
+ * Anything else ("April 2031") is refused, because derived figures compare and shift these dates.
+ */
+const IsoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}/, "must be a date written as YYYY-MM-DD");
+
+/** Adds an issue when `problem` returns a reason; used for the quotation minimums in quote.ts. */
+const rule = (problem: (value: string) => string | null) => (value: string, ctx: z.RefinementCtx) => {
+  const message = problem(value);
+  if (message) ctx.addIssue({ code: "custom", message });
+};
+
+/**
+ * A verbatim excerpt of a source. `quote` is machine-checked against the source snapshot, and must
+ * be at least 12 characters long once whitespace is normalised, so padding cannot make "the" a quotation.
+ */
 export const Citation = z.object({
   source_id: SourceId,
   locator: z.string().nullish(),
-  quote: z.string().min(12, "a citation needs a verbatim quote of at least 12 characters"),
+  quote: z.string().superRefine(rule(quoteProblem)),
 });
 export type Citation = z.infer<typeof Citation>;
 
@@ -177,7 +195,31 @@ export const HqAcceptance = z.object({
   decided_at: z.string(),
   decided_by: z.string(),
   scope_note: z.string().nullish(),
+  /** The version number the founder decision wrote: the acceptance binds to that content. */
+  accepted_version: z.number().int().positive().optional(),
 });
+export type HqAcceptance = z.infer<typeof HqAcceptance>;
+
+// ---------------------------------------------------------------------------
+// Fields written only by HQ's own build (never by a proposal; see BUILD_ONLY_FIELDS)
+// ---------------------------------------------------------------------------
+
+/** Every record type may say which extraction cluster it was recorded from. */
+const recordedFromCluster = { recorded_from_cluster: z.string().optional() };
+
+/** Another source's account of the same decision or build, merged into this record by the build. */
+export const OtherMention = z.looseObject({
+  merged_id: z.string(),
+  recorded_from_cluster: z.string().optional(),
+  title: z.string().optional(),
+  label: z.string().optional(),
+  status_in_that_source: z.string().optional(),
+  standing_in_that_source: z.string().optional(),
+  why_merged: z.string().optional(),
+  statement: Claim,
+  citations: z.array(Citation).default([]),
+});
+export type OtherMention = z.infer<typeof OtherMention>;
 
 // ---------------------------------------------------------------------------
 // Records
@@ -220,8 +262,8 @@ export const SourceRecord = z.looseObject({
   sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable().default(null),
   bytes: z.number().int().nonnegative().nullable().default(null),
   retrieved_at: z.string().nullable().default(null),
-  doc_date: z.string().nullable().default(null),
-  updated: z.string().nullable().default(null),
+  doc_date: IsoDate.nullable().default(null),
+  updated: IsoDate.nullable().default(null),
   access: z.enum(SOURCE_ACCESS),
   authority: z.enum(SOURCE_AUTHORITY),
   authority_note: z.string().default(""),
@@ -247,23 +289,62 @@ export const SourceRecord = z.looseObject({
   named_in: z.array(Citation).default([]),
   /** What HQ itself checked about this source. */
   hq_checks: z.array(z.object({ check: z.string(), result: z.string() })).default([]),
+  // -- written only by HQ's build --
+  ...recordedFromCluster,
+  doc_kind: z.string().nullable().optional(),
+  content_kind: z.string().nullable().optional(),
+  importance: z.string().nullable().optional(),
+  identifiers: z.string().nullable().optional(),
+  other_names: z.array(z.string()).optional(),
 });
 export type SourceRecord = z.infer<typeof SourceRecord>;
 
-const LifecycleEntry = z
-  .object({
-    state: z.enum(LIFECYCLE_STATES),
-    basis: z.enum(EPISTEMIC),
-    note: z.string().default(""),
-    citations: z.array(Citation).default([]),
-  })
-  .superRefine((entry, ctx) => {
-    if ((entry.state === "yes" || entry.state === "partial") && entry.citations.length === 0 && entry.basis !== "verified") {
-      ctx.addIssue({
-        code: "custom",
-        message: `a lifecycle state of "${entry.state}" must cite the source that supports it`,
-      });
-    }
+const LifecycleEntryShape = {
+  state: z.enum(LIFECYCLE_STATES),
+  basis: z.enum(EPISTEMIC),
+  note: z.string().default(""),
+  citations: z.array(Citation).default([]),
+};
+
+type LifecycleEntryLike = { state: LifecycleState; basis: Epistemic; citations: unknown[] };
+
+/** "yes" and "partial" carry the quotation that supports them (a "verified" basis is HQ's build's own check). */
+function lifecycleCitationRule(entry: LifecycleEntryLike, ctx: z.RefinementCtx) {
+  if ((entry.state === "yes" || entry.state === "partial") && entry.citations.length === 0 && entry.basis !== "verified") {
+    ctx.addIssue({
+      code: "custom",
+      message: `a lifecycle state of "${entry.state}" must cite the source that supports it`,
+    });
+  }
+}
+
+/** Bases a reported founder acceptance may have. HQ's own acceptance exists only as hq_acceptance. */
+export const FOUNDER_ACCEPTED_BASES = ["reported", "founder_statement"] as const satisfies readonly Epistemic[];
+
+function founderAcceptedProblem(entry: LifecycleEntryLike | undefined): string | null {
+  if (!entry || (entry.state !== "yes" && entry.state !== "partial")) return null;
+  if ((FOUNDER_ACCEPTED_BASES as readonly string[]).includes(entry.basis)) return null;
+  return `a founder acceptance of "${entry.state}" must have basis "reported" or "founder_statement" (it has "${entry.basis}"); acceptance in HQ is recorded only by a founder decision`;
+}
+
+const LifecycleEntry = z.object(LifecycleEntryShape).superRefine(lifecycleCitationRule);
+
+/** Every dimension must be stated; a positive founder acceptance must come from a source. */
+const Lifecycle = z.record(z.enum(LIFECYCLE_DIMENSIONS), LifecycleEntry).superRefine((lifecycle, ctx) => {
+  const problem = founderAcceptedProblem(lifecycle.founder_accepted);
+  if (problem) ctx.addIssue({ code: "custom", path: ["founder_accepted"], message: problem });
+});
+
+/** What other sources report for a dimension, kept beside the entry the build chose. Same rules as an entry. */
+const OtherLifecycleReport = z.object({ ...LifecycleEntryShape, from_cluster: z.string().optional() }).superRefine(lifecycleCitationRule);
+
+const LifecycleOtherReports = z
+  .partialRecord(z.enum(LIFECYCLE_DIMENSIONS), z.array(OtherLifecycleReport))
+  .superRefine((reports, ctx) => {
+    (reports.founder_accepted ?? []).forEach((entry, index) => {
+      const problem = founderAcceptedProblem(entry);
+      if (problem) ctx.addIssue({ code: "custom", path: ["founder_accepted", index], message: problem });
+    });
   });
 
 export const Capability = z.object({
@@ -299,7 +380,7 @@ export const ModuleRecord = z.looseObject({
   core_loop: NullableClaim,
   capabilities: z.array(Capability).default([]),
   ui_requirements: z.array(Claim).default([]),
-  lifecycle: z.record(z.enum(LIFECYCLE_DIMENSIONS), LifecycleEntry),
+  lifecycle: Lifecycle,
   blockers: z.array(Claim).default([]),
   next_actions: z.array(Claim).default([]),
   loop_ids: z.array(id("LOOP")).default([]),
@@ -315,6 +396,11 @@ export const ModuleRecord = z.looseObject({
     .default([]),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
+  // -- written only by HQ's build --
+  ...recordedFromCluster,
+  addenda_from_clusters: z.array(z.string()).optional(),
+  commission_entry: z.string().optional(),
+  lifecycle_other_reports: LifecycleOtherReports.optional(),
 });
 export type ModuleRecord = z.infer<typeof ModuleRecord>;
 
@@ -347,6 +433,7 @@ export const LoopRecord = z.looseObject({
   steps: z.array(LoopStep).default([]),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
+  ...recordedFromCluster,
 });
 export type LoopRecord = z.infer<typeof LoopRecord>;
 
@@ -367,6 +454,7 @@ export const PathwayRecord = z.looseObject({
     )
     .min(2),
   citations: z.array(Citation).default([]),
+  ...recordedFromCluster,
 });
 export type PathwayRecord = z.infer<typeof PathwayRecord>;
 
@@ -405,10 +493,10 @@ export const REQUIREMENT_CATEGORIES = [
 export const RequirementRecord = z.looseObject({
   id: id("FR"),
   // -- immutable original (enforced in the database) --
-  exact_wording: z.string().min(3),
+  exact_wording: z.string().superRefine(rule(wordingProblem)),
   source_id: SourceId,
   locator: z.string().nullable().default(null),
-  source_date: z.string().nullable().default(null),
+  source_date: IsoDate.nullable().default(null),
   attribution: z.enum(["commission_text", "direct_quote", "ruling_recorded_by_source", "restated_by_source"]),
   // -- HQ's working fields, kept visibly separate from the original --
   title: z.string().min(1),
@@ -440,6 +528,9 @@ export const RequirementRecord = z.looseObject({
   duplicate_of: id("FR").nullable().default(null),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
+  // -- written only by HQ's build --
+  ...recordedFromCluster,
+  linked_tests: z.array(z.string()).optional(),
 });
 export type RequirementRecord = z.infer<typeof RequirementRecord>;
 
@@ -453,7 +544,7 @@ export const DecisionRecord = z.looseObject({
   status: z.enum(DECISION_STATUSES),
   /** "source": reported by a source document. "hq": recorded by the founder inside HQ. */
   recorded_in: z.enum(["source", "hq"]),
-  date: z.string().nullable().default(null),
+  date: IsoDate.nullable().default(null),
   statement: Claim,
   exact_text: z.string().nullable().default(null),
   rationale: z.string().nullish(),
@@ -465,6 +556,9 @@ export const DecisionRecord = z.looseObject({
   decided_by: z.string().nullish(),
   decided_at: z.string().nullish(),
   citations: z.array(Citation).default([]),
+  // -- written only by HQ's build --
+  ...recordedFromCluster,
+  other_mentions: z.array(OtherMention).optional(),
 });
 export type DecisionRecord = z.infer<typeof DecisionRecord>;
 
@@ -472,13 +566,14 @@ export const CommissionRecord = z.looseObject({
   id: id("COM"),
   code: z.string().min(1),
   title: z.string().min(1),
-  date: z.string().nullable().default(null),
+  date: IsoDate.nullable().default(null),
   status: z.enum(["delivered", "in_progress", "proposed", "closed", "deferred", "unknown"]),
   scope: NullableClaim,
   module_ids: z.array(ModuleId).default([]),
   output_source_ids: z.array(SourceId).default([]),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
+  ...recordedFromCluster,
 });
 export type CommissionRecord = z.infer<typeof CommissionRecord>;
 
@@ -505,6 +600,13 @@ export const BuildRecord = z.looseObject({
   hq_checks: z.array(z.object({ check: z.string(), result: z.string() })).default([]),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
+  // -- written only by HQ's build --
+  ...recordedFromCluster,
+  other_mentions: z.array(OtherMention).optional(),
+  possibly_same_as: z.array(id("BLD")).optional(),
+  code_ref: z
+    .looseObject({ repository: z.string(), ref: z.string(), commit: z.string().nullable().default(null) })
+    .optional(),
 });
 export type BuildRecord = z.infer<typeof BuildRecord>;
 
@@ -542,10 +644,21 @@ export const EvidenceRecord = z.looseObject({
   result: Claim,
   verification: z.enum(EVIDENCE_VERIFICATION),
   submitted_by: z.string().nullish(),
-  date: z.string().nullable().default(null),
+  date: IsoDate.nullable().default(null),
   sha256: z.string().nullable().default(null),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
+  // -- written only by HQ's build --
+  ...recordedFromCluster,
+  /** How often the build found each search term in each source (a search, not a quotation). */
+  search_results: z
+    .array(
+      z.looseObject({
+        term: z.string(),
+        hits: z.array(z.looseObject({ source_id: SourceId, count: z.number().int().nonnegative() })),
+      }),
+    )
+    .optional(),
 });
 export type EvidenceRecord = z.infer<typeof EvidenceRecord>;
 
@@ -558,6 +671,7 @@ export const DefectRecord = z.looseObject({
   severity: z.enum(["blocking", "major", "minor", "unknown"]).default("unknown"),
   statement: Claim,
   citations: z.array(Citation).default([]),
+  ...recordedFromCluster,
 });
 export type DefectRecord = z.infer<typeof DefectRecord>;
 
@@ -580,6 +694,7 @@ export const OpenItemRecord = z.looseObject({
   module_ids: z.array(ModuleId).default([]),
   decision_id: id("FD").nullable().default(null),
   citations: z.array(Citation).default([]),
+  ...recordedFromCluster,
 });
 export type OpenItemRecord = z.infer<typeof OpenItemRecord>;
 
@@ -595,6 +710,7 @@ export const RecommendationRecord = z.looseObject({
   prerequisite_ids: z.array(z.string()).default([]),
   blocked_by: z.array(z.string()).default([]),
   citations: z.array(Citation).default([]),
+  ...recordedFromCluster,
 });
 export type RecommendationRecord = z.infer<typeof RecommendationRecord>;
 
@@ -669,3 +785,58 @@ export const CREATABLE_TYPES = [
   "build",
   "source",
 ] as const satisfies readonly RecordType[];
+
+/**
+ * Fields only HQ's own build writes. They are declared (typed) in the record schemas above so a
+ * wrongly typed one is refused at import, and no proposal may set them (the database keeps the
+ * same list in its protected fields). `accepted_version` lives inside hq_acceptance, which is
+ * protected as a whole.
+ */
+export const BUILD_ONLY_FIELDS: readonly string[] = [
+  "recorded_from_cluster",
+  "addenda_from_clusters",
+  "commission_entry",
+  "lifecycle_other_reports",
+  "other_mentions",
+  "possibly_same_as",
+  "code_ref",
+  "search_results",
+  "linked_tests",
+  "doc_kind",
+  "content_kind",
+  "importance",
+  "identifiers",
+  "other_names",
+];
+
+/** Strip optional / nullable / default wrappers to reach the type that describes the value itself. */
+function innerSchema(schema: z.ZodType): z.ZodType {
+  let current = schema;
+  for (;;) {
+    const def = (current as unknown as { _zod: { def: { type: string; innerType?: z.ZodType; in?: z.ZodType } } })._zod.def;
+    if (["optional", "nullable", "default", "prefault", "readonly", "catch", "nonoptional"].includes(def.type) && def.innerType) {
+      current = def.innerType;
+    } else if (def.type === "pipe" && def.in) {
+      current = def.in;
+    } else {
+      return current;
+    }
+  }
+}
+
+function isStructured(schema: z.ZodType): boolean {
+  const type = (innerSchema(schema) as unknown as { _zod: { def: { type: string } } })._zod.def.type;
+  return ["object", "array", "record", "tuple", "map", "set", "intersection", "union"].includes(type);
+}
+
+/**
+ * For each record type, the top-level fields whose values are objects, arrays or claims rather
+ * than plain strings, numbers or choices. Derived from the schemas, so a form can tell that a
+ * field is structured even when the record's current value is empty or missing.
+ */
+export const STRUCTURED_FIELDS: Readonly<Record<RecordType, readonly string[]>> = Object.fromEntries(
+  RECORD_TYPES.map((type) => {
+    const shape = (RECORD_SCHEMAS[type] as unknown as { shape: Record<string, z.ZodType> }).shape;
+    return [type, Object.keys(shape).filter((key) => isStructured(shape[key]))];
+  }),
+) as unknown as Record<RecordType, readonly string[]>;
