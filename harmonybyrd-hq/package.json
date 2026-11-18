@@ -1,0 +1,48 @@
+{
+  "name": "harmonybyrd-hq",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HarmonyByrd HQ — evidence-backed development command centre (non-authoritative prototype, commission HB-HQ-P02-R1)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "next dev -p 3210",
+    "build": "next build",
+    "start": "next start -p 3210",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:reset": "tsx scripts/migrate.ts --reset",
+    "db:seed": "tsx scripts/seed.ts",
+    "pack:verify": "tsx scripts/verify-pack.ts",
+    "credentials": "tsx scripts/credentials.ts",
+    "setup": "tsx scripts/setup.ts",
+    "test": "vitest run --project unit --project db",
+    "test:unit": "vitest run --project unit",
+    "test:db": "vitest run --project db",
+    "test:api": "vitest run --project api",
+    "test:e2e": "playwright test --trace off",
+    "test:repeat": "tsx scripts/repeatability.ts",
+    "test:all": "tsx scripts/run-all-tests.ts"
+  },
+  "dependencies": {
+    "jose": "6.2.17",
+    "next": "16.4.6",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.19.0",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "5.1.1"
+  }
+}

@@ -1,0 +1,21 @@
+# Local PostgreSQL for HarmonyByrd HQ. Matches the defaults in .env.example.
+# Not exercised in the build environment (Docker was not available there): see docs/KNOWN-GAPS.md.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hq_dev
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - hq-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hq_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  hq-pgdata:

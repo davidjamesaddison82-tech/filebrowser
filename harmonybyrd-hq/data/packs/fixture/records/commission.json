@@ -1,0 +1,29 @@
+[
+ {
+  "id": "COM-FX-01",
+  "code": "FX-COM-1",
+  "title": "Fixture commission (synthetic)",
+  "date": "2031-03-01",
+  "status": "delivered",
+  "scope": {
+   "text": "Describe the three fixture modules.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "This document is synthetic test data for HarmonyByrd HQ."
+    }
+   ]
+  },
+  "module_ids": [
+   "MOD-FX-ALPHA",
+   "MOD-FX-BETA",
+   "MOD-FX-GAMMA"
+  ],
+  "output_source_ids": [
+   "SRC-F01"
+  ],
+  "citations": []
+ }
+]

@@ -1,0 +1,177 @@
+[
+ {
+  "id": "LOOP-FX-01",
+  "name": "Pattern practice loop (fixture)",
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "variant_of": null,
+  "standing": "reported",
+  "objective": {
+   "text": "Secure one pattern from first meeting to later recall.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": "Loop",
+     "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+    }
+   ]
+  },
+  "concepts": [
+   "scale pattern",
+   "tempo"
+  ],
+  "student_does": {
+   "text": "Hears the pattern, then plays it slowly and at tempo.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": "Loop",
+     "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+    }
+   ]
+  },
+  "system_observes": null,
+  "feedback_scaffolding": null,
+  "retrieval_transfer": {
+   "text": "Returns to the pattern after three days.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": "Loop",
+     "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+    }
+   ]
+  },
+  "success_evidence": null,
+  "assessment_authority": null,
+  "steps": [
+   {
+    "order": 1,
+    "source_term": "Meet the pattern",
+    "description": "",
+    "shared_stage": "encounter",
+    "module_id": "MOD-FX-ALPHA",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": "Loop",
+      "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+     }
+    ]
+   },
+   {
+    "order": 2,
+    "source_term": "hear it",
+    "description": "",
+    "shared_stage": "hear",
+    "module_id": "MOD-FX-ALPHA",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": "Loop",
+      "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+     }
+    ]
+   },
+   {
+    "order": 3,
+    "source_term": "play it slowly",
+    "description": "",
+    "shared_stage": "perform",
+    "module_id": "MOD-FX-ALPHA",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": "Loop",
+      "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+     }
+    ]
+   },
+   {
+    "order": 4,
+    "source_term": "play it at tempo",
+    "description": "",
+    "shared_stage": "perform",
+    "module_id": "MOD-FX-ALPHA",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": "Loop",
+      "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+     }
+    ]
+   },
+   {
+    "order": 5,
+    "source_term": "come back to it after three days",
+    "description": "",
+    "shared_stage": "retrieve",
+    "module_id": "MOD-FX-BETA",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": "Loop",
+      "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+     }
+    ]
+   }
+  ],
+  "citations": [
+   {
+    "source_id": "SRC-F01",
+    "locator": "Loop",
+    "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+   }
+  ]
+ },
+ {
+  "id": "LOOP-FX-02",
+  "name": "Improvisation loop (fixture, design only)",
+  "module_ids": [
+   "MOD-FX-GAMMA"
+  ],
+  "variant_of": "LOOP-FX-01",
+  "standing": "design_intention",
+  "objective": {
+   "text": "Use a practised pattern creatively.",
+   "epistemic": "design_intention",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Gamma should let a learner improvise over the pattern they practised in Alpha."
+    }
+   ]
+  },
+  "concepts": [
+   "improvisation"
+  ],
+  "student_does": null,
+  "system_observes": null,
+  "feedback_scaffolding": null,
+  "retrieval_transfer": null,
+  "success_evidence": null,
+  "assessment_authority": null,
+  "steps": [
+   {
+    "order": 1,
+    "source_term": "improvise over the pattern",
+    "description": "",
+    "shared_stage": "create",
+    "module_id": "MOD-FX-GAMMA",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma should let a learner improvise over the pattern they practised in Alpha."
+     }
+    ]
+   }
+  ],
+  "citations": []
+ }
+]

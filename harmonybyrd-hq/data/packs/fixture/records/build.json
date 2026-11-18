@@ -1,0 +1,46 @@
+[
+ {
+  "id": "BLD-FX-01",
+  "label": "alpha-candidate-7",
+  "module_id": "MOD-FX-ALPHA",
+  "filename": "alpha-candidate-7.html",
+  "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "bytes": "12,345",
+  "standing": "candidate_not_accepted",
+  "statement": {
+   "text": "A candidate build; not accepted.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Alpha candidate 7 is a candidate and has not been accepted."
+    }
+   ]
+  },
+  "artifact_source_id": null,
+  "citations": []
+ },
+ {
+  "id": "BLD-FX-02",
+  "label": "Beta build 2",
+  "module_id": "MOD-FX-BETA",
+  "filename": null,
+  "sha256": null,
+  "bytes": null,
+  "standing": "accepted_reported",
+  "statement": {
+   "text": "Reported as accepted by the founder for desktop browsers only.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only."
+    }
+   ]
+  },
+  "artifact_source_id": null,
+  "citations": []
+ }
+]

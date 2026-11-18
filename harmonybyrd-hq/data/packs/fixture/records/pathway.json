@@ -1,0 +1,50 @@
+[
+ {
+  "id": "PATH-FX-01",
+  "name": "Alpha → Beta → Gamma (fixture)",
+  "description": "Synthetic cross-module route.",
+  "basis": "design_intention",
+  "steps": [
+   {
+    "order": 1,
+    "module_id": "MOD-FX-ALPHA",
+    "role": "focused practice of a pattern",
+    "shared_stage": "perform",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha lets a learner practise a scale pattern slowly, then at tempo."
+     }
+    ]
+   },
+   {
+    "order": 2,
+    "module_id": "MOD-FX-BETA",
+    "role": "later recall of the pattern",
+    "shared_stage": "retrieve",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Beta reviews a pattern the learner made earlier and asks them to recall it after three days."
+     }
+    ]
+   },
+   {
+    "order": 3,
+    "module_id": "MOD-FX-GAMMA",
+    "role": "creative use of the pattern",
+    "shared_stage": "create",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma should let a learner improvise over the pattern they practised in Alpha."
+     }
+    ]
+   }
+  ],
+  "citations": []
+ }
+]

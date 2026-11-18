@@ -1,0 +1,34 @@
+[
+ {
+  "id": "REC-FX-01",
+  "title": "Fix the dropped last note in Alpha",
+  "rationale": "An open defect blocks a fair acceptance review of the candidate.",
+  "rank": 1,
+  "status": "proposed",
+  "made_by": "HQ test fixture",
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "prerequisite_ids": [],
+  "blocked_by": [],
+  "citations": []
+ },
+ {
+  "id": "REC-FX-02",
+  "title": "Put alpha-candidate-7 to the founder for an acceptance decision",
+  "rationale": "Tests pass, but tests are not acceptance.",
+  "rank": 2,
+  "status": "proposed",
+  "made_by": "HQ test fixture",
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "prerequisite_ids": [
+   "REC-FX-01"
+  ],
+  "blocked_by": [
+   "DEF-FX-01"
+  ],
+  "citations": []
+ }
+]

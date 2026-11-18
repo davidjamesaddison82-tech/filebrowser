@@ -1,0 +1,57 @@
+[
+ {
+  "id": "FD-FX-01",
+  "code": "FX-D1",
+  "title": "Gamma work waits until Alpha is accepted",
+  "status": "issued",
+  "recorded_in": "source",
+  "date": "2031-02-01",
+  "statement": {
+   "text": "The fixture source records a founder ruling that Gamma waits for Alpha's acceptance.",
+   "epistemic": "founder_statement",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "The founder ruled on 1 February 2031 that Gamma work waits until Alpha is accepted."
+    }
+   ]
+  },
+  "exact_text": null,
+  "module_ids": [
+   "MOD-FX-GAMMA",
+   "MOD-FX-ALPHA"
+  ],
+  "requirement_ids": [
+   "FR-FX-006"
+  ],
+  "commission_code": null,
+  "citations": []
+ },
+ {
+  "id": "FD-FX-02",
+  "code": "FX-D2",
+  "title": "May Gamma use recorded audio?",
+  "status": "unissued",
+  "recorded_in": "source",
+  "date": null,
+  "statement": {
+   "text": "The fixture source says this decision has not been issued.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Decision FX-D2 on whether Gamma may use recorded audio is unissued."
+    }
+   ]
+  },
+  "exact_text": null,
+  "module_ids": [
+   "MOD-FX-GAMMA"
+  ],
+  "requirement_ids": [],
+  "commission_code": null,
+  "citations": []
+ }
+]

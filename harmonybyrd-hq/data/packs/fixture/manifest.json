@@ -1,0 +1,10 @@
+{
+ "pack_id": "hq-fixture",
+ "title": "HarmonyByrd HQ synthetic fixture pack",
+ "kind": "fixture",
+ "version": "1.0.0",
+ "generated_at": "2031-04-12T00:00:00Z",
+ "generator": "scripts/dev/build-fixture-pack.py",
+ "commission_ref": "FIXTURE",
+ "notes": "Synthetic test data only. Describes no real HarmonyByrd module, build, decision or person."
+}

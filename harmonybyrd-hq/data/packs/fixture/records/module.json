@@ -1,0 +1,589 @@
+[
+ {
+  "id": "MOD-FX-ALPHA",
+  "name": "Alpha (fixture)",
+  "aliases": [
+   "alpha-candidate-7"
+  ],
+  "kind": "module",
+  "parent_id": null,
+  "family": "Fixture family (synthetic)",
+  "commission_listed": true,
+  "evidence_level": "documented_in_sources",
+  "summary": "Synthetic module with a prototype and passing automated tests, and no acceptance.",
+  "objective": {
+   "text": "Let a learner practise a scale pattern slowly, then at tempo.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": "Alpha module",
+     "quote": "Alpha lets a learner practise a scale pattern slowly, then at tempo."
+    }
+   ]
+  },
+  "intended_user": {
+   "text": "Adult beginners who read simple notation.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": "Alpha module",
+     "quote": "Alpha is for adult beginners who already read simple notation."
+    }
+   ]
+  },
+  "why_exists": null,
+  "learner_outcome": null,
+  "core_loop": {
+   "text": "Meet, hear, play slowly, play at tempo, return after three days.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": "Loop",
+     "quote": "Meet the pattern, hear it, play it slowly, play it at tempo, then come back to it after three days."
+    }
+   ]
+  },
+  "capabilities": [
+   {
+    "title": "Slow then at-tempo practice",
+    "detail": "",
+    "state": "existing",
+    "epistemic": "reported",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha lets a learner practise a scale pattern slowly, then at tempo."
+     }
+    ]
+   },
+   {
+    "title": "Hand a pattern to Beta",
+    "detail": "",
+    "state": "partial",
+    "epistemic": "reported",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha hands a finished pattern to Beta for review."
+     }
+    ]
+   }
+  ],
+  "ui_requirements": [],
+  "lifecycle": {
+   "documented": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "Described in Fixture Document A.",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha lets a learner practise a scale pattern slowly, then at tempo."
+     }
+    ]
+   },
+   "designed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "prototyped": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "alpha-candidate-7",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha exists as a runnable prototype named alpha-candidate-7."
+     }
+    ]
+   },
+   "implemented": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "automated_tests": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "42 of 42 reported",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "The alpha-candidate-7 suite ran 42 automated tests and all 42 passed."
+     }
+    ]
+   },
+   "browser_tested": {
+    "state": "partial",
+    "basis": "reported",
+    "note": "Demonstrated once",
+    "citations": [
+     {
+      "source_id": "SRC-F02",
+      "locator": null,
+      "quote": "Alpha was demonstrated in a real browser on 9 April 2031."
+     }
+    ]
+   },
+   "hardware_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "independently_assessed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "founder_accepted": {
+    "state": "no",
+    "basis": "reported",
+    "note": "Candidate only",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha candidate 7 is a candidate and has not been accepted."
+     }
+    ]
+   },
+   "integrated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "released": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "learner_validated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   }
+  },
+  "blockers": [],
+  "next_actions": [],
+  "loop_ids": [
+   "LOOP-FX-01"
+  ],
+  "connections": [
+   {
+    "to": "MOD-FX-BETA",
+    "nature": "hands finished patterns to",
+    "epistemic": "reported",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Alpha hands a finished pattern to Beta for review."
+     }
+    ]
+   }
+  ],
+  "citations": []
+ },
+ {
+  "id": "MOD-FX-BETA",
+  "name": "Beta (fixture)",
+  "aliases": [],
+  "kind": "module",
+  "parent_id": null,
+  "family": "Fixture family (synthetic)",
+  "commission_listed": false,
+  "evidence_level": "documented_in_sources",
+  "summary": "Synthetic module whose source reports a scoped founder acceptance.",
+  "objective": {
+   "text": "Review an earlier pattern and prompt recall after three days.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Beta reviews a pattern the learner made earlier and asks them to recall it after three days."
+    }
+   ]
+  },
+  "intended_user": null,
+  "why_exists": null,
+  "learner_outcome": null,
+  "core_loop": null,
+  "capabilities": [],
+  "ui_requirements": [],
+  "lifecycle": {
+   "documented": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Beta reviews a pattern the learner made earlier and asks them to recall it after three days."
+     }
+    ]
+   },
+   "designed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "prototyped": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "Beta build 2",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only."
+     }
+    ]
+   },
+   "implemented": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "automated_tests": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "browser_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "hardware_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "independently_assessed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "founder_accepted": {
+    "state": "partial",
+    "basis": "reported",
+    "note": "Desktop browsers only",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only."
+     }
+    ]
+   },
+   "integrated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "released": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "learner_validated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   }
+  },
+  "blockers": [
+   {
+    "text": "Cannot import patterns until the shared pattern format is agreed.",
+    "epistemic": "reported",
+    "citations": [
+     {
+      "source_id": "SRC-F02",
+      "locator": null,
+      "quote": "Blocker: Beta cannot import patterns until the shared pattern format is agreed."
+     }
+    ]
+   }
+  ],
+  "next_actions": [],
+  "loop_ids": [],
+  "connections": [],
+  "citations": []
+ },
+ {
+  "id": "MOD-FX-GAMMA",
+  "name": "Gamma (fixture)",
+  "aliases": [],
+  "kind": "module",
+  "parent_id": null,
+  "family": "Fixture family (synthetic)",
+  "commission_listed": false,
+  "evidence_level": "documented_in_sources",
+  "summary": "Synthetic module that exists only as a design and is absent from the later handover.",
+  "objective": {
+   "text": "Let a learner improvise over a practised pattern.",
+   "epistemic": "design_intention",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Gamma should let a learner improvise over the pattern they practised in Alpha."
+    }
+   ]
+  },
+  "intended_user": null,
+  "why_exists": null,
+  "learner_outcome": null,
+  "core_loop": null,
+  "capabilities": [
+   {
+    "title": "Improvise over a practised pattern",
+    "detail": "",
+    "state": "intended_absent",
+    "epistemic": "design_intention",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma should let a learner improvise over the pattern they practised in Alpha."
+     }
+    ]
+   }
+  ],
+  "ui_requirements": [],
+  "lifecycle": {
+   "documented": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma is a design only. No Gamma software has been written."
+     }
+    ]
+   },
+   "designed": {
+    "state": "yes",
+    "basis": "reported",
+    "note": "",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma is a design only. No Gamma software has been written."
+     }
+    ]
+   },
+   "prototyped": {
+    "state": "no",
+    "basis": "reported",
+    "note": "",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma is a design only. No Gamma software has been written."
+     }
+    ]
+   },
+   "implemented": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "automated_tests": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "browser_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "hardware_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "independently_assessed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "founder_accepted": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "integrated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "released": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "learner_validated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   }
+  },
+  "blockers": [],
+  "next_actions": [],
+  "loop_ids": [],
+  "connections": [
+   {
+    "to": "MOD-FX-ALPHA",
+    "nature": "would build on patterns practised in",
+    "epistemic": "design_intention",
+    "citations": [
+     {
+      "source_id": "SRC-F01",
+      "locator": null,
+      "quote": "Gamma should let a learner improvise over the pattern they practised in Alpha."
+     }
+    ]
+   }
+  ],
+  "citations": []
+ },
+ {
+  "id": "MOD-FX-DELTA",
+  "name": "Delta (fixture, named only)",
+  "aliases": [],
+  "kind": "module",
+  "parent_id": null,
+  "family": "Fixture family (synthetic)",
+  "commission_listed": true,
+  "evidence_level": "commission_list_only",
+  "summary": "Synthetic module that is listed but described by no source.",
+  "objective": null,
+  "intended_user": null,
+  "why_exists": null,
+  "learner_outcome": null,
+  "core_loop": null,
+  "capabilities": [],
+  "ui_requirements": [],
+  "lifecycle": {
+   "documented": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "designed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "prototyped": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "implemented": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "automated_tests": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "browser_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "hardware_tested": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "independently_assessed": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "founder_accepted": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "integrated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "released": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   },
+   "learner_validated": {
+    "state": "unknown",
+    "basis": "no_evidence",
+    "note": "",
+    "citations": []
+   }
+  },
+  "blockers": [],
+  "next_actions": [],
+  "loop_ids": [],
+  "connections": [],
+  "citations": []
+ }
+]

@@ -1,0 +1,42 @@
+[
+ {
+  "id": "EV-FX-01",
+  "type": "automated_test",
+  "title": "alpha-candidate-7 automated suite",
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "build_id": "BLD-FX-01",
+  "result": {
+   "text": "42 automated tests ran; 42 passed.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "The alpha-candidate-7 suite ran 42 automated tests and all 42 passed."
+    }
+   ]
+  },
+  "verification": "source_reported",
+  "date": "2031-03-10",
+  "sha256": null,
+  "citations": []
+ },
+ {
+  "id": "EV-FX-02",
+  "type": "hq_check",
+  "title": "Fixture Document A checksum recomputed",
+  "module_ids": [],
+  "build_id": null,
+  "result": {
+   "text": "The SHA-256 of the fixture snapshot was recomputed and matches the source record.",
+   "epistemic": "verified",
+   "citations": []
+  },
+  "verification": "hq_verified",
+  "date": "2031-04-12",
+  "sha256": "7ce04ae234681bf585ac7400aa92fdebe61a79e830a13034d940a3d7de0a63aa",
+  "citations": []
+ }
+]

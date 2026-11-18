@@ -1,0 +1,204 @@
+"use server";
+
+/**
+ * Server actions for the governance screens. Every action re-authenticates the session and
+ * calls the same service functions as the API, so the browser has no privileged path.
+ */
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { requireSession } from "@/lib/auth/current";
+import { claimsFor, isFounderSession } from "@/lib/auth/principal";
+import { issueToken } from "@/lib/auth/secrets";
+import { audit, writeAs } from "./db";
+import { HqError } from "./errors";
+import { recordFounderDecision, reviewProposal, submitChangeProposal, submitDefectReport, withdrawProposal } from "./services";
+import { getDataset } from "./store";
+
+export interface ActionState {
+  ok?: boolean;
+  error?: string;
+  detail?: string[];
+  message?: string;
+  token?: string;
+}
+
+function failure(error: unknown): ActionState {
+  if (error instanceof HqError) {
+    const detail = Array.isArray(error.detail) ? (error.detail as unknown[]).map(String) : undefined;
+    return { error: error.message, detail };
+  }
+  // Redirects are signalled by throwing; let them through.
+  if (error && typeof error === "object" && "digest" in error && String((error as { digest: unknown }).digest).startsWith("NEXT_REDIRECT")) {
+    throw error;
+  }
+  return { error: "Unexpected error. Nothing was changed." };
+}
+
+function text(form: FormData, key: string): string {
+  return String(form.get(key) ?? "").trim();
+}
+
+export async function reviewProposalAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  const id = text(form, "proposal_id");
+  const decision = text(form, "decision") as "accept" | "reject" | "needs_changes";
+  try {
+    const result = await reviewProposal(principal, id, decision, text(form, "note") || undefined);
+    revalidatePath("/", "layout");
+    return {
+      ok: true,
+      message:
+        decision === "accept"
+          ? `Accepted. Dataset revision ${String(result.resulting_rev)} was created and ${String(result.record_id)} is now at version ${String(result.version)}.`
+          : decision === "reject"
+            ? "Rejected. No record was changed."
+            : "Changes requested. No record was changed.",
+    };
+  } catch (error) {
+    revalidatePath("/", "layout");
+    return failure(error);
+  }
+}
+
+export async function withdrawProposalAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  try {
+    await withdrawProposal(principal, text(form, "proposal_id"), text(form, "note") || undefined);
+    revalidatePath("/", "layout");
+    return { ok: true, message: "Withdrawn." };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function recordDecisionAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  const effects: unknown[] = [];
+  const effectType = text(form, "effect_type");
+  if (effectType === "set_requirement_disposition") {
+    effects.push({ type: effectType, requirement_id: text(form, "effect_record_id"), disposition: text(form, "effect_disposition") });
+  } else if (effectType === "set_acceptance") {
+    effects.push({
+      type: effectType,
+      record_type: text(form, "effect_record_type"),
+      record_id: text(form, "effect_record_id"),
+      state: text(form, "effect_state"),
+      scope_note: text(form, "effect_scope_note") || undefined,
+    });
+  }
+  const resolves = text(form, "resolves")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const moduleIds = text(form, "module_ids")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  let decisionId: string;
+  try {
+    const result = await recordFounderDecision(principal, {
+      title: text(form, "title"),
+      exact_text: text(form, "exact_text"),
+      rationale: text(form, "rationale") || undefined,
+      effects,
+      resolves,
+      module_ids: moduleIds,
+      commission_ref: text(form, "commission_ref") || undefined,
+    });
+    decisionId = String(result.decision_id);
+  } catch (error) {
+    return failure(error);
+  }
+  revalidatePath("/", "layout");
+  redirect(`/records/decision/${decisionId}`);
+}
+
+export async function submitProposalAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  const mode = text(form, "mode");
+  let proposalId: string;
+  try {
+    const head = (await getDataset(principal)).head;
+    if (mode === "defect") {
+      const result = await submitDefectReport(principal, {
+        title: text(form, "title"),
+        description: text(form, "rationale"),
+        module_ids: text(form, "module_ids")
+          .split(/[\s,]+/)
+          .filter(Boolean),
+        severity: text(form, "severity") || "unknown",
+        base_rev: head,
+      });
+      proposalId = String((result.proposal as { id: string }).id);
+    } else {
+      let value: unknown = text(form, "value");
+      const field = text(form, "field");
+      if (text(form, "value_is_json") === "1") {
+        try {
+          value = JSON.parse(String(value));
+        } catch {
+          return { error: "The new value is not valid JSON." };
+        }
+      }
+      const result = await submitChangeProposal(principal, {
+        kind: (text(form, "kind") || "change_proposal") as "change_proposal",
+        title: text(form, "title"),
+        rationale: text(form, "rationale"),
+        base_rev: Number(text(form, "base_rev")) || head,
+        target: { type: text(form, "target_type"), id: text(form, "target_id"), base_version: Number(text(form, "base_version")) },
+        set: { [field]: value },
+      });
+      proposalId = String((result.proposal as { id: string }).id);
+    }
+  } catch (error) {
+    return failure(error);
+  }
+  revalidatePath("/", "layout");
+  redirect(`/proposals/${proposalId}`);
+}
+
+/** Founder only: register an AI client or person and issue an API token. The token is shown once. */
+export async function issueCredentialAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  const claims = claimsFor(principal);
+  if (!isFounderSession(principal)) {
+    await audit(claims, { action: "credential.issue", outcome: "denied", detail: { reason: "founder authority required" } });
+    return { error: "Only the founder can issue credentials." };
+  }
+  const handle = text(form, "handle").toLowerCase();
+  const scopes = form.getAll("scopes").map(String);
+  const days = Number(text(form, "days")) || 0;
+  const issued = issueToken();
+  try {
+    await writeAs(claims, async (q) => {
+      const exists = await q.query("select 1 from hq.principal_directory() where handle = $1", [handle]);
+      if (!exists.rowCount) {
+        await q.query("select hq.founder_register_client($1, $2, $3, $4)", [handle, text(form, "display_name") || handle, "ai_client", "ai_agent"]);
+      }
+      await q.query("select hq.founder_issue_credential($1, $2, $3::text[], $4, $5, $6)", [
+        handle,
+        text(form, "label") || "token",
+        scopes.length ? scopes : ["read"],
+        issued.prefix,
+        issued.hash,
+        days > 0 ? new Date(Date.now() + days * 86_400_000) : null,
+      ]);
+    });
+  } catch (error) {
+    return failure(error);
+  }
+  revalidatePath("/access");
+  return { ok: true, token: issued.token, message: `Token issued for ${handle}. Copy it now: it is shown once and only its SHA-256 is stored.` };
+}
+
+export async function revokeCredentialAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  if (!isFounderSession(principal)) return { error: "Only the founder can revoke credentials." };
+  try {
+    await writeAs(claimsFor(principal), (q) => q.query("select hq.founder_revoke_credential($1::uuid)", [text(form, "credential_id")]));
+  } catch (error) {
+    return failure(error);
+  }
+  revalidatePath("/access");
+  return { ok: true, message: "Credential revoked." };
+}

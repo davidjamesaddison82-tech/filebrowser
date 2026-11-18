@@ -1,0 +1,46 @@
+[
+ {
+  "id": "DEF-FX-01",
+  "title": "Alpha drops the last note above tempo 180",
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "build_id": "BLD-FX-01",
+  "status": "open",
+  "severity": "major",
+  "statement": {
+   "text": "The last note of a pattern is dropped when the tempo is above 180.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Known defect: Alpha drops the last note of a pattern when the tempo is above 180."
+    }
+   ]
+  },
+  "citations": []
+ },
+ {
+  "id": "DEF-FX-02",
+  "title": "Beta showed the wrong key signature",
+  "module_ids": [
+   "MOD-FX-BETA"
+  ],
+  "build_id": "BLD-FX-02",
+  "status": "resolved",
+  "severity": "minor",
+  "statement": {
+   "text": "Reported fixed in Beta build 2.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "The resolved defect: Beta showed the wrong key signature; this was fixed in Beta build 2."
+    }
+   ]
+  },
+  "citations": []
+ }
+]

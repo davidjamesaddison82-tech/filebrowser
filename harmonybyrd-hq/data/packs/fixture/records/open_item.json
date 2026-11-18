@@ -1,0 +1,45 @@
+[
+ {
+  "id": "OPEN-FX-01",
+  "kind": "pending_founder_decision",
+  "title": "Recorded audio in Gamma",
+  "statement": {
+   "text": "Whether Gamma may use recorded audio is undecided.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Decision FX-D2 on whether Gamma may use recorded audio is unissued."
+    }
+   ]
+  },
+  "module_ids": [
+   "MOD-FX-GAMMA"
+  ],
+  "decision_id": "FD-FX-02",
+  "citations": []
+ },
+ {
+  "id": "OPEN-FX-02",
+  "kind": "blocker",
+  "title": "Shared pattern format not agreed",
+  "statement": {
+   "text": "Beta cannot import patterns until the shared pattern format is agreed.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F02",
+     "locator": null,
+     "quote": "Blocker: Beta cannot import patterns until the shared pattern format is agreed."
+    }
+   ]
+  },
+  "module_ids": [
+   "MOD-FX-BETA",
+   "MOD-FX-ALPHA"
+  ],
+  "decision_id": null,
+  "citations": []
+ }
+]

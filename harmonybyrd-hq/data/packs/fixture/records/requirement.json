@@ -1,0 +1,202 @@
+[
+ {
+  "id": "FR-FX-001",
+  "exact_wording": "Every pattern must be playable at a slow tempo before a fast one.",
+  "source_id": "SRC-F01",
+  "locator": "Founder instructions (synthetic)",
+  "source_date": "2031-03-10",
+  "attribution": "direct_quote",
+  "title": "Slow tempo first",
+  "category": "pedagogy",
+  "interpretation": null,
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "disposition": "unreviewed",
+  "implementation_state": "implemented_tested",
+  "implementation_note": {
+   "text": "The fixture source reports slow-then-tempo practice exists.",
+   "epistemic": "reported",
+   "citations": [
+    {
+     "source_id": "SRC-F01",
+     "locator": null,
+     "quote": "Alpha lets a learner practise a scale pattern slowly, then at tempo."
+    }
+   ]
+  },
+  "acceptance_criteria": [],
+  "depends_on": [],
+  "linked_code": [
+   {
+    "repository": "fixture/alpha",
+    "ref": "0000000000000000000000000000000000000000",
+    "path": "src/tempo.ts",
+    "note": "synthetic reference"
+   }
+  ],
+  "linked_evidence_ids": [
+   "EV-FX-01"
+  ],
+  "linked_build_ids": [
+   "BLD-FX-01"
+  ],
+  "decision_ids": [],
+  "conflicts_with": [],
+  "supersedes": [],
+  "superseded_by": [],
+  "duplicate_of": null,
+  "citations": []
+ },
+ {
+  "id": "FR-FX-002",
+  "exact_wording": "Never show a score out of ten.",
+  "source_id": "SRC-F01",
+  "locator": "Founder instructions (synthetic)",
+  "source_date": "2031-03-10",
+  "attribution": "direct_quote",
+  "title": "No score out of ten",
+  "category": "ui_ux",
+  "interpretation": null,
+  "module_ids": [
+   "MOD-FX-ALPHA",
+   "MOD-FX-BETA"
+  ],
+  "disposition": "unreviewed",
+  "implementation_state": "no_record",
+  "implementation_note": null,
+  "acceptance_criteria": [],
+  "depends_on": [],
+  "linked_code": [],
+  "linked_evidence_ids": [],
+  "linked_build_ids": [],
+  "decision_ids": [],
+  "conflicts_with": [
+   {
+    "id": "FR-FX-003",
+    "note": "One instruction forbids a score out of ten; the other requires it."
+   }
+  ],
+  "supersedes": [],
+  "superseded_by": [],
+  "duplicate_of": null,
+  "citations": []
+ },
+ {
+  "id": "FR-FX-003",
+  "exact_wording": "Show the learner a score out of ten after each pattern.",
+  "source_id": "SRC-F01",
+  "locator": "Founder instructions (synthetic)",
+  "source_date": "2031-03-10",
+  "attribution": "direct_quote",
+  "title": "Score out of ten after each pattern",
+  "category": "ui_ux",
+  "interpretation": null,
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "disposition": "unreviewed",
+  "implementation_state": "no_record",
+  "implementation_note": null,
+  "acceptance_criteria": [],
+  "depends_on": [],
+  "linked_code": [],
+  "linked_evidence_ids": [],
+  "linked_build_ids": [],
+  "decision_ids": [],
+  "conflicts_with": [
+   {
+    "id": "FR-FX-002",
+    "note": "One instruction forbids a score out of ten; the other requires it."
+   }
+  ],
+  "supersedes": [],
+  "superseded_by": [],
+  "duplicate_of": null,
+  "citations": []
+ },
+ {
+  "id": "FR-FX-004",
+  "exact_wording": "Keep the interface free of pop-up windows.",
+  "source_id": "SRC-F01",
+  "locator": "Founder instructions (synthetic)",
+  "source_date": "2031-03-10",
+  "attribution": "direct_quote",
+  "title": "No pop-up windows",
+  "category": "ui_ux",
+  "interpretation": null,
+  "module_ids": [],
+  "disposition": "unreviewed",
+  "implementation_state": "no_record",
+  "implementation_note": null,
+  "acceptance_criteria": [],
+  "depends_on": [],
+  "linked_code": [],
+  "linked_evidence_ids": [],
+  "linked_build_ids": [],
+  "decision_ids": [],
+  "conflicts_with": [],
+  "supersedes": [],
+  "superseded_by": [],
+  "duplicate_of": null,
+  "citations": []
+ },
+ {
+  "id": "FR-FX-005",
+  "exact_wording": "Every pattern must be playable at a slow tempo before a fast one.",
+  "source_id": "SRC-F02",
+  "locator": null,
+  "source_date": "2031-04-12",
+  "attribution": "direct_quote",
+  "title": "Slow tempo first (restated in handover)",
+  "category": "pedagogy",
+  "interpretation": null,
+  "module_ids": [
+   "MOD-FX-ALPHA"
+  ],
+  "disposition": "unreviewed",
+  "implementation_state": "no_record",
+  "implementation_note": null,
+  "acceptance_criteria": [],
+  "depends_on": [],
+  "linked_code": [],
+  "linked_evidence_ids": [],
+  "linked_build_ids": [],
+  "decision_ids": [],
+  "conflicts_with": [],
+  "supersedes": [],
+  "superseded_by": [],
+  "duplicate_of": null,
+  "citations": []
+ },
+ {
+  "id": "FR-FX-006",
+  "exact_wording": "The founder ruled on 1 February 2031 that Gamma work waits until Alpha is accepted.",
+  "source_id": "SRC-F01",
+  "locator": "Founder instructions (synthetic)",
+  "source_date": "2031-02-01",
+  "attribution": "ruling_recorded_by_source",
+  "title": "Gamma waits for Alpha",
+  "category": "scope",
+  "interpretation": null,
+  "module_ids": [
+   "MOD-FX-GAMMA"
+  ],
+  "disposition": "superseded",
+  "implementation_state": "no_record",
+  "implementation_note": null,
+  "acceptance_criteria": [],
+  "depends_on": [],
+  "linked_code": [],
+  "linked_evidence_ids": [],
+  "linked_build_ids": [],
+  "decision_ids": [
+   "FD-FX-01"
+  ],
+  "conflicts_with": [],
+  "supersedes": [],
+  "superseded_by": [],
+  "duplicate_of": null,
+  "citations": []
+ }
+]

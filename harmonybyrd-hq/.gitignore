@@ -1,0 +1,16 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.env.local
+.env
+.hq-local-credentials.json
+test-results/
+playwright-report/
+.local/
+
+# The real HarmonyByrd evidence pack and anything derived from founder documents stay out of
+# the repository. Only the synthetic fixture pack is committed.
+data/packs/*
+!data/packs/fixture/
+private/
