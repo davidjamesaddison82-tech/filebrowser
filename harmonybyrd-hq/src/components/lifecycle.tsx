@@ -1,7 +1,9 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import type { Dataset } from "@/lib/domain/dataset";
 import type { LifecycleRow } from "@/lib/domain/derive";
-import { type Citation, type Epistemic, LIFECYCLE_DIMENSIONS, LIFECYCLE_LABEL, type ModuleRecord } from "@/lib/domain/schemas";
+import { LIFECYCLE_DIMENSIONS, LIFECYCLE_LABEL, type ModuleRecord } from "@/lib/domain/schemas";
+import { isObject, lifecycleReports, type SafeLifecycleReport } from "@/lib/ui/guards";
+import { recordHref } from "@/lib/ui/links";
 import { Citations, EpistemicChip } from "./ui";
 
 const GLYPH: Record<string, { glyph: string; label: string }> = {
@@ -53,7 +55,7 @@ export function LifecycleMatrix({ rows }: { rows: LifecycleRow[] }) {
           {rows.map((row) => (
             <tr key={row.module_id}>
               <td className="name">
-                <Link href={`/modules/${row.module_id}`}>{row.name}</Link>
+                <Link href={recordHref("module", row.module_id)}>{row.name}</Link>
               </td>
               {row.cells.map((cell) => (
                 <td key={cell.dimension}>
@@ -71,18 +73,19 @@ export function LifecycleMatrix({ rows }: { rows: LifecycleRow[] }) {
   );
 }
 
-/** A different state for one lifecycle dimension, as reported by another group of sources. */
-interface OtherReport {
-  state: string;
-  basis: Epistemic;
-  note?: string;
-  citations?: Citation[];
-  from_cluster?: string;
+/** What other groups of sources report for each dimension (D15), read through the guards: a malformed entry is left out. */
+function otherReports(module: ModuleRecord): Partial<Record<string, SafeLifecycleReport[]>> {
+  const raw = (module as Record<string, unknown>).lifecycle_other_reports;
+  if (!isObject(raw)) return {};
+  return Object.fromEntries(Object.entries(raw).map(([dimension, list]) => [dimension, lifecycleReports(list)]));
 }
 
-function otherReports(module: ModuleRecord): Partial<Record<string, OtherReport[]>> {
-  const raw = (module as Record<string, unknown>).lifecycle_other_reports;
-  return raw && typeof raw === "object" ? (raw as Partial<Record<string, OtherReport[]>>) : {};
+/** A dimension's entry, or "unknown" when a stored record lacks it. */
+function entryOf(module: ModuleRecord, dimension: string): { state: string; basis: unknown; note: string; citations: unknown } {
+  const lifecycle = (module as Record<string, unknown>).lifecycle;
+  const entry = isObject(lifecycle) ? lifecycle[dimension] : undefined;
+  if (!isObject(entry) || typeof entry.state !== "string") return { state: "unknown", basis: "no_evidence", note: "", citations: [] };
+  return { state: entry.state, basis: entry.basis, note: typeof entry.note === "string" ? entry.note : "", citations: entry.citations };
 }
 
 /** One module's lifecycle, dimension by dimension, with the basis and sources for each. */
@@ -91,8 +94,8 @@ export function LifecycleDetail({ ds, module }: { ds: Dataset; module: ModuleRec
   return (
     <div>
       {LIFECYCLE_DIMENSIONS.map((d) => {
-        const entry = module.lifecycle[d];
-        const alt = Array.isArray(others[d]) ? others[d]! : [];
+        const entry = entryOf(module, d);
+        const alt = others[d] ?? [];
         return (
           <div className="lc-row" key={d}>
             <div>
@@ -117,7 +120,7 @@ export function LifecycleDetail({ ds, module }: { ds: Dataset; module: ModuleRec
                   </div>
                   <div className="row" style={{ gap: 8 }}>
                     {o.basis ? <EpistemicChip value={o.basis} /> : null}
-                    <Citations ds={ds} citations={o.citations ?? []} />
+                    <Citations ds={ds} citations={o.citations} />
                   </div>
                 </div>
               ))}

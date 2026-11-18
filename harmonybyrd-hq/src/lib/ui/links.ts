@@ -17,11 +17,9 @@ export function recordHref(type: RecordType | string, id: string): string {
 }
 
 export function refHref(id: string): string {
+  if (typeof id !== "string") return "#";
   if (id.startsWith("PROP-")) return `/proposals/${encodeURIComponent(id)}`;
   return recordHref(guessType(id), id);
 }
 
-export function withRev(href: string, rev: number | null | undefined): string {
-  if (!rev) return href;
-  return `${href}${href.includes("?") ? "&" : "?"}rev=${rev}`;
-}
+export { isPinnablePath, readRev, withRev } from "./pin-rules";

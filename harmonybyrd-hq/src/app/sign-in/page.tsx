@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { sessionPrincipal } from "@/lib/auth/current";
+import { safeNext } from "@/lib/auth/safe-next";
 import { param, type SearchParams } from "@/lib/server/page";
 import { SignInForm } from "./form";
 
@@ -8,7 +9,8 @@ export const metadata: Metadata = { title: "Sign in" };
 
 export default async function SignInPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
-  const next = param(params, "next") ?? "/";
+  // The hidden field never carries a destination off HQ (the action checks it again on submit).
+  const next = safeNext(param(params, "next"));
   let signedIn = false;
   try {
     signedIn = (await sessionPrincipal()) !== null;

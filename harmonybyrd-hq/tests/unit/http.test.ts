@@ -1,0 +1,109 @@
+import { describe, expect, it } from "vitest";
+import { HqError } from "@/lib/server/errors";
+import { argsFromQuery, maxBodyBytes, readBodyText, requestIdFor } from "@/lib/server/http";
+import { findTool, TOOLS } from "@/lib/server/tools";
+
+const query = (name: string, qs: string) => argsFromQuery(new URL(`http://hq.test/api/v1/tools/${name}?${qs}`), findTool(name)!.input);
+
+describe("GET tool arguments are coerced only as each tool declares them (api-7)", () => {
+  it("a string argument keeps the words true and false, and digits", () => {
+    expect(query("search_records", "query=false")).toEqual({ query: "false" });
+    expect(query("search_records", "query=true")).toEqual({ query: "true" });
+    expect(query("search_founder_requirements", "module=true&query=2024")).toEqual({ module: "true", query: "2024" });
+  });
+
+  it("a boolean, a number and a list are still coerced", () => {
+    expect(query("search_founder_requirements", "outstanding=true&rev=2")).toEqual({ outstanding: true, rev: 2 });
+    expect(query("get_recent_changes", "limit=5")).toEqual({ limit: 5 });
+    expect(query("search_records", "query=x&types=module,requirement")).toEqual({ query: "x", types: ["module", "requirement"] });
+  });
+
+  it("a value that does not fit its declared type is left for the schema to refuse", async () => {
+    expect(query("search_founder_requirements", "outstanding=yes")).toEqual({ outstanding: "yes" });
+    expect(query("get_ecosystem_overview", "rev=latest")).toEqual({ rev: "latest" });
+    await expect(findTool("get_ecosystem_overview")!.run({} as never, query("get_ecosystem_overview", "rev=latest"))).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+describe("tools refuse arguments they do not take (docs-3)", () => {
+  it.each(["get_recent_changes", "list_my_proposals"])("%s does not take rev", async (name) => {
+    const error = await findTool(name)!.run({} as never, { rev: 1 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HqError);
+    expect(error).toMatchObject({ status: 422, code: "invalid_request" });
+    expect((error as HqError).message).toBe(`${name} does not take the argument "rev".`);
+  });
+
+  it("every tool refuses an unknown argument instead of dropping it, and says which tools take rev", async () => {
+    for (const tool of TOOLS) {
+      const error = await tool.run({} as never, { no_such_argument: 1 }).catch((e: unknown) => e);
+      expect(error, tool.name).toMatchObject({ status: 422 });
+      expect((error as HqError).detail, tool.name).toContain(`no_such_argument: not an argument of ${tool.name}`);
+    }
+    const pinnable = TOOLS.filter((t) => t.mode === "read" && "rev" in t.input.shape).map((t) => t.name);
+    const notPinnable = TOOLS.filter((t) => t.mode === "read" && !("rev" in t.input.shape)).map((t) => t.name);
+    expect(notPinnable.sort()).toEqual(["get_recent_changes", "list_my_proposals"]);
+    expect(pinnable.length).toBe(13);
+  });
+});
+
+describe("request ids (api-8, D5)", () => {
+  const req = (id?: string) => new Request("http://hq.test/", { headers: id === undefined ? {} : { "x-request-id": id } });
+  it("keeps a well-formed client id and replaces anything else", () => {
+    expect(requestIdFor(req("client-run_42.a"))).toBe("client-run_42.a");
+    for (const bad of ["", "has space", "a".repeat(65), "x;drop", "é", "<script>"]) {
+      const id = requestIdFor(req(bad));
+      expect(id, bad).not.toBe(bad);
+      expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    expect(requestIdFor(req())).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("request bodies are capped (api-4)", () => {
+  it("defaults to 1 MiB, and HQ_MAX_BODY_BYTES changes it", () => {
+    expect(maxBodyBytes({})).toBe(1_048_576);
+    expect(maxBodyBytes({ HQ_MAX_BODY_BYTES: "2048" })).toBe(2048);
+    expect(maxBodyBytes({ HQ_MAX_BODY_BYTES: "nonsense" })).toBe(1_048_576);
+  });
+
+  it("refuses by Content-Length without buffering the body", async () => {
+    const request = new Request("http://hq.test/", { method: "POST", body: "x".repeat(100), headers: { "content-length": "100" } });
+    await expect(readBodyText(request, 99)).rejects.toMatchObject({ status: 413, code: "payload_too_large" });
+  });
+
+  it("refuses a body without Content-Length once it passes the limit", async () => {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled > 1000) controller.close();
+        else controller.enqueue(new Uint8Array(64));
+      },
+    });
+    const request = new Request("http://hq.test/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    await expect(readBodyText(request, 1000)).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("stops reading an endless body: the rest is cancelled after the drain limit", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(new Uint8Array(65_536));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const request = new Request("http://hq.test/", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    await expect(readBodyText(request, 1000)).rejects.toMatchObject({ status: 413 });
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(400);
+  });
+
+  it("reads a body within the limit unchanged", async () => {
+    const body = JSON.stringify({ text: "Grüße ".repeat(20) });
+    expect(await readBodyText(new Request("http://hq.test/", { method: "POST", body }), 10_000)).toBe(body);
+  });
+});

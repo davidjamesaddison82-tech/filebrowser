@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DriveAdapter } from "@/lib/integrations/drive";
+import { DriveAdapter, driveConfigFromEnv } from "@/lib/integrations/drive";
 import { GitHubAdapter } from "@/lib/integrations/github";
 import type { FetchLike } from "@/lib/integrations/http";
 
@@ -96,10 +96,12 @@ describe("AC12 — external services that are unavailable are handled safely (Gi
   });
 });
 
+const FILE = "1AbCdEfGhIjKlMnOp";
+
 describe("AC12 — external services that are unavailable are handled safely (Google Drive)", () => {
   it("reports 'not_configured' without making any request", async () => {
     const { impl, calls } = fakeFetch(() => jsonResponse({}));
-    const adapter = new DriveAdapter({ apiBase: "https://drive.test/v3" }, impl);
+    const adapter = new DriveAdapter({ apiBase: "https://drive.test/v3", allowedFileIds: [FILE] }, impl);
     expect(adapter.status().configured).toBe(false);
     expect(await adapter.fileMetadata("1AbCdEfGhIjKlMnOp")).toMatchObject({ ok: false, reason: "not_configured" });
     expect(calls).toHaveLength(0);
@@ -107,23 +109,56 @@ describe("AC12 — external services that are unavailable are handled safely (Go
 
   it("rejects malformed file ids without making any request", async () => {
     const { impl, calls } = fakeFetch(() => jsonResponse({}));
-    const adapter = new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t" }, impl);
+    const adapter = new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t", allowedFileIds: [FILE] }, impl);
     expect(await adapter.fileMetadata("../../secret")).toMatchObject({ ok: false, reason: "not_found" });
     expect(calls).toHaveLength(0);
   });
 
   it("reads metadata only, with GET, and maps failures", async () => {
     const ok = fakeFetch(() => jsonResponse({ id: "1AbCdEfGhIjKlMnOp", name: "Doc", mimeType: "application/pdf", modifiedTime: "2031-01-02T00:00:00Z", version: "7", sha256Checksum: "c".repeat(64), size: "1024" }));
-    const adapter = new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t" }, ok.impl);
+    const adapter = new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t", allowedFileIds: [FILE] }, ok.impl);
     expect(await adapter.fileMetadata("1AbCdEfGhIjKlMnOp")).toMatchObject({ ok: true, data: { name: "Doc", version: "7", sha256: "c".repeat(64), size_bytes: 1024 } });
     expect(ok.calls[0].method).toBe("GET");
     expect(ok.calls[0].url).toContain("/files/1AbCdEfGhIjKlMnOp?fields=");
     expect(ok.calls[0].url).not.toContain("alt=media");
     const denied = fakeFetch(() => jsonResponse({}, 401));
-    expect(await new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t" }, denied.impl).fileMetadata("1AbCdEfGhIjKlMnOp")).toMatchObject({ ok: false, reason: "unauthorised" });
-    const down = new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t" }, async () => {
+    expect(await new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t", allowedFileIds: [FILE] }, denied.impl).fileMetadata("1AbCdEfGhIjKlMnOp")).toMatchObject({ ok: false, reason: "unauthorised" });
+    const down = new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t", allowedFileIds: [FILE] }, async () => {
       throw new Error("ENOTFOUND");
     });
     expect(await down.fileMetadata("1AbCdEfGhIjKlMnOp")).toMatchObject({ ok: false, reason: "unreachable" });
+  });
+});
+
+describe("docs-5 — HQ asks Drive only about the files it is told to", () => {
+  const drive = (allowedFileIds: string[], impl: FetchLike) => new DriveAdapter({ apiBase: "https://drive.test/v3", accessToken: "t", allowedFileIds }, impl);
+  const answer = () => jsonResponse({ id: FILE, name: "Doc" });
+
+  it("a file id that is not on HQ_GOOGLE_DRIVE_FILE_IDS is not looked up", async () => {
+    const { impl, calls } = fakeFetch(answer);
+    expect(await drive(["AllowedFile0001"], impl).fileMetadata("OtherFile00001")).toMatchObject({ ok: false, reason: "not_configured" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("with no list at all nothing is looked up, and the adapter says it is not configured", async () => {
+    const { impl, calls } = fakeFetch(answer);
+    const adapter = drive([], impl);
+    expect(adapter.status()).toEqual({ configured: false, allowed_file_ids: 0 });
+    expect(await adapter.fileMetadata(FILE)).toMatchObject({ ok: false, reason: "not_configured" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a listed file id is looked up once", async () => {
+    const { impl, calls } = fakeFetch(answer);
+    expect(await drive([FILE], impl).fileMetadata(FILE)).toMatchObject({ ok: true, data: { id: FILE } });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reads the list from HQ_GOOGLE_DRIVE_FILE_IDS, comma-separated", () => {
+    expect(driveConfigFromEnv({ HQ_GOOGLE_DRIVE_ACCESS_TOKEN: "t", HQ_GOOGLE_DRIVE_FILE_IDS: " AllowedFile0001 , AllowedFile0002,," }).allowedFileIds).toEqual([
+      "AllowedFile0001",
+      "AllowedFile0002",
+    ]);
+    expect(driveConfigFromEnv({ HQ_GOOGLE_DRIVE_ACCESS_TOKEN: "t" }).allowedFileIds).toEqual([]);
   });
 });

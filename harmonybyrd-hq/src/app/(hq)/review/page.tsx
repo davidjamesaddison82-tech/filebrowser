@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { RevisionBar } from "@/components/revision-bar";
+import Link from "@/components/pin-link";
 import { Card, Chip, Empty, IdTag, Notice, PageHead, Pager } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
 import { REVIEW_KIND_LABEL, type ReviewKind, reviewItems } from "@/lib/domain/derive";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
-import { chainProblems } from "@/lib/server/store";
+import { chainProblems, headSeal } from "@/lib/server/store";
 import { plural } from "@/lib/ui/format";
 import { recordHref, withRev } from "@/lib/ui/links";
 
@@ -41,24 +40,46 @@ export default async function ReviewPage({ searchParams }: { searchParams: Searc
     const q = sp.toString();
     return withRev(q ? `/review?${q}` : "/review", rev);
   };
-  const chain = await chainProblems(principal);
+  // The history check covers the whole stored history up to the latest revision, so it is made only
+  // when the page shows the latest: a pinned page shows nothing computed from the latest (D14).
+  const chain = ctx.pinned ? null : await chainProblems(principal);
+  const seal = ctx.pinned ? null : await headSeal(principal);
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Review items"
         lede="Omissions, duplicates, conflicting instructions and missing acceptance evidence, raised explicitly so that none of them is resolved by silence. HQ does not resolve them: it shows them to the founder."
       />
 
-      {chain.length === 0 ? (
-        <Notice tone="ok">Record history is intact: every version of every record links correctly to the one before it (hash chain verified just now).</Notice>
+      {chain === null ? (
+        <Notice tone="info">The history check is made on the latest revision only. Return to the latest to see it.</Notice>
+      ) : chain.length === 0 ? (
+        <Notice tone="ok">
+          <div className="stack-sm" style={{ gap: 6 }}>
+            <div>
+              <strong>The stored history is internally consistent</strong> (checked just now): every version links to the one before it, every revision
+              seal matches its records, and the seals chain back to revision 1. This shows the database agrees with itself. It cannot show that someone with
+              full control of the database did not rewrite history and seals together.
+            </div>
+            {seal ? (
+              <div>
+                Seal of the latest revision ({seal.rev}): <code className="break">{seal.seal_hash ?? seal.content_hash}</code>
+                <div className="small">
+                  Keep a copy of this value and its revision number outside HQ (for example in an email to yourself). A revision&apos;s seal never changes:
+                  if the seal stored for revision {seal.rev} ever differs from your copy, the history up to it was rewritten.
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </Notice>
       ) : (
         <Notice tone="bad">
-          <strong>Record history check failed for {plural(chain.length, "version")}.</strong> Something changed stored records outside HQ&apos;s write path:{" "}
+          <strong>The stored history is not internally consistent: {plural(chain.length, "problem")} found.</strong> Something changed stored records
+          or revision seals outside HQ&apos;s write path:{" "}
           {chain
             .slice(0, 5)
-            .map((c) => `${c.record_id} v${c.version} (${c.problem})`)
+            .map((c) => (c.record_type === "dataset_revision" ? `revision ${c.record_id} (${c.problem})` : `${c.record_id} v${c.version} (${c.problem})`))
             .join("; ")}
           .
         </Notice>

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { Card, Chip, Empty, IdTag, PageHead } from "@/components/ui";
 import { isRecordType, RECORD_TYPE_LABEL } from "@/lib/domain/schemas";
 import { loadPage, type SearchParams } from "@/lib/server/page";
@@ -10,7 +10,7 @@ import { recordHref, refHref } from "@/lib/ui/links";
 export const metadata: Metadata = { title: "Changes" };
 
 export default async function ChangesPage({ searchParams }: { searchParams: SearchParams }) {
-  const { principal, ctx } = await loadPage(searchParams);
+  const { principal, ctx } = await loadPage(searchParams, { pinnable: false });
   const changes = await listChanges(principal, 100);
   return (
     <div className="stack">
@@ -47,6 +47,7 @@ export default async function ChangesPage({ searchParams }: { searchParams: Sear
               foot={
                 <span className="mono xsmall break">
                   dataset sha256 {c.content_hash} · {plural(c.record_count, "live record")}
+                  {c.seal_hash ? <> · seal {c.seal_hash}</> : null}
                 </span>
               }
             >

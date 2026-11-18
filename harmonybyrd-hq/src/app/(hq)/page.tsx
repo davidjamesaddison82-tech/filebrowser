@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { EcosystemMap } from "@/components/ecosystem-map";
-import { RevisionBar } from "@/components/revision-bar";
 import { Card, Chip, Empty, IdTag, PageHead, RecordLink, Tile } from "@/components/ui";
 import { developmentHealth, ecosystemOverview, missingWork } from "@/lib/domain/derive";
 import { loadPage, type SearchParams } from "@/lib/server/page";
@@ -19,7 +18,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
   const overview = ecosystemOverview(ds);
   const health = developmentHealth(ds);
   const missing = missingWork(ds);
-  const changes = await listChanges(principal, 6);
+  // On a pinned revision, list only the changes up to that revision: later ones did not exist then (D14).
+  const shownRev = ds.revision.rev;
+  const changes = (await listChanges(principal, ctx.pinned ? ctx.head - shownRev + 6 : 6)).filter((c) => c.rev <= shownRev).slice(0, 6);
   const layout = layoutMap(overview);
   const recommendations = [...ds.recommendations].sort((a, b) => a.data.rank - b.data.rank);
   const withBuild = new Set(ds.builds.map((b) => b.data.module_id).filter(Boolean));
@@ -42,7 +43,6 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="HarmonyByrd development"
         lede={

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { LifecycleLegend, LifecycleMatrix } from "@/components/lifecycle";
-import { RevisionBar } from "@/components/revision-bar";
 import { Card, Chip, Empty, IdTag, PageHead } from "@/components/ui";
 import { ecosystemOverview, lifecycleMatrix, search } from "@/lib/domain/derive";
 import { loadPage, param, type SearchParams } from "@/lib/server/page";
@@ -10,8 +9,9 @@ import { withRev } from "@/lib/ui/links";
 
 export const metadata: Metadata = { title: "Module atlas" };
 
-const STANDING_TONE: Record<string, "ok" | "founder" | "info" | "accent" | "design" | "plain" | "ghost"> = {
+const STANDING_TONE: Record<string, "ok" | "bad" | "founder" | "info" | "accent" | "design" | "plain" | "ghost"> = {
   accepted_in_hq: "ok",
+  rejected_in_hq: "bad",
   acceptance_reported: "founder",
   tested_not_accepted: "info",
   prototype_untested: "accent",
@@ -55,7 +55,6 @@ export default async function ModulesPage({ searchParams }: { searchParams: Sear
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Module atlas"
         lede="Every known module, submodule and workstream, with what it is for and where it honestly stands. Recovered from the sources HQ could read; modules named only in the commission are listed too, marked as having no supporting source."

@@ -1,14 +1,30 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { LifecycleDetail } from "@/components/lifecycle";
-import { RevisionBar } from "@/components/revision-bar";
-import { Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
+import {
+  AcceptanceLock,
+  bindingAcceptance,
+  Card,
+  Chip,
+  Citations,
+  ClaimView,
+  Empty,
+  EpistemicChip,
+  Fold,
+  IdTag,
+  InboxMark,
+  InboxOriginChip,
+  Notice,
+  PageHead,
+  RecordLink,
+  StatusChip,
+} from "@/components/ui";
 import { moduleBrief } from "@/lib/domain/derive";
 import type { Claim, ModuleRecord } from "@/lib/domain/schemas";
 
 type Capability = ModuleRecord["capabilities"][number];
-import { loadPage, type SearchParams } from "@/lib/server/page";
+import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
 import { humanise, isoDate, plural, shortHash } from "@/lib/ui/format";
 import { recordHref, withRev } from "@/lib/ui/links";
 
@@ -74,7 +90,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
   const { id } = await params;
   const { ctx, rev } = await loadPage(searchParams);
   const { ds } = ctx;
-  const brief = moduleBrief(ds, decodeURIComponent(id));
+  const brief = moduleBrief(ds, routeId(id));
   if (!brief) notFound();
   const m = brief.module.data;
   const commissionEntry =
@@ -167,16 +183,26 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title={m.name}
         id={m.id}
         crumbs={[{ label: "Module atlas", href: "/modules" }, { label: m.family }]}
         chips={
           <>
-            <Chip tone={brief.standing.headline === "accepted_in_hq" ? "ok" : brief.standing.headline === "acceptance_reported" ? "founder" : "info"}>
+            <Chip
+              tone={
+                brief.standing.headline === "accepted_in_hq"
+                  ? "ok"
+                  : brief.standing.headline === "rejected_in_hq"
+                    ? "bad"
+                    : brief.standing.headline === "acceptance_reported"
+                      ? "founder"
+                      : "info"
+              }
+            >
               {brief.standing.label}
             </Chip>
+            <InboxOriginChip envelope={brief.module} />
             <Chip tone="outline">{humanise(m.kind)}</Chip>
             {m.evidence_level !== "documented_in_sources" ? <Chip tone="ghost">No supporting source</Chip> : null}
             {m.commission_listed ? <Chip tone="outline">Listed in commission HB-HQ-P02-R1</Chip> : null}
@@ -185,9 +211,11 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
         lede={m.summary || undefined}
         actions={
           <>
-            <Link className="btn" href={`/proposals/new?type=module&id=${m.id}`}>
-              Propose a change
-            </Link>
+            {bindingAcceptance(m) ? null : (
+              <Link className="btn" href={`/proposals/new?type=module&id=${encodeURIComponent(m.id)}`}>
+                Propose a change
+              </Link>
+            )}
             <Link className="btn" href={withRev(`/records/module/${m.id}`, rev)}>
               History & lineage
             </Link>
@@ -205,6 +233,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
         ))}
       </nav>
 
+      <AcceptanceLock data={m} />
       {brief.standing.caution ? <Notice tone="warn">{brief.standing.caution}</Notice> : null}
       {m.evidence_level === "commission_list_only" ? (
         <Notice tone="warn">
@@ -394,6 +423,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                         {d.ref.title}
                       </Link>
                       <StatusChip value={d.status} />
+                      <InboxMark ds={ds} id={d.ref.id} />
                     </div>
                   </li>
                 ))}
@@ -414,7 +444,8 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                   <Fold
                     items={openItems.map((o) => (
                       <li key={o.ref.id}>
-                        <Link href={withRev(recordHref("open_item", o.ref.id), rev)}>{o.ref.title}</Link> <Chip tone="warn">{humanise(o.kind)}</Chip>
+                        <Link href={withRev(recordHref("open_item", o.ref.id), rev)}>{o.ref.title}</Link> <Chip tone="warn">{humanise(o.kind)}</Chip>{" "}
+                        <InboxMark ds={ds} id={o.ref.id} />
                       </li>
                     ))}
                     limit={6}
@@ -525,7 +556,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
             id="evidence"
             hint={
               brief.evidence.length
-                ? `${brief.evidence.filter((e) => e.verification === "hq_verified").length} verified by HQ of ${brief.evidence.length}`
+                ? `${brief.evidence.filter((e) => e.verification === "hq_verified").length} of ${brief.evidence.length} checked by HQ's build`
                 : undefined
             }
             flush
@@ -541,6 +572,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                         {e.ref.title}
                       </Link>
                       <StatusChip value={e.verification} />
+                      <InboxMark ds={ds} id={e.ref.id} />
                     </div>
                     <div className="li-note">{humanise(e.type)}</div>
                   </li>

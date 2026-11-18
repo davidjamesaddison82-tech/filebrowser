@@ -198,21 +198,29 @@ function AcceptanceTarget({ acceptable }: { acceptable: { type: string; id: stri
   );
 }
 
+/** An example of a statement, shown when a structured field is empty. */
+const CLAIM_EXAMPLE = '{"text": "…", "epistemic": "submitter_claim", "citations": []}';
+
 export function ProposalForm({
   target,
   fields,
+  fieldKinds,
   headRev,
 }: {
   target: { type: string; id: string; title: string; version: number; data: Record<string, unknown> };
   fields: string[];
+  /** How each field is edited, decided from the record schema (not from the current value, which may be empty). */
+  fieldKinds: Record<string, "text" | "json">;
   headRev: number;
 }) {
   const [state, action, pending] = useActionState(submitProposalAction, undefined);
   const [field, setField] = useState(fields[0] ?? "");
   const current = target.data[field];
-  const isText = typeof current === "string" || current === null || current === undefined;
+  const empty = current === null || current === undefined;
+  // A field the schema does not describe falls back to its current value's type.
+  const isText = fieldKinds[field] ? fieldKinds[field] === "text" : typeof current === "string" || empty;
   const [value, setValue] = useState<string | null>(null);
-  const shown = value ?? (isText ? ((current as string | null) ?? "") : JSON.stringify(current, null, 2));
+  const shown = value ?? (empty ? "" : isText ? String(current) : JSON.stringify(current, null, 2));
   return (
     <form action={action} className="stack-sm">
       <input type="hidden" name="mode" value="change" />
@@ -240,7 +248,13 @@ export function ProposalForm({
       </label>
       <label className="field">
         Proposed new value
-        <span className="help">{isText ? "Plain text." : "This field is structured: edit it as JSON."}</span>
+        <span className="help">
+          {isText
+            ? "Plain text."
+            : empty
+              ? `This field is structured and empty now: write it as JSON. A statement is written as ${CLAIM_EXAMPLE}. Write null to leave it empty.`
+              : "This field is structured: edit it as JSON."}
+        </span>
         <textarea name="value" rows={isText ? 4 : 10} value={shown} onChange={(e) => setValue(e.target.value)} className={isText ? undefined : "mono"} />
       </label>
       <label className="field">

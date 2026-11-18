@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { DecisionForm } from "@/components/gov-forms";
 import { Card, Chip, Empty, Fold, IdTag, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
@@ -24,7 +24,7 @@ function modulesOf(ds: Dataset, id: string): string[] {
 }
 
 export default async function DecisionsPage({ searchParams }: { searchParams: SearchParams }) {
-  const { principal, ctx, params } = await loadPage(searchParams);
+  const { principal, ctx, params } = await loadPage(searchParams, { pinnable: false });
   const { ds } = ctx;
   const founder = isFounderSession(principal);
   const proposals = (await listProposals(principal)).filter((p) => p.status === "submitted");

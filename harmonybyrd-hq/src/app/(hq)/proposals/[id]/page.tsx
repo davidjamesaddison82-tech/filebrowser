@@ -1,13 +1,38 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import { ReviewForm, WithdrawForm } from "@/components/gov-forms";
-import { Card, Chip, Empty, IdTag, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
+import { bindingAcceptance, Card, Chip, Empty, IdTag, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
 import { isFounderSession } from "@/lib/auth/principal";
 import { HqError } from "@/lib/server/errors";
-import { loadPage, type SearchParams } from "@/lib/server/page";
+import { loadPage, param, routeId, type SearchParams } from "@/lib/server/page";
 import { getProposal, proposalImpact } from "@/lib/server/services";
 import { humanise, isoDate, isoDateTime, statusLabel } from "@/lib/ui/format";
 import { recordHref } from "@/lib/ui/links";
+
+/** What the founder's (or submitter's) action was, as a noun: "Your rejection was not applied". */
+const ACTION_NOUN: Record<string, string> = {
+  accept: "acceptance",
+  reject: "rejection",
+  needs_changes: "request for changes",
+  withdraw: "withdrawal",
+};
+
+/** The proposal event each action records. Accepting a stale proposal records "marked_stale". */
+const ACTION_EVENTS: Record<string, string[]> = {
+  accept: ["accepted", "marked_stale"],
+  reject: ["rejected"],
+  needs_changes: ["needs_changes"],
+  withdraw: ["withdrawn"],
+};
+
+/** How a closed proposal ended, in a sentence: "already accepted by founder". */
+const CLOSED_AS: Record<string, string> = {
+  accepted: "accepted",
+  rejected: "rejected",
+  needs_changes: "sent back for changes",
+  withdrawn: "withdrawn",
+  marked_stale: "marked stale",
+};
 
 function show(value: unknown): string {
   if (value === null || value === undefined) return "(empty)";
@@ -16,10 +41,10 @@ function show(value: unknown): string {
 
 export default async function ProposalPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { id } = await params;
-  const { principal, ctx } = await loadPage(searchParams);
+  const { principal, ctx, params: query } = await loadPage(searchParams, { pinnable: false });
   let proposal;
   try {
-    proposal = await getProposal(principal, decodeURIComponent(id));
+    proposal = await getProposal(principal, routeId(id));
   } catch (error) {
     if (error instanceof HqError && error.status === 404) notFound();
     throw error;
@@ -33,6 +58,23 @@ export default async function ProposalPage({ params, searchParams }: { params: P
   // How the proposal ended, taken from its own append-only history.
   const outcome = [...proposal.events].reverse().find((e) => e.event !== "submitted") ?? null;
   const outcomeDetail = (outcome?.detail ?? null) as { record_type?: string; record_id?: string; version?: number } | null;
+  // The result of the viewer's own review or withdrawal, carried in the address by the server action (ui-5).
+  // Shown only when the proposal's history agrees: a refusal only if the proposal is closed, a success
+  // only if the closing event is the one this viewer's action records.
+  const done = param(query, "done") ?? "";
+  const refused = param(query, "refused") ?? "";
+  const doneNotice =
+    !open && outcome && ACTION_NOUN[done] && ACTION_EVENTS[done]?.includes(outcome.event) && outcome.actor === principal.handle
+      ? outcome.event === "marked_stale"
+        ? "Your acceptance was not applied: the record had changed since the proposal was written, so the proposal was marked stale instead."
+        : `Your ${ACTION_NOUN[done]} was recorded.`
+      : null;
+  const refusedNotice =
+    !open && outcome && ACTION_NOUN[refused]
+      ? `Your ${ACTION_NOUN[refused]} was not applied: this proposal was already ${CLOSED_AS[outcome.event] ?? statusLabel(outcome.event).toLowerCase()} by ${outcome.actor} at ${isoDateTime(String(outcome.at))}.`
+      : null;
+  const acceptance = impact.op === "update" ? bindingAcceptance({ hq_acceptance: impact.target_acceptance }) : null;
+  const madeByPreview = impact.op === "create" && impact.record_type === "recommendation" ? `Proposed through the inbox by ${proposal.submitted_by}` : null;
 
   return (
     <div className="stack">
@@ -52,6 +94,19 @@ export default async function ProposalPage({ params, searchParams }: { params: P
         lede={`Submitted ${isoDateTime(proposal.submitted_at)}, written against dataset revision ${proposal.base_rev}.`}
       />
 
+      {refusedNotice ? (
+        <div className="notice bad" role="alert">
+          {refusedNotice} Nothing else was changed.
+        </div>
+      ) : null}
+      {open && acceptance ? (
+        <Notice tone="bad">
+          <strong>This proposal cannot be accepted as it stands.</strong> Its target carries a founder {acceptance.state === "accepted" ? "acceptance" : "rejection"}{" "}
+          recorded in HQ ({acceptance.decision_id}), and a record carrying one cannot be changed by proposal. To change the record, first record a founder
+          decision that clears the {acceptance.state === "accepted" ? "acceptance" : "rejection"}; otherwise reject this proposal or ask for a new record
+          instead.
+        </Notice>
+      ) : null}
       {open ? (
         <Notice tone="info">
           <strong>This is a proposal, not a record.</strong> It has changed nothing. It takes effect only if the founder accepts it.
@@ -115,6 +170,8 @@ export default async function ProposalPage({ params, searchParams }: { params: P
                   {impact.record_type === "evidence"
                     ? " If filed, it stays labelled as an unverified submission: it is a claim, not verified evidence, and never implies acceptance."
                     : ""}
+                  {madeByPreview ? ` If filed, it is attributed to “${madeByPreview}”, whatever the proposal says.` : ""}
+                  {" "}If filed, the record is marked “Entered through the proposal inbox” wherever it is shown.
                 </p>
                 <pre className="json">{JSON.stringify(impact.record, null, 2)}</pre>
               </div>
@@ -147,6 +204,7 @@ export default async function ProposalPage({ params, searchParams }: { params: P
           <Card title="Founder review">
             {!open ? (
               <div className="stack-sm" role="status">
+                {doneNotice ? <p className="notice ok">{doneNotice}</p> : null}
                 <p>
                   <strong>{statusLabel(proposal.status)}</strong>
                   {outcome ? (

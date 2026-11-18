@@ -249,6 +249,8 @@ export interface ChangeEntry {
   created_at: string;
   created_by: string;
   content_hash: string;
+  /** Hash that chains this revision's seal to the one before it (see hq.verify_chain). */
+  seal_hash: string | null;
   record_count: number;
   changes: { type: string; id: string; version: number; deleted: boolean; proposal_id: string | null }[];
 }
@@ -264,9 +266,10 @@ export async function listChanges(principal: Principal, limit = 30): Promise<Cha
       created_at: Date;
       created_by: string;
       content_hash: string;
+      seal_hash: string | null;
       record_count: number;
     }>(
-      `select r.rev, r.kind, r.summary, r.commission_ref, r.created_at, r.content_hash, r.record_count,
+      `select r.rev, r.kind, r.summary, r.commission_ref, r.created_at, r.content_hash, r.seal_hash, r.record_count,
               coalesce(d.handle, 'unknown') as created_by
          from hq.dataset_revisions r
          left join hq.principal_directory() d on d.id = r.created_by
@@ -302,6 +305,7 @@ export async function listChanges(principal: Principal, limit = 30): Promise<Cha
       created_at: r.created_at.toISOString(),
       created_by: r.created_by,
       content_hash: r.content_hash,
+      seal_hash: r.seal_hash,
       record_count: r.record_count,
       changes: byRev.get(Number(r.rev)) ?? [],
     }));

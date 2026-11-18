@@ -11,7 +11,7 @@ import { claimsFor, isFounderSession } from "@/lib/auth/principal";
 import { issueToken } from "@/lib/auth/secrets";
 import { audit, writeAs } from "./db";
 import { HqError } from "./errors";
-import { recordFounderDecision, reviewProposal, submitChangeProposal, submitDefectReport, withdrawProposal } from "./services";
+import { getProposal, recordFounderDecision, reviewProposal, submitChangeProposal, submitDefectReport, withdrawProposal } from "./services";
 import { getDataset } from "./store";
 
 export interface ActionState {
@@ -38,37 +38,65 @@ function text(form: FormData, key: string): string {
   return String(form.get(key) ?? "").trim();
 }
 
-export async function reviewProposalAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
-  const principal = await requireSession();
-  const id = text(form, "proposal_id");
-  const decision = text(form, "decision") as "accept" | "reject" | "needs_changes";
+/** The proposal's status now, or null if it cannot be read. Used after a refusal to tell "already closed" apart from other refusals. */
+async function currentStatus(principal: Awaited<ReturnType<typeof requireSession>>, id: string): Promise<string | null> {
   try {
-    const result = await reviewProposal(principal, id, decision, text(form, "note") || undefined);
-    revalidatePath("/", "layout");
-    return {
-      ok: true,
-      message:
-        decision === "accept"
-          ? `Accepted. Dataset revision ${String(result.resulting_rev)} was created and ${String(result.record_id)} is now at version ${String(result.version)}.`
-          : decision === "reject"
-            ? "Rejected. No record was changed."
-            : "Changes requested. No record was changed.",
-    };
-  } catch (error) {
-    revalidatePath("/", "layout");
-    return failure(error);
+    return (await getProposal(principal, id)).status;
+  } catch {
+    return null;
   }
 }
 
+/**
+ * The founder's review. The proposal page renders the review form only while the proposal is open,
+ * so a result shown inside the form would vanish with it (ui-5). Instead, every outcome that closes
+ * the proposal redirects to its page with the outcome in the address, where the closed panel shows it:
+ * `?done=<decision>` when this review was applied, `?refused=<decision>` when the proposal had
+ * already been closed by someone else (for example in another tab). A refusal that leaves the
+ * proposal open (a quotation that no longer verifies, a founder acceptance on the target) is
+ * returned to the form, which is still on the page.
+ */
+export async function reviewProposalAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
+  const principal = await requireSession();
+  const id = text(form, "proposal_id");
+  const decision = text(form, "decision");
+  if (decision !== "accept" && decision !== "reject" && decision !== "needs_changes") return { error: "Choose accept, ask for changes or reject." };
+  let outcome: "done" | "refused";
+  try {
+    await reviewProposal(principal, id, decision, text(form, "note") || undefined);
+    outcome = "done";
+  } catch (error) {
+    // Accepting a stale proposal marks it stale and then reports the conflict: that is this review's own outcome.
+    const markedStale = error instanceof HqError && (error.detail as { marked?: unknown } | undefined)?.marked === "stale";
+    if (markedStale) {
+      outcome = "done";
+    } else if ((await currentStatus(principal, id)) !== "submitted" && error instanceof HqError && error.status === 409) {
+      outcome = "refused";
+    } else {
+      return failure(error);
+    }
+  }
+  revalidatePath("/", "layout");
+  redirect(`/proposals/${encodeURIComponent(id)}?${outcome}=${decision}`);
+}
+
+/** Withdrawal by the submitter. Like the review, the outcome is shown on the closed proposal's page. */
 export async function withdrawProposalAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {
   const principal = await requireSession();
+  const id = text(form, "proposal_id");
+  let outcome: "done" | "refused";
   try {
-    await withdrawProposal(principal, text(form, "proposal_id"), text(form, "note") || undefined);
-    revalidatePath("/", "layout");
-    return { ok: true, message: "Withdrawn." };
+    await withdrawProposal(principal, id, text(form, "note") || undefined);
+    outcome = "done";
   } catch (error) {
-    return failure(error);
+    if ((await currentStatus(principal, id)) !== "submitted" && error instanceof HqError && error.status === 409) {
+      outcome = "refused";
+    } else {
+      return failure(error);
+    }
   }
+  revalidatePath("/", "layout");
+  redirect(`/proposals/${encodeURIComponent(id)}?${outcome}=withdraw`);
 }
 
 export async function recordDecisionAction(_prev: ActionState | undefined, form: FormData): Promise<ActionState> {

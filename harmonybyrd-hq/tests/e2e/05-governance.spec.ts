@@ -237,3 +237,185 @@ test("refusals are in the audit log, which only the founder can read", async ({ 
   await expect(log).toContainText("decision.record");
   await expect(log).toContainText("e2e-bot");
 });
+
+// ---------------------------------------------------------------------------
+// Screens after the review (ui-5, ui-6, ui-8, ui-9, honesty-8, D2, D12, D14).
+// These change the database too, so they come last, in order.
+// ---------------------------------------------------------------------------
+
+async function proposalStatus(page: Page, id: string): Promise<{ status: string; events: { event: string }[]; payload: { set?: Record<string, unknown> } }> {
+  const res = await page.request.get(`/api/v1/proposals/${id}`);
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  return (body.data?.proposal ?? body.proposal) as { status: string; events: { event: string }[]; payload: { set?: Record<string, unknown> } };
+}
+
+test("a review made in a second tab after the proposal was closed is refused, and the founder is told so", async ({ page, browser }) => {
+  await signIn(page, "developer");
+  const id = await propose(page, {
+    target: "/proposals/new?type=module&id=MOD-FX-GAMMA",
+    field: "summary",
+    value: "Gamma summary from the two-tab test.",
+    title: "Two-tab test",
+    rationale: "One tab accepts, the other then tries to reject.",
+  });
+
+  await signIn(page, "founder");
+  const second = await page.context().newPage();
+  await page.goto(`/proposals/${id}`);
+  await second.goto(`/proposals/${id}`);
+
+  await page.getByRole("button", { name: "Accept and apply" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Your acceptance was recorded." })).toContainText("Applied as");
+  const revAfterAccept = await headRevision(page);
+
+  // The second tab still shows the open form from before the acceptance.
+  await second.getByRole("button", { name: "Reject" }).click();
+  const alert = second.getByRole("alert").filter({ hasText: "not applied" });
+  await expect(alert).toContainText("Your rejection was not applied: this proposal was already accepted by founder at");
+  await expect(second.getByRole("status").filter({ hasText: "Accepted" })).toContainText("by founder");
+
+  const after = await proposalStatus(page, id);
+  expect(after.status).toBe("accepted");
+  expect(after.events.map((e) => e.event)).toEqual(["submitted", "accepted"]);
+  expect(await headRevision(page)).toBe(revAfterAccept);
+  await second.close();
+});
+
+test("an empty structured field is submitted as JSON, not as a string", async ({ page }) => {
+  await signIn(page, "developer");
+  await page.goto("/proposals/new?type=module&id=MOD-FX-ALPHA");
+  await page.getByLabel("Field to change").selectOption("why_exists");
+  await expect(page.locator('input[name="value_is_json"]')).toHaveValue("1");
+  await page.getByLabel(/Proposed new value/).fill('{"text": "Alpha exists to test the screens.", "epistemic": "submitter_claim", "citations": []}');
+  await page.getByLabel("Title of the proposal").fill("Say why Alpha exists");
+  await page.getByLabel(/Why this change is right/).fill("Browser test: a missing statement can be supplied from the form.");
+  await Promise.all([page.waitForURL(/\/proposals\/PROP-\d+$/), page.getByRole("button", { name: "Submit to the proposal inbox" }).click()]);
+  const id = new URL(page.url()).pathname.split("/").pop()!;
+  const stored = await proposalStatus(page, id);
+  expect(stored.payload.set?.why_exists).toEqual({ text: "Alpha exists to test the screens.", epistemic: "submitter_claim", citations: [] });
+});
+
+test("on a pinned revision every link keeps the revision, and the bar stays after following one", async ({ page }) => {
+  await signIn(page, "reader");
+  expect(await headRevision(page)).toBeGreaterThan(1);
+  for (const path of ["/", "/modules?view=lifecycle", "/modules/MOD-FX-ALPHA", "/records/build/BLD-FX-01", "/requirements/FR-FX-001", "/loops/LOOP-FX-01", "/evidence?tab=defects", "/review"]) {
+    await page.goto(`${path}${path.includes("?") ? "&" : "?"}rev=1`);
+    const hrefs = await page.locator("a[href]:not(.pin-back)").evaluateAll((links) =>
+      links.map((a) => a.getAttribute("href") ?? "").filter((h) => h.startsWith("/") && !h.startsWith("//") && !h.startsWith("/_next")),
+    );
+    expect(hrefs.length, path).toBeGreaterThan(5);
+    const unpinned = hrefs.filter((h) => !new URLSearchParams(h.split("#")[0].split("?")[1] ?? "").has("rev"));
+    expect(unpinned, `${path}: links that drop the pinned revision`).toEqual([]);
+  }
+
+  // Nothing on the pinned dashboard comes from later revisions.
+  await page.goto("/?rev=1");
+  const revTags = await page.locator("main .id-tag").filter({ hasText: /^rev \d+$/ }).allTextContents();
+  expect(revTags).toEqual(["rev 1"]);
+
+  // Follow a citation from a pinned module page: still pinned, and the bar says so.
+  await page.goto("/modules/MOD-FX-ALPHA?rev=1");
+  const cites = page.locator("details.cites").first();
+  await cites.locator("summary").click();
+  await cites.locator('a[href^="/records/source/"]').first().click();
+  await expect(page).toHaveURL(/\/records\/source\/SRC-F0\d\?rev=1$/);
+  await expect(page.locator(".pinbar")).toContainText("You are viewing dataset revision 1");
+  await page.locator(".pinbar").getByRole("link", { name: "Return to the latest" }).click();
+  await expect(page).toHaveURL(/\/records\/source\/SRC-F0\d$/);
+  await expect(page.locator(".pinbar")).toHaveCount(0);
+});
+
+test("a record that entered through the inbox is marked so, in lists and on its page", async ({ page }) => {
+  await signIn(page, "reader");
+  await page.goto("/evidence?tab=defects");
+  const row = page.locator("tr", { hasText: "Beta drops the first beat (browser test)" });
+  await expect(row.locator(".chip", { hasText: "Entered through the proposal inbox" })).toBeVisible();
+  await row.getByRole("link", { name: "Beta drops the first beat (browser test)" }).click();
+  await expect(page.locator(".page-head .chip", { hasText: "Entered through the proposal inbox" })).toContainText(/PROP-\d+/);
+  // A fixture record is not marked.
+  await page.goto("/records/defect/DEF-FX-01");
+  await expect(page.locator(".chip", { hasText: "proposal inbox" })).toHaveCount(0);
+});
+
+test("a record carrying a founder acceptance offers no proposal, and says what to do instead", async ({ page }) => {
+  // BLD-FX-01 was accepted by the founder earlier in this file.
+  await signIn(page, "developer");
+  await page.goto("/records/build/BLD-FX-01");
+  await expect(page.getByRole("link", { name: "Propose a change" })).toHaveCount(0);
+  await expect(page.locator("main")).toContainText("Proposals cannot change this record.");
+  await expect(page.locator("main")).toContainText("records a decision that clears the acceptance");
+  await page.goto("/proposals/new?type=build&id=BLD-FX-01");
+  await expect(page.getByLabel("Field to change")).toHaveCount(0);
+  await expect(page.locator("main")).toContainText("Proposals cannot change this record.");
+});
+
+test("a founder rejection reads as rejected, and an open proposal on the rejected record warns before accepting", async ({ page }) => {
+  await signIn(page, "developer");
+  const id = await propose(page, {
+    target: "/proposals/new?type=module&id=MOD-FX-BETA",
+    field: "summary",
+    value: "Beta summary written before the founder's rejection.",
+    title: "Beta summary before rejection",
+    rationale: "Browser test: the rejection arrives after this proposal.",
+  });
+
+  await signIn(page, "founder");
+  await page.goto("/decisions");
+  await page.getByLabel("Decision title").fill("Reject Beta as it stands");
+  await page.getByLabel(/Your decision, in your own words/).fill("I reject Beta as it stands. (browser test)");
+  await page.getByLabel("What this decision changes in HQ").selectOption("set_acceptance");
+  await page.getByLabel("Record being accepted").selectOption("module|MOD-FX-BETA");
+  await page.getByLabel("Outcome").selectOption("rejected");
+  await Promise.all([page.waitForURL(/\/records\/decision\/FD-HQ-\d+$/), page.getByRole("button", { name: "Record founder decision" }).click()]);
+
+  await page.goto("/modules/MOD-FX-BETA");
+  const standing = page.locator(".page-head .chip").first();
+  await expect(standing).toHaveText("Founder rejected in HQ");
+  await expect(standing).toHaveClass(/\bbad\b/);
+  await page.goto("/health/rejected_in_hq");
+  await expect(page.locator("main")).toContainText("MOD-FX-BETA");
+
+  await page.goto(`/proposals/${id}`);
+  await expect(page.locator("main")).toContainText("This proposal cannot be accepted as it stands.");
+  const rev = await headRevision(page);
+  await page.getByRole("button", { name: "Accept and apply" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "MOD-FX-BETA" })).toContainText("Record a founder decision that clears it first");
+  expect((await proposalStatus(page, id)).status).toBe("submitted");
+  expect(await headRevision(page)).toBe(rev);
+});
+
+test("a long unbroken name and family wrap: no screen scrolls sideways", async ({ page }) => {
+  const longName = "X".repeat(300);
+  const longFamily = "Y".repeat(300);
+  for (const [field, value] of [
+    ["name", longName],
+    ["family", longFamily],
+  ] as const) {
+    await signIn(page, "developer");
+    const id = await propose(page, { target: "/proposals/new?type=module&id=MOD-FX-DELTA", field, value, title: `Long ${field}`, rationale: "Browser test: long unbroken text." });
+    await signIn(page, "founder");
+    await page.goto(`/proposals/${id}`);
+    await page.getByRole("button", { name: "Accept and apply" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Your acceptance was recorded." })).toBeVisible();
+  }
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const path of ["/modules/MOD-FX-DELTA", "/records/module/MOD-FX-DELTA", "/modules"]) {
+      await page.goto(path);
+      const m = await page.evaluate(() => ({
+        sideways: document.documentElement.scrollWidth - window.innerWidth,
+        h1: document.querySelector("main h1")!.getBoundingClientRect().right,
+        crumbs: document.querySelector("main .crumbs")?.getBoundingClientRect().right ?? 0,
+        vw: window.innerWidth,
+      }));
+      expect(m.sideways, `${path} at ${viewport.width}px: sideways scroll`).toBeLessThanOrEqual(1);
+      expect(m.h1, `${path} at ${viewport.width}px: heading inside the window`).toBeLessThanOrEqual(m.vw);
+      expect(m.crumbs, `${path} at ${viewport.width}px: breadcrumbs inside the window`).toBeLessThanOrEqual(m.vw);
+    }
+    if (viewport.width > 1000) await expect(page.locator("main")).toContainText(longName.slice(0, 50));
+  }
+});

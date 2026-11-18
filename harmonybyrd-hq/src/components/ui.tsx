@@ -1,9 +1,10 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import type { ReactNode } from "react";
-import type { Dataset } from "@/lib/domain/dataset";
+import type { Dataset, Envelope } from "@/lib/domain/dataset";
 import { describeRef } from "@/lib/domain/derive";
 import { type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL } from "@/lib/domain/schemas";
 import { EPISTEMIC_TONE, statusLabel, statusTone, type Tone } from "@/lib/ui/format";
+import { claim as asClaim, citations as asCitations, isEpistemic, isObject } from "@/lib/ui/guards";
 import { recordHref, refHref } from "@/lib/ui/links";
 
 export function Chip({ tone = "plain", glyph, children, title }: { tone?: Tone; glyph?: string; children: ReactNode; title?: string }) {
@@ -19,7 +20,15 @@ export function Chip({ tone = "plain", glyph, children, title }: { tone?: Tone; 
   );
 }
 
-export function EpistemicChip({ value }: { value: Epistemic }) {
+export function EpistemicChip({ value }: { value: Epistemic | unknown }) {
+  // A label HQ does not know (a stored record that failed validation) is shown as what it is, not guessed.
+  if (!isEpistemic(value)) {
+    return (
+      <Chip tone="ghost" glyph="?" title="This statement carries a label HQ does not recognise">
+        Unrecognised label
+      </Chip>
+    );
+  }
   const t = EPISTEMIC_TONE[value];
   return (
     <Chip tone={t.tone} glyph={t.glyph} title={EPISTEMIC_LABEL[value]}>
@@ -138,6 +147,7 @@ export function Tile({
 
 /** A link to a record by id, labelled with its title. Marks references to records that are not in the register. */
 export function RecordLink({ ds, id, showId = true }: { ds: Dataset; id: string; showId?: boolean }) {
+  if (typeof id !== "string") return <span className="muted small">(not an id)</span>;
   const ref = describeRef(ds, id);
   if (!ref.exists) {
     return (
@@ -159,7 +169,8 @@ export function RecordLink({ ds, id, showId = true }: { ds: Dataset; id: string;
   );
 }
 
-export function RefList({ ds, ids, empty = "None recorded." }: { ds: Dataset; ids: string[]; empty?: string }) {
+export function RefList({ ds, ids: raw, empty = "None recorded." }: { ds: Dataset; ids: string[]; empty?: string }) {
+  const ids = Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
   if (ids.length === 0) return <span className="muted small">{empty}</span>;
   return (
     <ul className="plain">
@@ -172,8 +183,9 @@ export function RefList({ ds, ids, empty = "None recorded." }: { ds: Dataset; id
   );
 }
 
-export function Citations({ ds, citations, label }: { ds: Dataset; citations: Citation[]; label?: string }) {
-  if (!citations?.length) return null;
+export function Citations({ ds, citations: raw, label }: { ds: Dataset; citations: Citation[] | unknown; label?: string }) {
+  const citations = asCitations(raw);
+  if (!citations.length) return null;
   return (
     <details className="cites">
       <summary>{label ?? `${citations.length} source ${citations.length === 1 ? "quotation" : "quotations"}`}</summary>
@@ -190,7 +202,8 @@ export function Citations({ ds, citations, label }: { ds: Dataset; citations: Ci
   );
 }
 
-export function ClaimView({ ds, claim, empty }: { ds: Dataset; claim: Claim | null | undefined; empty?: string }) {
+export function ClaimView({ ds, claim: raw, empty }: { ds: Dataset; claim: Claim | null | undefined | unknown; empty?: string }) {
+  const claim = asClaim(raw);
   if (!claim) return <span className="muted small">{empty ?? "Not stated in any accessible source."}</span>;
   return (
     <div className="claim">
@@ -211,6 +224,51 @@ export function ClaimList({ ds, claims, empty }: { ds: Dataset; claims: Claim[];
         <ClaimView key={i} ds={ds} claim={c} />
       ))}
     </div>
+  );
+}
+
+/**
+ * Marks a record whose current version came in through the proposal inbox (D1e): what it says is the
+ * submitter's account, filed by the founder, not something a source or HQ's build established.
+ */
+export function InboxOriginChip({ envelope }: { envelope: Envelope<unknown> }) {
+  if (envelope.meta.origin !== "proposal_acceptance") return null;
+  const via = envelope.meta.proposal_id ? ` (${envelope.meta.proposal_id})` : "";
+  return (
+    <Chip tone="warn" glyph="⇣" title="The submitter's account, filed by the founder. Not established by a source or by HQ's build.">
+      {envelope.meta.version === 1 ? "Entered through the proposal inbox" : "Last changed through the proposal inbox"}
+      {via}
+    </Chip>
+  );
+}
+
+/** The inbox-origin chip for a record given by id, in lists of defects, evidence and open items. */
+export function InboxMark({ ds, id }: { ds: Dataset; id: string }) {
+  const envelope = typeof id === "string" ? ds.byId(id) : undefined;
+  return envelope ? <InboxOriginChip envelope={envelope} /> : null;
+}
+
+/** The founder acceptance (accepted or rejected) a record carries, if any. A cleared one ("none") does not count. */
+export function bindingAcceptance(data: unknown): { state: string; decision_id: string } | null {
+  if (!isObject(data) || !isObject(data.hq_acceptance)) return null;
+  const { state, decision_id } = data.hq_acceptance;
+  if (state !== "accepted" && state !== "rejected") return null;
+  return { state, decision_id: typeof decision_id === "string" ? decision_id : "(decision unknown)" };
+}
+
+/**
+ * Said wherever a change to the record can be proposed (D2): a record carrying a founder acceptance
+ * or rejection recorded in HQ cannot be changed by proposal, and the proposal would be refused.
+ */
+export function AcceptanceLock({ data }: { data: unknown }) {
+  const acc = bindingAcceptance(data);
+  if (!acc) return null;
+  return (
+    <Notice tone="warn">
+      <strong>Proposals cannot change this record.</strong> It carries a founder {acc.state === "accepted" ? "acceptance" : "rejection"} recorded in HQ (
+      {acc.decision_id}), and a proposal to change it would be refused. To change it, the founder first records a decision that clears the{" "}
+      {acc.state === "accepted" ? "acceptance" : "rejection"}. Or propose a new record instead.
+    </Notice>
   );
 }
 

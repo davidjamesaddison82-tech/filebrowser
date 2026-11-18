@@ -10,12 +10,22 @@ import { type FetchLike, getJson, type IntegrationResult } from "./http";
 
 export interface DriveConfig {
   accessToken?: string;
+  /**
+   * The only file ids HQ may ask Drive about (HQ_GOOGLE_DRIVE_FILE_IDS, comma-separated). The access
+   * token can usually see far more than HQ's governing documents; without this list anyone allowed
+   * to trigger a look-up could read the metadata of any file the founder's credential can see.
+   */
+  allowedFileIds: string[];
   apiBase: string;
 }
 
 export function driveConfigFromEnv(env: Record<string, string | undefined> = process.env): DriveConfig {
   return {
     accessToken: env.HQ_GOOGLE_DRIVE_ACCESS_TOKEN || undefined,
+    allowedFileIds: (env.HQ_GOOGLE_DRIVE_FILE_IDS ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean),
     apiBase: (env.HQ_GOOGLE_DRIVE_API ?? "https://www.googleapis.com/drive/v3").replace(/\/+$/, ""),
   };
 }
@@ -42,8 +52,8 @@ export class DriveAdapter {
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
-  status(): { configured: boolean } {
-    return { configured: !!this.config.accessToken };
+  status(): { configured: boolean; allowed_file_ids: number } {
+    return { configured: !!this.config.accessToken && this.config.allowedFileIds.length > 0, allowed_file_ids: this.config.allowedFileIds.length };
   }
 
   async fileMetadata(fileId: string): Promise<IntegrationResult<DriveFileInfo>> {
@@ -51,6 +61,9 @@ export class DriveAdapter {
       return { ok: false, reason: "not_configured", detail: "No Google Drive credential is configured (HQ_GOOGLE_DRIVE_ACCESS_TOKEN)." };
     }
     if (!FILE_ID.test(fileId)) return { ok: false, reason: "not_found", detail: "Not a valid Drive file id." };
+    if (!this.config.allowedFileIds.includes(fileId)) {
+      return { ok: false, reason: "not_configured", detail: "This file id is not listed in HQ_GOOGLE_DRIVE_FILE_IDS, so HQ does not ask Drive about it." };
+    }
     const result = await getJson<Record<string, string | undefined>>(
       this.fetchImpl,
       `${this.config.apiBase}/files/${fileId}?fields=${encodeURIComponent(FIELDS)}&supportsAllDrives=true`,

@@ -1,4 +1,19 @@
-import { expect, signIn, signInThroughForm, test } from "./support";
+import type { Page } from "@playwright/test";
+import { expect, PASSPHRASES, signIn, signInThroughForm, test } from "./support";
+
+/** Submit one sign-in attempt and return how long the server took to answer it, in ms. */
+async function timedAttempt(page: Page, name: string, passphrase: string): Promise<number> {
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Passphrase", { exact: true }).fill(passphrase);
+  const started = Date.now();
+  await Promise.all([
+    page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/sign-in"),
+    page.getByRole("button", { name: "Sign in" }).click(),
+  ]);
+  const elapsed = Date.now() - started;
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+  return elapsed;
+}
 
 test.describe("signing in", () => {
   test("a signed-out visitor is sent to sign-in and sees no records", async ({ page }) => {
@@ -34,23 +49,105 @@ test.describe("signing in", () => {
     await expect(page).toHaveURL(/\/sign-in/);
   });
 
-  test("repeated wrong passphrases are throttled, and the lock does not spread to other names", async ({ page }) => {
+  // D8: a growing delay per name instead of a lock-out. The test server uses a 200 ms base delay
+  // (HQ_SIGNIN_BASE_DELAY_MS, honoured only on a test server); production waits 500 ms, doubling to 8 s.
+  test("wrong passphrases slow that name down, but never lock out the right passphrase", async ({ page }) => {
     await page.goto("/sign-in");
     const alert = page.getByRole("alert").filter({ hasText: /./ });
+    const durations: number[] = [];
     for (let attempt = 1; attempt <= 8; attempt += 1) {
-      await page.getByLabel("Name", { exact: true }).fill("nobody-at-all");
-      await page.getByLabel("Passphrase", { exact: true }).fill(`wrong-${attempt}`);
-      await page.getByRole("button", { name: "Sign in" }).click();
-      await expect(alert).toContainText("do not match");
-      await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+      durations.push(await timedAttempt(page, "developer", `wrong-${attempt}`));
+      await expect(alert).toContainText("That name and passphrase do not match.");
+      await expect(alert).not.toContainText("Too many attempts");
     }
-    await page.getByLabel("Name", { exact: true }).fill("nobody-at-all");
-    await page.getByLabel("Passphrase", { exact: true }).fill("wrong-9");
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(alert).toContainText("Too many attempts");
-    // A different name is unaffected.
+    const free = Math.max(...durations.slice(0, 5));
+    // Attempts 6, 7 and 8 wait 200, 400 and 800 ms before they are checked.
+    expect(durations[7]).toBeGreaterThanOrEqual(750);
+    expect(durations[7] - free).toBeGreaterThanOrEqual(500);
+    expect(durations[7]).toBeGreaterThan(durations[5]);
+    // The ninth attempt, with the right passphrase, waits 1.6 s and then signs in.
+    const started = Date.now();
+    await page.getByLabel("Name", { exact: true }).fill("developer");
+    await page.getByLabel("Passphrase", { exact: true }).fill(PASSPHRASES.developer);
+    await Promise.all([page.waitForURL((url) => !url.pathname.startsWith("/sign-in")), page.getByRole("button", { name: "Sign in" }).click()]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1500);
+    await expect(page.getByText("Developer · signed in")).toBeVisible();
+  });
+
+  test("a different X-Forwarded-For on every attempt does not reset the delay, and other names are unaffected", async ({ page }) => {
+    await page.goto("/sign-in");
+    const durations: number[] = [];
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      await page.setExtraHTTPHeaders({ "x-forwarded-for": `10.0.0.${attempt}` });
+      durations.push(await timedAttempt(page, "nobody-at-all", `wrong-${attempt}`));
+    }
+    expect(durations[7]).toBeGreaterThanOrEqual(750);
+    expect(durations[7] - Math.max(...durations.slice(0, 5))).toBeGreaterThanOrEqual(500);
+    // Spoofing the founder's own address does not touch the founder either: the delay is per name.
+    await page.setExtraHTTPHeaders({ "x-forwarded-for": "127.0.0.1" });
+    const started = Date.now();
     await signInThroughForm(page, "reader");
+    expect(Date.now() - started).toBeLessThan(5000);
     await expect(page.getByText("Reader · signed in")).toBeVisible();
+  });
+
+  for (const next of ["/%09/evil.example/", "/.%2F%2Fevil.example", "/%5Cevil.example", "/%0a/evil.example/"]) {
+    test(`signing in with next=${next} stays on HQ`, async ({ page, baseURL }) => {
+      const offSite: string[] = [];
+      // Match the host, not the text: the sign-in URL itself carries "evil.example" in its query.
+      const offSiteHost = (url: URL | string) => new URL(url).hostname.endsWith("evil.example");
+      await page.route(offSiteHost, (route) => {
+        offSite.push(route.request().url());
+        return route.fulfill({ status: 200, contentType: "text/html", body: "<title>Session expired</title>" });
+      });
+      page.on("request", (request) => {
+        if (offSiteHost(request.url())) offSite.push(request.url());
+      });
+      await page.goto(`/sign-in?next=${next}`);
+      await expect(page.locator('input[name="next"]')).toHaveValue("/");
+      await page.getByLabel("Name", { exact: true }).fill("reader");
+      await page.getByLabel("Passphrase", { exact: true }).fill(PASSPHRASES.reader);
+      await Promise.all([page.waitForURL((url) => !url.pathname.startsWith("/sign-in")), page.getByRole("button", { name: "Sign in" }).click()]);
+      expect(new URL(page.url()).origin).toBe(new URL(baseURL!).origin);
+      expect(offSite).toEqual([]);
+      await expect(page.getByText("Reader · signed in")).toBeVisible();
+    });
+  }
+
+  test("a safe next is still followed after sign-in", async ({ page }) => {
+    await page.goto("/sign-in?next=%2Frequirements%3Fq%3Dtempo");
+    await page.getByLabel("Name", { exact: true }).fill("reader");
+    await page.getByLabel("Passphrase", { exact: true }).fill(PASSPHRASES.reader);
+    await Promise.all([page.waitForURL(/\/requirements/), page.getByRole("button", { name: "Sign in" }).click()]);
+    expect(new URL(page.url()).pathname).toBe("/requirements");
+  });
+
+  test("signing out ends the session for every copy of the cookie and every browser (api-5)", async ({ page, browser, request }) => {
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    try {
+      await signInThroughForm(otherPage, "founder");
+      await signInThroughForm(page, "founder");
+      const cookie = (await page.context().cookies()).find((c) => c.name === "hq_session")!;
+      expect(cookie).toBeDefined();
+      const replay = { headers: { cookie: `hq_session=${cookie.value}` } };
+      expect((await request.get("/api/v1/whoami", replay)).status()).toBe(200);
+
+      await Promise.all([page.waitForURL(/\/sign-in/), page.getByRole("button", { name: "Sign out" }).click()]);
+
+      const whoami = await request.get("/api/v1/whoami", replay);
+      expect(whoami.status()).toBe(401);
+      const decisions = await request.get("/decisions", { ...replay, maxRedirects: 0 });
+      expect(decisions.status()).not.toBe(200);
+      await otherPage.goto("/decisions");
+      await expect(otherPage).toHaveURL(/\/sign-in/);
+
+      // A fresh sign-in still works.
+      await signInThroughForm(page, "founder");
+      await expect(page.getByText("Founder · signed in")).toBeVisible();
+    } finally {
+      await other.close();
+    }
   });
 
   test("every screen says it is a prototype and that the fixture is not real data", async ({ page }) => {

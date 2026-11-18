@@ -23,6 +23,9 @@ export const SCREENS: { path: string; nav: string; h1: string }[] = [
   { path: "/access", nav: "AI & API access", h1: "AI and API access" },
 ];
 
+/** Screens that always show the latest revision: a `?rev=` there is ignored, and the pin bar says so. */
+export const UNPINNABLE = ["/proposals", "/decisions", "/changes", "/access"];
+
 /** Detail screens reached from the registers (fixture ids). */
 export const DETAIL_SCREENS: { path: string; h1: string }[] = [
   { path: "/modules/MOD-FX-ALPHA", h1: "Alpha (fixture)" },

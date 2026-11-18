@@ -1,9 +1,19 @@
 /** Shared plumbing for API route handlers: authentication, scope checks, error mapping, audit. */
 import { randomUUID } from "node:crypto";
+import type { z } from "zod";
 import { principalFromRequest } from "@/lib/auth/authenticate";
 import { claimsFor, type Principal } from "@/lib/auth/principal";
 import { audit } from "./db";
-import { forbidden, fromDatabaseError, HqError, unauthenticated } from "./errors";
+import { forbidden, fromDatabaseError, HqError, payloadTooLarge, unauthenticated } from "./errors";
+
+/** A client's X-Request-Id is kept only in this form (the same rule hq.log_refusal applies). */
+const REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** The request id for a request: the client's correlation id if it is well formed, otherwise a new one. */
+export function requestIdFor(request: Request): string {
+  const offered = request.headers.get("x-request-id");
+  return offered && REQUEST_ID.test(offered) ? offered : randomUUID();
+}
 
 export function json(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}): Response {
   return new Response(JSON.stringify(body, null, 2), {
@@ -56,7 +66,7 @@ export async function withApi(
   options: { action: string; scope?: "read" | "propose"; mutating?: boolean },
   handler: (ctx: ApiContext) => Promise<unknown>,
 ): Promise<Response> {
-  const requestId = request.headers.get("x-request-id")?.slice(0, 80) || randomUUID();
+  const requestId = requestIdFor(request);
   let principal: Principal | null = null;
   try {
     principal = await principalFromRequest(request);
@@ -80,8 +90,67 @@ export async function withApi(
   }
 }
 
+export const DEFAULT_MAX_BODY_BYTES = 1_048_576;
+
+/** The body size limit for every JSON body (REST and MCP): HQ_MAX_BODY_BYTES, default 1 MiB. */
+export function maxBodyBytes(env: Record<string, string | undefined> = process.env): number {
+  const configured = Number(env.HQ_MAX_BODY_BYTES);
+  return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_MAX_BODY_BYTES;
+}
+
+/** How much of an oversized body is read and thrown away so the client still receives the 413. */
+const DRAIN_LIMIT_BYTES = 16 * 1_048_576;
+
+/**
+ * Read the rest of a body without keeping it, so the server can answer before closing the connection
+ * (a client still sending would otherwise see a reset instead of the 413). Past DRAIN_LIMIT_BYTES the
+ * stream is cancelled instead.
+ */
+async function discardRest(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  let drained = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      drained += value.byteLength;
+      if (drained > DRAIN_LIMIT_BYTES) break;
+    }
+  } catch {
+    return;
+  }
+  await reader.cancel().catch(() => undefined);
+}
+
+/**
+ * Read a request body as text, refusing (413) one larger than `limit` bytes: by Content-Length when
+ * the client sends one, and while reading otherwise, so a chunked body is never held in memory past
+ * the limit.
+ */
+export async function readBodyText(request: Request, limit = maxBodyBytes()): Promise<string> {
+  const declared = request.headers.get("content-length");
+  if (declared !== null && /^\d+$/.test(declared) && Number(declared) > limit) {
+    if (request.body) await discardRest(request.body.getReader());
+    throw payloadTooLarge(limit);
+  }
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await discardRest(reader);
+      throw payloadTooLarge(limit);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export async function readJson(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
+  const text = await readBodyText(request);
   if (!text.trim()) return {};
   try {
     const value = JSON.parse(text);
@@ -92,13 +161,35 @@ export async function readJson(request: Request): Promise<Record<string, unknown
   throw new HqError(400, "invalid_json", "The request body must be a JSON object.");
 }
 
-/** Turn query-string parameters into tool arguments (numbers and booleans are coerced; `a,b` becomes a list for known list keys). */
-export function argsFromQuery(url: URL): Record<string, unknown> {
+type QueryKind = "boolean" | "number" | "string_list" | "string";
+
+/** What a tool argument is declared as, looking through optional / default / nullable wrappers. */
+function queryKind(schema: z.ZodType | undefined): QueryKind {
+  let current = schema as { _zod?: { def: { type: string; innerType?: unknown; element?: unknown } } } | undefined;
+  while (current?._zod && ["optional", "default", "nullable", "prefault", "readonly"].includes(current._zod.def.type)) {
+    current = current._zod.def.innerType as typeof current;
+  }
+  const type = current?._zod?.def.type;
+  if (type === "boolean") return "boolean";
+  if (type === "number" || type === "int") return "number";
+  if (type === "array") return "string_list";
+  return "string";
+}
+
+/**
+ * Turn query-string parameters into tool arguments, coercing a value only as the tool's input schema
+ * declares that key: "true"/"false" for a boolean, a decimal number for a number, "a,b" for a list.
+ * Every other value stays the string it was, so ?query=false searches for the word "false"; a value
+ * that does not fit its declared type is left as text for the schema to refuse.
+ */
+export function argsFromQuery(url: URL, input?: z.ZodObject): Record<string, unknown> {
+  const shape = (input?.shape ?? {}) as Record<string, z.ZodType>;
   const args: Record<string, unknown> = {};
   for (const [key, value] of url.searchParams) {
-    if (key === "types" || key === "module_ids") args[key] = value.split(",").filter(Boolean);
-    else if (/^-?\d+$/.test(value) && ["rev", "limit", "base_rev"].includes(key)) args[key] = Number(value);
-    else if (value === "true" || value === "false") args[key] = value === "true";
+    const kind = Object.hasOwn(shape, key) ? queryKind(shape[key]) : "string";
+    if (kind === "boolean" && (value === "true" || value === "false")) args[key] = value === "true";
+    else if (kind === "number" && /^-?\d+(\.\d+)?$/.test(value)) args[key] = Number(value);
+    else if (kind === "string_list") args[key] = value.split(",").filter(Boolean);
     else args[key] = value;
   }
   return args;

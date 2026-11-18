@@ -1,18 +1,44 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import { DefectForm, ProposalForm } from "@/components/gov-forms";
-import { Card, IdTag, Notice, PageHead } from "@/components/ui";
+import { AcceptanceLock, bindingAcceptance, Card, IdTag, Notice, PageHead } from "@/components/ui";
 import { canPropose } from "@/lib/auth/principal";
 import { recordTitle } from "@/lib/domain/derive";
-import { isRecordType, PROTECTED_FIELDS, RECORD_TYPE_LABEL } from "@/lib/domain/schemas";
+import { isRecordType, RECORD_SCHEMAS, RECORD_TYPE_LABEL, type RecordType, STRUCTURED_FIELDS } from "@/lib/domain/schemas";
 import { loadPage, param, type SearchParams } from "@/lib/server/page";
+import { buildOnlyFieldsFor, PROPOSAL_PROTECTED_FIELDS, SOURCE_INTEGRITY_FIELDS } from "@/lib/server/services";
 import { recordHref } from "@/lib/ui/links";
 
 export const metadata: Metadata = { title: "New proposal" };
 
+/** What an existing source says about the snapshot HQ read cannot be changed by proposal (mirrors the database). */
+
+/** Fields a proposal may not set on this type: protected everywhere, written only by HQ's build, or a source's integrity facts. */
+function lockedFields(type: RecordType): Set<string> {
+  return new Set([...PROPOSAL_PROTECTED_FIELDS, ...buildOnlyFieldsFor(type), ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : [])]);
+}
+
+/**
+ * The fields the form offers and how each is edited. Taken from the record schema, not from the
+ * record's current value, so an empty structured field (a missing claim, say) is still edited and
+ * submitted as JSON (ui-6). A number or true/false is sent as JSON too.
+ */
+function proposableFields(type: RecordType, data: Record<string, unknown>): { fields: string[]; kinds: Record<string, "text" | "json"> } {
+  const locked = lockedFields(type);
+  const shape = Object.keys((RECORD_SCHEMAS[type] as unknown as { shape: Record<string, unknown> }).shape);
+  const structured = new Set(STRUCTURED_FIELDS[type]);
+  const fields = [...new Set([...shape, ...Object.keys(data)])].filter((k) => !locked.has(k)).sort();
+  const kinds: Record<string, "text" | "json"> = {};
+  for (const f of fields) {
+    const v = data[f];
+    kinds[f] = structured.has(f) || typeof v === "number" || typeof v === "boolean" || (v !== null && typeof v === "object") ? "json" : "text";
+  }
+  return { fields, kinds };
+}
+
 export default async function NewProposalPage({ searchParams }: { searchParams: SearchParams }) {
-  const { principal, ctx, params } = await loadPage(searchParams);
+  const { principal, ctx, params } = await loadPage(searchParams, { pinnable: false });
   const { ds } = ctx;
   const mode = param(params, "mode") === "defect" ? "defect" : "change";
   const allowed = canPropose(principal);
@@ -42,9 +68,8 @@ export default async function NewProposalPage({ searchParams }: { searchParams: 
   const record = ds.get(type, id);
   if (!record) notFound();
   const data = record.data as Record<string, unknown>;
-  const fields = Object.keys(data)
-    .filter((k) => !(PROTECTED_FIELDS as readonly string[]).includes(k))
-    .sort();
+  const { fields, kinds } = proposableFields(type, data);
+  const locked = bindingAcceptance(data) !== null;
 
   return (
     <div className="stack">
@@ -60,12 +85,19 @@ export default async function NewProposalPage({ searchParams }: { searchParams: 
       />
       {type === "decision" ? (
         <Notice tone="warn">Decision records cannot be changed by proposal. They are written only by a founder decision.</Notice>
+      ) : locked ? (
+        <AcceptanceLock data={data} />
       ) : !allowed ? (
         <Notice tone="warn">The reader role cannot submit proposals.</Notice>
       ) : (
         <div className="split">
           <Card title="Your proposal">
-            <ProposalForm target={{ type, id, title: recordTitle(type, record.data), version: record.meta.version, data }} fields={fields} headRev={ctx.head} />
+            <ProposalForm
+              target={{ type, id, title: recordTitle(type, record.data), version: record.meta.version, data }}
+              fields={fields}
+              fieldKinds={kinds}
+              headRev={ctx.head}
+            />
           </Card>
           <Card title="What cannot be proposed">
             <ul className="plain small">
@@ -81,7 +113,7 @@ export default async function NewProposalPage({ searchParams }: { searchParams: 
                 to re-read it.
               </li>
               <li>
-                Protected fields: <span className="mono xsmall">{PROTECTED_FIELDS.join(", ")}</span>
+                Fields a proposal cannot set on this record: <span className="mono xsmall break">{[...lockedFields(type)].sort().join(", ")}</span>
               </li>
             </ul>
           </Card>

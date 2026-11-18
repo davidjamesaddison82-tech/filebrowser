@@ -1,6 +1,10 @@
 /** Shared loading for server-rendered pages: who is signed in, and which dataset revision they are looking at. */
+import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth/current";
 import type { Principal } from "@/lib/auth/principal";
+import { setPagePin } from "@/lib/ui/pin";
+import { readRev } from "@/lib/ui/pin-rules";
+import { HqError } from "./errors";
 import { type DatasetContext, getDataset } from "./store";
 
 export type SearchParams = Promise<Record<string, string | string[] | undefined>>;
@@ -10,26 +14,60 @@ export function param(params: Record<string, string | string[] | undefined>, key
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** The revision named by `?rev=`: a positive whole number, or null when absent or not a valid revision number. */
 export function parseRev(value: string | undefined): number | null {
-  if (!value) return null;
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : null;
+  const r = readRev(value);
+  return typeof r === "number" ? r : null;
 }
 
 export interface PageContext {
   principal: Principal;
   ctx: DatasetContext;
-  /** The pinned revision requested in the URL, if any. */
+  /** The pinned revision requested in the URL, if any (always null on a screen that cannot be pinned). */
   rev: number | null;
   params: Record<string, string | string[] | undefined>;
 }
 
-export async function loadPage(searchParams?: SearchParams): Promise<PageContext> {
+export interface LoadOptions {
+  /**
+   * False for screens that always show the latest revision (proposals, decision centre, changes,
+   * access): `?rev=` is ignored there, and the pin bar in the layout says so.
+   */
+  pinnable?: boolean;
+}
+
+/**
+ * Who is signed in and which dataset revision the page shows. A `?rev=` that is not a revision
+ * number (abc, 0, -1, 1.5) or names a revision that does not exist gives the 404 page, never a 500
+ * and never a silent fall-back to the latest.
+ */
+export async function loadPage(searchParams?: SearchParams, options: LoadOptions = {}): Promise<PageContext> {
   const params = searchParams ? await searchParams : {};
   const principal = await requireSession();
-  const rev = parseRev(param(params, "rev"));
-  const ctx = await getDataset(principal, rev);
+  let rev: number | null = null;
+  if (options.pinnable !== false) {
+    const requested = readRev(param(params, "rev"));
+    if (requested === "invalid") notFound();
+    rev = requested === "absent" ? null : requested;
+  }
+  let ctx: DatasetContext;
+  try {
+    ctx = await getDataset(principal, rev);
+  } catch (error) {
+    if (error instanceof HqError && error.status === 404) notFound();
+    throw error;
+  }
+  setPagePin(ctx.pinned ? ctx.ds.revision.rev : null);
   return { principal, ctx, rev, params };
+}
+
+/** A dynamic route segment, decoded. Malformed percent-encoding (e.g. %E0%A4%A) is a 404, not a 500. */
+export function routeId(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    notFound();
+  }
 }
 
 export interface Page<T> {

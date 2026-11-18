@@ -13,7 +13,7 @@ export const metadata: Metadata = { title: "AI & API access" };
 const STATUS_TONE = { tested_here: "ok", untested: "warn", blocked: "bad" } as const;
 
 export default async function AccessPage({ searchParams }: { searchParams: SearchParams }) {
-  const { principal, ctx } = await loadPage(searchParams);
+  const { principal, ctx } = await loadPage(searchParams, { pinnable: false });
   const founder = isFounderSession(principal);
   const baseUrl = (process.env.HQ_BASE_URL ?? "http://localhost:3210").replace(/\/+$/, "");
   const tools = describeTools();

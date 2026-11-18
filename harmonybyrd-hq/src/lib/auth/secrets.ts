@@ -2,7 +2,7 @@
  * Credential primitives. Pure functions over node:crypto so they can be used by the web
  * application, the setup scripts and the tests alike.
  */
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 32 } as const;
 
@@ -23,6 +23,23 @@ export function verifyPassphrase(passphrase: string, stored: string): boolean {
     p: Number(p),
   });
   return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes);
+}
+
+/**
+ * The same check as verifyPassphrase, without blocking the event loop: sign-in uses this one, so a
+ * burst of wrong guesses does not stall every other request while scrypt runs.
+ */
+export async function verifyPassphraseAsync(passphrase: string, stored: string): Promise<boolean> {
+  const parts = stored.split("$");
+  if (parts.length !== 6 || parts[0] !== "scrypt-v1") return false;
+  const [, n, r, p, salt, expected] = parts;
+  const expectedBytes = Buffer.from(expected, "base64");
+  const actual = await new Promise<Buffer | null>((resolve) =>
+    scrypt(passphrase.normalize("NFKC"), Buffer.from(salt, "base64"), expectedBytes.length, { N: Number(n), r: Number(r), p: Number(p) }, (error, key) =>
+      resolve(error ? null : key),
+    ),
+  );
+  return !!actual && actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes);
 }
 
 export interface IssuedToken {

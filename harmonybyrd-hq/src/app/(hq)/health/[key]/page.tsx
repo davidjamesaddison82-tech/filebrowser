@@ -1,6 +1,5 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
-import { RevisionBar } from "@/components/revision-bar";
 import { Card, Empty, IdTag, Pager, PageHead } from "@/components/ui";
 import { developmentHealth } from "@/lib/domain/derive";
 import { RECORD_TYPE_LABEL } from "@/lib/domain/schemas";
@@ -22,7 +21,6 @@ export default async function HealthList({ params, searchParams }: { params: Pro
   const pager = <Pager {...pg} params={query} basePath={`/health/${key}`} noun="items" />;
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead title={HEALTH_META[k].title} lede={HEALTH_META[k].description} crumbs={[{ label: "Dashboard", href: "/" }, { label: "Development health" }]} />
       <Card title={`${items.length} ${items.length === 1 ? "item" : "items"}`} flush foot={pager}>
         {items.length === 0 ? (

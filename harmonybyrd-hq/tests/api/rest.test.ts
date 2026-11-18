@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { asAppRole, freshWorld, type TestWorld } from "../helpers/db";
 import { claimsFor } from "@/lib/auth/principal";
-import { api, sessionCookie } from "../helpers/http";
+import { SignJWT } from "jose";
+import { TEST_JWT_SECRET } from "../helpers/env";
+import { api, sessionCookie, sessionEpoch } from "../helpers/http";
 
 let w: TestWorld;
 let founderCookie: string;
@@ -180,6 +182,19 @@ describe("REST API — the proposal inbox and founder authority", () => {
   it("a forged or expired session cookie is not a session", async () => {
     const res = await api(`/api/v1/proposals/${proposalId}/review`, { cookie: "hq_session=eyJhbGciOiJIUzI1NiJ9.e30.forged", body: { decision: "accept" } });
     expect(res.status).toBe(401);
+    // tests-10: a genuinely expired founder session, signed with the right secret and the current epoch.
+    const iat = Math.floor(Date.now() / 1000) - 13 * 3600;
+    const expired = await new SignJWT({ role: "authenticated", amr: "session", sv: await sessionEpoch(w.founder.id) })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setSubject(w.founder.id)
+      .setIssuer("harmonybyrd-hq")
+      .setIssuedAt(iat)
+      .setExpirationTime(iat + 12 * 3600)
+      .sign(new TextEncoder().encode(TEST_JWT_SECRET));
+    const late = await api(`/api/v1/proposals/${proposalId}/review`, { cookie: `hq_session=${expired}`, body: { decision: "accept" } });
+    expect(late.status).toBe(401);
+    const still = await api<{ proposal: { status: string } }>(`/api/v1/proposals/${proposalId}`, { token: w.tokens.claude });
+    expect(still.body.proposal.status).toBe("submitted");
   });
 
   it("the founder's own session can accept, creating a new revision and a new record version", async () => {
@@ -210,13 +225,18 @@ describe("REST API — the proposal inbox and founder authority", () => {
 
 describe("REST API — external integrations fail safely", () => {
   it("reports unconfigured integrations as such, without error", async () => {
+    // Live look-ups need a signed-in founder or developer (D17); a token sees the status only.
     const res = await api<{ github: { configured: boolean }; google_drive: { configured: boolean }; lookup?: { ok: boolean; reason: string } }>(
-      "/api/v1/integrations?github=example-org/example-repo&ref=main", { token: w.tokens.claude });
+      "/api/v1/integrations?github=example-org/example-repo&ref=main", { cookie: developerCookie });
     expect(res.status).toBe(200);
     expect(res.body.github.configured).toBe(false);
     expect(res.body.google_drive.configured).toBe(false);
     expect(res.body.lookup).toMatchObject({ ok: false, reason: "not_configured" });
-    const drive = await api<{ lookup: { ok: boolean; reason: string } }>("/api/v1/integrations?drive_file=1AbCdEfGhIjKlMnOp", { token: w.tokens.claude });
+    const drive = await api<{ lookup: { ok: boolean; reason: string } }>("/api/v1/integrations?drive_file=1AbCdEfGhIjKlMnOp", { cookie: developerCookie });
     expect(drive.body.lookup).toMatchObject({ ok: false, reason: "not_configured" });
+    const status = await api<{ github: { configured: boolean }; lookup?: unknown }>("/api/v1/integrations", { token: w.tokens.claude });
+    expect(status.status).toBe(200);
+    expect(status.body.github.configured).toBe(false);
+    expect(status.body.lookup).toBeUndefined();
   });
 });

@@ -2,76 +2,56 @@
 
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { authenticatePassphrase } from "@/lib/auth/authenticate";
+import { authenticatePassphrase, authenticateSessionToken, type SignedIn } from "@/lib/auth/authenticate";
 import { claimsFor } from "@/lib/auth/principal";
+import { safeNext } from "@/lib/auth/safe-next";
 import { SESSION_COOKIE, SESSION_HOURS, signSession } from "@/lib/auth/session";
-import { audit } from "@/lib/server/db";
+import { signInThrottle } from "@/lib/auth/throttle";
+import { audit, writeAs } from "@/lib/server/db";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __hqSignInAttempts: Map<string, { count: number; first: number }> | undefined;
-}
-
-const WINDOW_MS = 5 * 60_000;
-const MAX_ATTEMPTS = 8;
-
-/** Only failed attempts count, and a successful sign-in clears them, so normal use never locks anyone out. */
-function isThrottled(key: string): boolean {
-  const attempts = (globalThis.__hqSignInAttempts ??= new Map());
-  const entry = attempts.get(key);
-  if (!entry) return false;
-  if (Date.now() - entry.first > WINDOW_MS) {
-    attempts.delete(key);
-    return false;
-  }
-  return entry.count >= MAX_ATTEMPTS;
-}
-
-function recordFailure(key: string): void {
-  const attempts = (globalThis.__hqSignInAttempts ??= new Map());
-  const now = Date.now();
-  const entry = attempts.get(key);
-  if (!entry || now - entry.first > WINDOW_MS) attempts.set(key, { count: 1, first: now });
-  else entry.count += 1;
-}
-
-function clearFailures(key: string): void {
-  globalThis.__hqSignInAttempts?.delete(key);
-}
-
-function safeNext(value: FormDataEntryValue | null): string {
-  const next = typeof value === "string" ? value : "";
-  return next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") ? next : "/";
+/**
+ * The client's address, for the audit log only. X-Forwarded-For is read only when HQ_TRUST_PROXY=1
+ * says a proxy HQ trusts sets it (then the right-most hop, the one that proxy appended); otherwise a
+ * client could write anything there. It never affects the throttle, which is keyed on the name.
+ */
+async function clientAddress(): Promise<string | null> {
+  if (process.env.HQ_TRUST_PROXY !== "1") return null;
+  const hops = ((await headers()).get("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
+  return hops.at(-1)?.slice(0, 64) ?? null;
 }
 
 export async function signIn(_previous: { error?: string } | undefined, formData: FormData): Promise<{ error?: string }> {
   const handle = String(formData.get("handle") ?? "").trim().toLowerCase();
   const passphrase = String(formData.get("passphrase") ?? "");
   const next = safeNext(formData.get("next"));
-  const forwarded = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
 
   if (!handle || !passphrase) return { error: "Enter your name and passphrase." };
-  const throttleKey = `${handle}|${forwarded}`;
-  if (isThrottled(throttleKey)) {
-    await audit(null, { action: "session.sign_in", objectType: "principal", objectId: handle, outcome: "denied", detail: { reason: "throttled" } });
-    return { error: "Too many attempts. Wait a few minutes and try again." };
-  }
+  const address = await clientAddress();
 
-  let principal;
-  try {
-    principal = await authenticatePassphrase(handle, passphrase);
-  } catch {
+  const { value: principal } = await signInThrottle().run<SignedIn | null | "unavailable">(handle, async () => {
+    try {
+      const found = await authenticatePassphrase(handle, passphrase);
+      return { outcome: found ? "success" : "failure", value: found };
+    } catch {
+      return { outcome: "error", value: "unavailable" };
+    }
+  });
+  if (principal === "unavailable") {
     return { error: "HQ cannot reach its database right now. Check that the database is running and try again." };
   }
   if (!principal) {
-    recordFailure(throttleKey);
-    await audit(null, { action: "session.sign_in", objectType: "principal", objectId: handle, outcome: "denied" });
+    await audit(null, {
+      action: "session.sign_in",
+      objectType: "principal",
+      objectId: handle,
+      outcome: "denied",
+      detail: { failures: signInThrottle().failures(handle), ...(address ? { client_address: address } : {}) },
+    });
     return { error: "That name and passphrase do not match." };
   }
-  clearFailures(throttleKey);
 
   const store = await cookies();
-  store.set(SESSION_COOKIE, await signSession(principal.id), {
+  store.set(SESSION_COOKIE, await signSession(principal.id, principal.sessionEpoch), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production" && process.env.HQ_INSECURE_COOKIES !== "1",
@@ -82,8 +62,23 @@ export async function signIn(_previous: { error?: string } | undefined, formData
   redirect(next);
 }
 
+/**
+ * Sign out everywhere: hq.end_sessions() increments the person's session epoch, so this cookie and any
+ * copy of it (or another browser's session) stop working, then the cookie is removed from this browser.
+ */
 export async function signOut(): Promise<void> {
   const store = await cookies();
+  let principal = null;
+  try {
+    principal = await authenticateSessionToken(store.get(SESSION_COOKIE)?.value);
+    if (principal) await writeAs(claimsFor(principal), (q) => q.query("select hq.end_sessions()"));
+  } catch {
+    // The database is unreachable: the cookie is still removed below, but other copies stay valid
+    // until they expire. Record that the sign-out could not end them.
+    if (principal) {
+      await audit(claimsFor(principal), { action: "session.end_all", objectType: "principal", objectId: principal.handle, outcome: "error" });
+    }
+  }
   store.delete(SESSION_COOKIE);
   redirect("/sign-in");
 }

@@ -18,7 +18,9 @@ export const forbidden = (message: string, detail?: unknown) => new HqError(403,
 export const notFound = (message: string) => new HqError(404, "not_found", message);
 export const conflict = (message: string, detail?: unknown) => new HqError(409, "conflict", message, detail);
 export const invalid = (message: string, detail?: unknown) => new HqError(422, "invalid_request", message, detail);
-export const unavailable = (message: string, detail?: unknown) => new HqError(503, "service_unavailable", message, detail);
+export const payloadTooLarge = (maxBytes: number) =>
+  new HqError(413, "payload_too_large", `The request body is larger than ${maxBytes} bytes.`, { max_bytes: maxBytes });
+export const unavailable =(message: string, detail?: unknown) => new HqError(503, "service_unavailable", message, detail);
 
 const SQLSTATE: Record<string, { status: number; code: string }> = {
   HQ401: { status: 401, code: "unauthenticated" },

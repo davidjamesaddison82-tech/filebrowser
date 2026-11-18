@@ -9,7 +9,7 @@ import { TEST_ADMIN_URL, TEST_APP_URL, TEST_BASE_URL, TEST_JWT_SECRET, TEST_PORT
 
 const root = path.resolve(import.meta.dirname, "..", "..");
 
-export function serverEnv(baseUrl: string = TEST_BASE_URL): NodeJS.ProcessEnv {
+export function serverEnv(baseUrl: string = TEST_BASE_URL, overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
     HQ_ADMIN_DATABASE_URL: TEST_ADMIN_URL,
@@ -20,7 +20,13 @@ export function serverEnv(baseUrl: string = TEST_BASE_URL): NodeJS.ProcessEnv {
     HQ_GITHUB_TOKEN: "",
     HQ_GITHUB_REPOSITORIES: "",
     HQ_GOOGLE_DRIVE_ACCESS_TOKEN: "",
+    HQ_GOOGLE_DRIVE_FILE_IDS: "",
+    // Sign-in delays are short on the test server (the production default is 500 ms; see throttle.ts).
+    HQ_SIGNIN_BASE_DELAY_MS: "200",
+    HQ_TRUST_PROXY: "",
+    HQ_MAX_BODY_BYTES: "",
     NEXT_TELEMETRY_DISABLED: "1",
+    ...overrides,
   };
 }
 
@@ -30,12 +36,12 @@ export function ensureBuild(): void {
   if (result.status !== 0) throw new Error("next build failed");
 }
 
-export async function startServer(port: number): Promise<ChildProcess> {
+export async function startServer(port: number, overrides: Record<string, string> = {}): Promise<ChildProcess> {
   // Run Next directly (not through npx) so that stopping the child stops the server itself.
   const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
   const child = spawn(process.execPath, [nextBin, "start", "-p", String(port)], {
     cwd: root,
-    env: serverEnv(`http://127.0.0.1:${port}`),
+    env: serverEnv(`http://127.0.0.1:${port}`, overrides),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";

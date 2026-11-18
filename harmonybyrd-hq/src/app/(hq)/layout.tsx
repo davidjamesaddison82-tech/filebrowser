@@ -1,6 +1,5 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
-import { Nav, type NavGroup } from "@/components/nav";
+import { KeepRevLink, Nav, type NavGroup, PinBar, SearchBox } from "@/components/nav";
 import { requireSession } from "@/lib/auth/current";
 import { ROLE_LABEL } from "@/lib/auth/principal";
 import { developmentHealth, reviewItems } from "@/lib/domain/derive";
@@ -70,23 +69,16 @@ export default async function HqLayout({ children }: { children: ReactNode }) {
           {ROLE_LABEL[principal.appRole]} · signed in
         </div>
       </div>
-      {headRev ? <div className="muted xsmall">Dataset revision {headRev}</div> : null}
+      {headRev ? <div className="muted xsmall">Latest dataset revision: {headRev}</div> : null}
       <form action={signOut}>
-        <button className="btn small" type="submit">
+        <button className="btn small" type="submit" title="Signs you out here and in every other browser where you are signed in">
           Sign out
         </button>
       </form>
     </div>
   );
 
-  const search = (
-    <form action="/search" method="get" role="search">
-      <label className="sr-only" htmlFor="hq-search">
-        Search HQ
-      </label>
-      <input id="hq-search" type="search" name="q" placeholder="Search records…" />
-    </form>
-  );
+  const search = <SearchBox />;
 
   return (
     <div className="shell">
@@ -96,11 +88,12 @@ export default async function HqLayout({ children }: { children: ReactNode }) {
           <strong>PROTOTYPE — NOT AN AUTHORITATIVE RECORD</strong>
           <span>
             Acceptance of the HB-AI-P00 prerequisite could not be verified from accessible evidence.{" "}
-            <Link href="/sources#gate">See the governance gate</Link>.
+            <KeepRevLink href="/sources#gate">See the governance gate</KeepRevLink>.
           </span>
           {fixture ? <strong>· SYNTHETIC FIXTURE DATA LOADED — these are not HarmonyByrd records</strong> : null}
         </div>
         <main className="content" id="main">
+          <PinBar headRev={headRev} />
           {problem ? (
             <section className="card" role="alert">
               <div className="card-body stack-sm">

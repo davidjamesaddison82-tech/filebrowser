@@ -1,13 +1,12 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
-import { RevisionBar } from "@/components/revision-bar";
 import type { ReactNode } from "react";
-import { Card, Chip, Citations, ClaimView, Empty, Fold, IdTag, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
+import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, Fold, IdTag, InboxOriginChip, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
 import { isOutstanding, reviewItems } from "@/lib/domain/derive";
-import { loadPage, type SearchParams } from "@/lib/server/page";
+import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
 import { humanise, isoDate } from "@/lib/ui/format";
-import { withRev } from "@/lib/ui/links";
+import { recordHref, withRev } from "@/lib/ui/links";
 
 const plainList = (children: ReactNode[]) => <ul className="plain">{children}</ul>;
 
@@ -32,7 +31,7 @@ export default async function RequirementPage({ params, searchParams }: { params
   const { id } = await params;
   const { ctx, rev } = await loadPage(searchParams);
   const { ds } = ctx;
-  const record = ds.get("requirement", decodeURIComponent(id));
+  const record = ds.get("requirement", routeId(id));
   if (!record) notFound();
   const r = record.data;
   const source = ds.source(r.source_id);
@@ -49,30 +48,33 @@ export default async function RequirementPage({ params, searchParams }: { params
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title={r.title}
         id={r.id}
         crumbs={[{ label: "Founder requirements", href: "/requirements" }]}
         chips={
           <>
+            <InboxOriginChip envelope={record} />
             <StatusChip value={r.disposition} />
             <StatusChip value={r.implementation_state} />
-            {isOutstanding(r) ? <Chip tone="warn">Outstanding</Chip> : null}
+            {isOutstanding(r, ds) ? <Chip tone="warn">Outstanding</Chip> : null}
             <Chip tone="outline">{humanise(r.category)}</Chip>
           </>
         }
         actions={
           <>
-            <Link className="btn" href={`/proposals/new?type=requirement&id=${r.id}`}>
-              Propose a change
-            </Link>
+            {bindingAcceptance(r) ? null : (
+              <Link className="btn" href={`/proposals/new?type=requirement&id=${encodeURIComponent(r.id)}`}>
+                Propose a change
+              </Link>
+            )}
             <Link className="btn" href={withRev(`/records/requirement/${r.id}`, rev)}>
               History & lineage
             </Link>
           </>
         }
       />
+      <AcceptanceLock data={r} />
 
       <Card title="Original wording" hint="Permanent — a correction is a new requirement that supersedes this one">
         <div className="stack-sm">
@@ -80,7 +82,7 @@ export default async function RequirementPage({ params, searchParams }: { params
           <dl className="facts">
             <dt>Source</dt>
             <dd>
-              <Link href={withRev(`/records/source/${r.source_id}`, rev)}>{source?.data.title ?? r.source_id}</Link> <IdTag id={r.source_id} />
+              <Link href={withRev(recordHref("source", r.source_id), rev)}>{source?.data.title ?? r.source_id}</Link> <IdTag id={r.source_id} />
               {r.locator ? <div className="muted small">{r.locator}</div> : null}
             </dd>
             <dt>Date</dt>

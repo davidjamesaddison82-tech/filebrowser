@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { RevisionBar } from "@/components/revision-bar";
+import Link from "@/components/pin-link";
 import { Card, Chip, Empty, IdTag, PageHead, Pager, StatusChip } from "@/components/ui";
 import { filterRequirements, isOutstanding } from "@/lib/domain/derive";
 import { IMPLEMENTATION_STATES, REQUIREMENT_CATEGORIES, REQUIREMENT_DISPOSITIONS } from "@/lib/domain/schemas";
@@ -31,7 +30,6 @@ export default async function RequirementsPage({ searchParams }: { searchParams:
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Founder requirements register"
         lede="Every founder instruction HQ could recover, in its exact original wording, with where it came from and what has happened to it. The wording never changes; interpretations and status are kept visibly separate."
@@ -153,7 +151,7 @@ export default async function RequirementsPage({ searchParams }: { searchParams:
                       </td>
                       <td>
                         <StatusChip value={r.data.implementation_state} />
-                        {isOutstanding(r.data) ? (
+                        {isOutstanding(r.data, ds) ? (
                           <div style={{ marginTop: 4 }}>
                             <Chip tone="warn">Outstanding</Chip>
                           </div>

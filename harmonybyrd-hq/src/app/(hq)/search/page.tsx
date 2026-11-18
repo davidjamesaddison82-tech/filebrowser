@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { RevisionBar } from "@/components/revision-bar";
+import Link from "@/components/pin-link";
 import { Card, Empty, IdTag, PageHead, Pager } from "@/components/ui";
 import { search } from "@/lib/domain/derive";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -26,7 +25,6 @@ export default async function SearchPage({ searchParams }: { searchParams: Searc
   };
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Search"
         lede="Searches every record: modules, loops, requirements, decisions, builds, evidence, defects and sources. Every word must match."

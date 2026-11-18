@@ -11,7 +11,7 @@ export async function GET(request: Request, { params }: Params) {
   return withApi(request, { action: `tool.${name}`, scope: "read" }, async ({ principal }) => {
     if (!tool) throw notFoundError(`Unknown tool "${name}". See GET /api/v1/tools.`);
     if (tool.mode !== "read") throw notFoundError(`Tool "${name}" changes the proposal inbox and must be called with POST.`);
-    return tool.run(principal, argsFromQuery(new URL(request.url)));
+    return tool.run(principal, argsFromQuery(new URL(request.url), tool.input));
   });
 }
 

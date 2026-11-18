@@ -13,25 +13,26 @@ export const EPISTEMIC_TONE: Record<Epistemic, { tone: Tone; glyph: string; shor
   no_evidence: { tone: "ghost", glyph: "∅", short: "No evidence" },
 };
 
-export function humanise(value: string | null | undefined): string {
-  if (!value) return "—";
+/** Loose stored values reach the screens too (a record that failed validation is shown as stored), so anything that is not text is "—". */
+export function humanise(value: unknown): string {
+  if (typeof value !== "string" || !value) return "—";
   const text = value.replaceAll("_", " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-export function shortHash(hash: string | null | undefined, length = 12): string {
-  if (!hash) return "—";
+export function shortHash(hash: unknown, length = 12): string {
+  if (typeof hash !== "string" || !hash) return "—";
   return hash.length > length + 1 ? `${hash.slice(0, length)}…` : hash;
 }
 
 /** Dates are shown as written (ISO), never re-interpreted in the viewer's time zone. */
-export function isoDate(value: string | null | undefined): string {
-  if (!value) return "—";
+export function isoDate(value: unknown): string {
+  if (typeof value !== "string" || !value) return "—";
   return value.slice(0, 10);
 }
 
-export function isoDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
+export function isoDateTime(value: unknown): string {
+  if (typeof value !== "string" || !value) return "—";
   return `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
 }
 
@@ -90,8 +91,8 @@ const STATUS_TONE: Record<string, Tone> = {
   not_accessible: "bad",
 };
 
-export function statusTone(value: string): Tone {
-  return STATUS_TONE[value] ?? "plain";
+export function statusTone(value: unknown): Tone {
+  return (typeof value === "string" && Object.hasOwn(STATUS_TONE, value) ? STATUS_TONE[value] : undefined) ?? "plain";
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -114,6 +115,6 @@ const STATUS_LABEL: Record<string, string> = {
   not_accessible: "Not accessible",
 };
 
-export function statusLabel(value: string): string {
-  return STATUS_LABEL[value] ?? humanise(value);
+export function statusLabel(value: unknown): string {
+  return (typeof value === "string" && Object.hasOwn(STATUS_LABEL, value) ? STATUS_LABEL[value] : undefined) ?? humanise(value);
 }

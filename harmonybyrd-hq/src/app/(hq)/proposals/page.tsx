@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { Card, Chip, Empty, IdTag, Notice, PageHead, StatusChip } from "@/components/ui";
 import { isFounderSession } from "@/lib/auth/principal";
 import { loadPage, param, type SearchParams } from "@/lib/server/page";
@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Proposal inbox" };
 const STATUSES = ["submitted", "accepted", "rejected", "needs_changes", "marked_stale", "withdrawn"];
 
 export default async function ProposalsPage({ searchParams }: { searchParams: SearchParams }) {
-  const { principal, params } = await loadPage(searchParams);
+  const { principal, params } = await loadPage(searchParams, { pinnable: false });
   const status = param(params, "status") ?? "";
   const all = await listProposals(principal);
   const proposals = status ? all.filter((p) => p.status === status) : all;

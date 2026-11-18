@@ -1,5 +1,5 @@
-import { signSession } from "@/lib/auth/session";
-import { SESSION_COOKIE } from "@/lib/auth/session";
+import { SESSION_COOKIE, signSession } from "@/lib/auth/session";
+import { admin } from "./db";
 import { TEST_BASE_URL } from "./env";
 
 export interface Reply<T = Record<string, unknown>> {
@@ -32,7 +32,21 @@ export async function api<T = Record<string, unknown>>(
   return { status: res.status, headers: res.headers, body: body as T };
 }
 
-/** A session cookie for a human principal, as the sign-in page would set it. */
-export async function sessionCookie(principalId: string): Promise<string> {
-  return `${SESSION_COOKIE}=${await signSession(principalId)}`;
+/** The principal's current session epoch, read from the test database. */
+export async function sessionEpoch(principalId: string): Promise<number> {
+  const client = await admin();
+  try {
+    const row = await client.query<{ session_epoch: number }>("select session_epoch from hq.principals where id = $1", [principalId]);
+    return row.rows[0].session_epoch;
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * A session cookie for a human principal, as the sign-in page would set it: signed with the
+ * principal's current session epoch unless `epoch` is given (an older epoch makes an ended session).
+ */
+export async function sessionCookie(principalId: string, epoch?: number): Promise<string> {
+  return `${SESSION_COOKIE}=${await signSession(principalId, epoch ?? (await sessionEpoch(principalId)))}`;
 }

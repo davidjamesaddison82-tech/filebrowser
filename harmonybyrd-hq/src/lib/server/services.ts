@@ -24,6 +24,7 @@ import {
   moduleBrief,
   recordTitle,
   type RequirementFilter,
+  requirementTestEvidence,
   reviewItems,
   search,
   sourceSummary,
@@ -46,7 +47,7 @@ import { type DatasetContext, getDataset, listChanges, recordHistory, recordVers
 export const HQ_NOTICE =
   "HarmonyByrd HQ is a NON-AUTHORITATIVE PROTOTYPE built under commission HB-HQ-P02-R1. " +
   "Acceptance of the HB-AI-P00 prerequisite could not be verified from accessible evidence, so nothing here is a governing record. " +
-  "Records are labelled by what supports them: verified by HQ, reported in a source, design intention, or recommendation.";
+  "Records are labelled by what supports them: checked by HQ's build, reported in a source, design intention, or recommendation.";
 
 export interface ServiceOptions {
   /** Pin a dataset revision. Omit for the current head. */
@@ -275,8 +276,9 @@ export async function searchFounderRequirements(principal: Principal, filter: Re
         module_ids: r.data.module_ids,
         disposition: r.data.disposition,
         implementation_state: r.data.implementation_state,
-        outstanding: isOutstanding(r.data),
+        outstanding: isOutstanding(r.data, ctx.ds),
         linked_evidence_ids: r.data.linked_evidence_ids,
+        test_evidence: requirementTestEvidence(ctx.ds, r.data),
       })),
     },
     [...new Set(list.map((r) => r.data.source_id))],
@@ -292,22 +294,33 @@ export async function findOutstandingRequirements(principal: Principal, filter: 
     ctx,
     {
       definition:
-        "Outstanding: a live requirement (unreviewed, active, conflicted or deferred) that has no linked test evidence or is not recorded as implemented and tested.",
+        "Outstanding: a live requirement (unreviewed, active, conflicted or deferred) that is not recorded as implemented and tested, or that has no linked evidence a source reports or HQ's build checked. Linked ids that do not resolve to an evidence record, and unverified submissions, do not count.",
       total: list.length,
-      requirements: list.map((r) => ({
-        id: r.meta.id,
-        title: r.data.title,
-        exact_wording: r.data.exact_wording,
-        module_ids: r.data.module_ids,
-        disposition: r.data.disposition,
-        implementation_state: r.data.implementation_state,
-        has_linked_evidence: r.data.linked_evidence_ids.length > 0,
-        reasons: [
-          ...(r.data.implementation_state === "no_record" ? ["no implementation record"] : []),
-          ...(r.data.linked_evidence_ids.length === 0 ? ["no linked test or acceptance evidence"] : []),
-          ...(r.data.disposition === "unreviewed" ? ["standing not yet confirmed by the founder in HQ"] : []),
-        ],
-      })),
+      requirements: list.map((r) => {
+        const evidence = requirementTestEvidence(ctx.ds, r.data);
+        return {
+          id: r.meta.id,
+          title: r.data.title,
+          exact_wording: r.data.exact_wording,
+          module_ids: r.data.module_ids,
+          disposition: r.data.disposition,
+          implementation_state: r.data.implementation_state,
+          has_linked_evidence: evidence.verified.length > 0,
+          test_evidence: evidence,
+          reasons: [
+            ...(r.data.implementation_state === "no_record" ? ["no implementation record"] : []),
+            ...(evidence.verified.length === 0
+              ? [
+                  evidence.unverified.length > 0
+                    ? "linked evidence is only an unverified submission"
+                    : "no linked test or acceptance evidence",
+                ]
+              : []),
+            ...(evidence.missing.length > 0 ? [`linked evidence id(s) not found: ${evidence.missing.join(", ")}`] : []),
+            ...(r.data.disposition === "unreviewed" ? ["standing not yet confirmed by the founder in HQ"] : []),
+          ],
+        };
+      }),
       also_missing: {
         modules_without_source_evidence: missing.modules_without_source_evidence,
         sources_not_accessible: missing.sources_not_accessible,
@@ -507,7 +520,7 @@ export function buildOnlyFieldsFor(type: RecordType): readonly string[] {
 }
 
 /** What an existing source says about the snapshot HQ read (mirrors hq.source_integrity_fields()). */
-const SOURCE_INTEGRITY_FIELDS: readonly string[] = ["sha256", "bytes", "text_snapshot", "access", "kind", "authority", "retrieved_at", "parts", "version", "location"];
+export const SOURCE_INTEGRITY_FIELDS: readonly string[] = ["sha256", "bytes", "text_snapshot", "access", "kind", "authority", "retrieved_at", "parts", "version", "location"];
 /** Evidence types recorded only by the founder or by HQ's build. */
 const HQ_EVIDENCE_TYPES: readonly string[] = ["founder_acceptance", "hq_check"];
 /** Evidence fields that cannot be rewritten once a source reports the evidence or HQ's build checked it. */
@@ -632,7 +645,7 @@ export function acceptanceBlock(type: string, id: string, data: unknown): HqErro
   const acceptance = isObject(data) && isObject(data.hq_acceptance) ? data.hq_acceptance : null;
   if (!acceptance || (acceptance.state !== "accepted" && acceptance.state !== "rejected")) return null;
   return conflict(
-    `${type}/${id} carries a founder acceptance recorded in HQ (${String(acceptance.decision_id ?? "decision unknown")}). ` +
+    `${type}/${id} carries a founder ${acceptance.state === "rejected" ? "rejection" : "acceptance"} recorded in HQ (${String(acceptance.decision_id ?? "decision unknown")}). ` +
       "Record a founder decision that clears it first, or propose a new record.",
     { acceptance },
   );
@@ -760,6 +773,8 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
       );
     }
     const merged = { ...currentData, ...body.set };
+    const links = linkProblem(ctx.ds, body.set);
+    if (links) await refuse(principal, target, links);
     await checkAssertions(principal, type, body.set, merged, target);
     const check = safeParseRecord(type, merged);
     if (!check.ok) throw invalid(`The proposed change would make ${body.target.id} invalid.`, check.issues);
@@ -808,6 +823,8 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
   if (type === "evidence" && typeof create.record.type === "string" && HQ_EVIDENCE_TYPES.includes(create.record.type)) {
     await refuse(principal, target, forbidden(`Evidence of type "${create.record.type}" cannot be made by proposal: it is recorded by the founder or by HQ's build.`));
   }
+  const links = linkProblem(ctx.ds, create.record);
+  if (links) await refuse(principal, target, links);
   await checkAssertions(principal, type, create.record, null, target);
   const candidate = withPlaceholders(type, create.record);
   const check = safeParseRecord(type, candidate);
@@ -849,6 +866,29 @@ function withPlaceholders(type: RecordType, record: Record<string, unknown>): Re
     ...(type === "evidence" ? { verification: "agent_submitted_unverified" } : {}),
     ...(type === "recommendation" ? { made_by: "Proposed through the inbox" } : {}),
   };
+}
+
+/** Fields that link a record to other records, and the type each id must name. */
+const LINK_FIELDS: Record<string, RecordType> = { linked_evidence_ids: "evidence", linked_build_ids: "build", decision_ids: "decision" };
+
+/**
+ * A proposal that sets a link field must name records that exist at head: a dangling id would read as
+ * evidence, a build or a decision that is not there (honesty-6). 422, naming the ids.
+ */
+function linkProblem(ds: Dataset, doc: Record<string, unknown>): HqError | null {
+  const problems: { field: string; ids: unknown[] }[] = [];
+  for (const [field, type] of Object.entries(LINK_FIELDS)) {
+    const value = doc[field];
+    if (value === undefined || value === null) continue;
+    const ids = Array.isArray(value) ? value : [value];
+    const unknown = ids.filter((id) => typeof id !== "string" || !ds.get(type, id));
+    if (unknown.length > 0) problems.push({ field, ids: unknown });
+  }
+  if (problems.length === 0) return null;
+  return invalid(
+    `Linked records do not exist: ${problems.map((p) => `${p.field} ${p.ids.map(String).join(", ")}`).join("; ")}.`,
+    { unknown_links: problems },
+  );
 }
 
 function assertModulesExist(ds: Dataset, moduleIds: string[]) {

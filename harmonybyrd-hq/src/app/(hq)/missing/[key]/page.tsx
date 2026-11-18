@@ -1,6 +1,5 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
-import { RevisionBar } from "@/components/revision-bar";
 import { Card, Empty, IdTag, Pager, Notice, PageHead } from "@/components/ui";
 import { type HealthItem, missingWork } from "@/lib/domain/derive";
 import { RECORD_TYPE_LABEL } from "@/lib/domain/schemas";
@@ -24,7 +23,6 @@ export default async function MissingList({ params, searchParams }: { params: Pr
   const pager = <Pager {...pg} params={query} basePath={`/missing/${key}`} noun="items" />;
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title={MISSING_META[k].title}
         lede={MISSING_META[k].description}

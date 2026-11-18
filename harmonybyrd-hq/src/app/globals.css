@@ -1649,3 +1649,48 @@ body {
 .card .refgroup .plain li {
   margin: 2px 0;
 }
+
+/* ---------------------------------------------------------------------------
+   Long unbroken text (ui-9): record titles, names and breadcrumbs have no length limit and may be
+   one long word (an id, a URL). They wrap anywhere rather than widening the page sideways.
+   "anywhere" (unlike "break-word") also lowers the min-content width, so flex and grid items shrink.
+   --------------------------------------------------------------------------- */
+h1,
+h2,
+h3,
+h4,
+.lede,
+.li-title,
+.li-note,
+.claim-text,
+.notice {
+  overflow-wrap: anywhere;
+}
+.page-head > div,
+.page-head .row,
+.crumbs,
+.crumbs > span,
+.content,
+.main {
+  min-width: 0;
+}
+.crumbs > span {
+  overflow-wrap: anywhere;
+}
+.chip {
+  max-width: 100%;
+}
+
+/* Founder rejected in HQ (D12): shown in the map as clearly as an acceptance. */
+.mn.st-rejected_in_hq {
+  background: var(--bad-wash);
+}
+
+/* The pinned-revision bar (D14): at the top of every screen while ?rev= is in the address. */
+.pinbar {
+  margin-bottom: 16px;
+}
+.pin-back {
+  font-weight: 600;
+  white-space: nowrap;
+}

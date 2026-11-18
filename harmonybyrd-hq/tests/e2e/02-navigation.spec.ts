@@ -1,4 +1,4 @@
-import { DETAIL_SCREENS, expect, SCREENS, signIn, test } from "./support";
+import { DETAIL_SCREENS, expect, headRevision, SCREENS, signIn, test, UNPINNABLE } from "./support";
 
 test.describe("navigation and controls (acceptance check 10)", () => {
   test.beforeEach(async ({ page }) => {
@@ -167,5 +167,69 @@ test.describe("navigation and controls (acceptance check 10)", () => {
   test("an unknown record is a clear 'not found', not a blank screen", async ({ page }) => {
     const response = await page.goto("/modules/MOD-DOES-NOT-EXIST");
     expect(response?.status()).toBe(404);
+  });
+});
+
+test.describe("pinned revisions and addresses that do not exist (ui-7, D14, D16)", () => {
+  test.beforeEach(async ({ page }) => {
+    await signIn(page, "founder");
+  });
+
+  test("a revision that does not exist or is not a number gives the 404 page, never a 500 or the latest", async ({ page }) => {
+    for (const path of ["/?rev=99", "/?rev=1e9", "/?rev=abc", "/?rev=0", "/?rev=-1", "/?rev=1.5", "/modules/MOD-FX-ALPHA?rev=99", "/records/source/SRC-F01?rev=99"]) {
+      const response = await page.goto(path);
+      expect(response?.status(), path).toBe(404);
+    }
+    expect((await page.goto("/?rev=1"))?.status()).toBe(200);
+  });
+
+  test("a malformed percent-encoded id is refused as a bad address, not a server error", async ({ page }) => {
+    for (const path of ["/records/source/%E0%A4%A", "/modules/%E0%A4%A", "/requirements/%E0%A4%A", "/loops/%E0%A4%A", "/proposals/%E0%A4%A"]) {
+      const response = await page.request.get(path, { maxRedirects: 0 });
+      // Next.js may refuse the address itself (400) before the page sees it; the page refuses it with 404.
+      expect([400, 404], path).toContain(response.status());
+    }
+  });
+
+  test("while ?rev= is in the address, every screen says which revision it shows", async ({ page }) => {
+    const head = await headRevision(page);
+    for (const path of [...SCREENS.map((s) => s.path), ...DETAIL_SCREENS.map((s) => s.path)]) {
+      await page.goto(`${path}?rev=${head}`);
+      const bar = page.locator(".pinbar");
+      await expect(bar, path).toBeVisible();
+      if (UNPINNABLE.some((p) => path === p || path.startsWith(`${p}/`))) {
+        await expect(bar, path).toContainText("this screen always shows the latest");
+      } else {
+        await expect(bar, path).toContainText(`You are viewing dataset revision ${head}`);
+      }
+      await expect(bar.getByRole("link", { name: "Return to the latest" })).toBeVisible();
+      // Navigation counts are figures of the latest revision and are hidden while a revision is named.
+      await expect(page.locator(".nav-count")).toHaveCount(0);
+    }
+    await page.goto("/modules");
+    await expect(page.locator(".pinbar")).toHaveCount(0);
+    expect(await page.locator(".nav-count").count()).toBeGreaterThan(0);
+  });
+});
+
+test.describe("the proposal form (ui-6)", () => {
+  test("an empty structured field is edited as JSON; a text field as text", async ({ page }) => {
+    await signIn(page, "developer");
+    await page.goto("/proposals/new?type=module&id=MOD-FX-ALPHA");
+    // why_exists is empty (null) in the fixture, but the schema says it is a statement.
+    await page.getByLabel("Field to change").selectOption("why_exists");
+    await expect(page.locator('input[name="value_is_json"]')).toHaveValue("1");
+    await expect(page.locator("label.field", { hasText: "Proposed new value" }).locator(".help")).toContainText("structured and empty now");
+    await expect(page.getByLabel(/Proposed new value/)).toHaveValue("");
+    await page.getByLabel("Field to change").selectOption("name");
+    await expect(page.locator('input[name="value_is_json"]')).toHaveValue("0");
+    await expect(page.locator("label.field", { hasText: "Proposed new value" }).locator(".help")).toHaveText("Plain text.");
+  });
+
+  test("fields only HQ's build writes are not offered", async ({ page }) => {
+    await signIn(page, "developer");
+    await page.goto("/proposals/new?type=build&id=BLD-FX-01");
+    const options = await page.getByLabel("Field to change").locator("option").allTextContents();
+    for (const f of ["hq_checks", "other_mentions", "possibly_same_as", "code_ref", "recorded_from_cluster", "hq_acceptance"]) expect(options).not.toContain(f);
   });
 });

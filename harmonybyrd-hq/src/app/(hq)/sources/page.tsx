@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { RevisionBar } from "@/components/revision-bar";
+import Link from "@/components/pin-link";
 import { Card, Chip, Empty, Fold, IdTag, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
 import { incomingRefs } from "@/lib/domain/derive";
@@ -81,7 +80,6 @@ export default async function SourcesPage({ searchParams }: { searchParams: Sear
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Source-access inventory"
         lede="Every document HQ knows of: what was actually read, where it lives, its version and checksum, and how much authority it carries. Documents that are named but could not be read are listed as gaps, not passed over."

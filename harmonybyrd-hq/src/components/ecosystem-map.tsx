@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import type { MapLayout, MapNode } from "@/lib/ui/map-layout";
 import { STANDING_SHORT } from "@/lib/ui/map-layout";
 import { withRev } from "@/lib/ui/links";

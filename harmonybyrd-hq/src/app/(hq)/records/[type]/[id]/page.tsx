@@ -1,15 +1,28 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
-import { RevisionBar } from "@/components/revision-bar";
 import type { ReactNode } from "react";
-import { Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
+import {
+  AcceptanceLock,
+  bindingAcceptance,
+  Card,
+  Chip,
+  Citations,
+  ClaimView,
+  Empty,
+  EpistemicChip,
+  Fold,
+  IdTag,
+  InboxOriginChip,
+  Notice,
+  PageHead,
+  RecordLink,
+  StatusChip,
+} from "@/components/ui";
 import type { Dataset, Envelope } from "@/lib/domain/dataset";
 import { acceptanceStatus, dependencies, lineage, recordTitle } from "@/lib/domain/derive";
 import {
   type AnyRecord,
   type BuildRecord,
-  type Citation,
-  type Claim,
   type CommissionRecord,
   type DecisionRecord,
   type DefectRecord,
@@ -23,9 +36,10 @@ import {
   type SourceRecord,
   STAGE_LABEL,
 } from "@/lib/domain/schemas";
-import { loadPage, type SearchParams } from "@/lib/server/page";
+import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
 import { recordHistory } from "@/lib/server/store";
 import { humanise, isoDate, isoDateTime, plural, shortHash, statusLabel } from "@/lib/ui/format";
+import { codeRef, hqChecks, isObject, otherMentions, searchResults, str, strings, type SafeSearchResult } from "@/lib/ui/guards";
 import { recordHref, refHref, withRev } from "@/lib/ui/links";
 
 const LIST_PAGE: Record<string, { label: string; href: string }> = {
@@ -81,22 +95,9 @@ function loose(data: unknown): Record<string, unknown> {
   return (data ?? {}) as Record<string, unknown>;
 }
 
-interface OtherMention {
-  merged_id?: string;
-  recorded_from_cluster?: string;
-  title?: string;
-  label?: string;
-  status_in_that_source?: string;
-  standing_in_that_source?: string;
-  why_merged?: string;
-  statement?: Claim | null;
-  citations?: Citation[];
-}
-
 /** Records of the same decision or build in other documents, kept word for word after HQ merged them. */
 function OtherMentions({ ds, data }: { ds: Dataset; data: unknown }) {
-  const raw = loose(data).other_mentions;
-  const mentions = Array.isArray(raw) ? (raw as OtherMention[]) : [];
+  const mentions = otherMentions(loose(data).other_mentions);
   if (mentions.length === 0) return null;
   return (
     <Card title="Other mentions" hint={plural(mentions.length, "mention")} flush>
@@ -116,14 +117,14 @@ function OtherMentions({ ds, data }: { ds: Dataset; data: unknown }) {
               <div className="row small muted" style={{ gap: 8 }}>
                 {status ? (
                   <span>
-                    {m.status_in_that_source !== undefined ? "Status" : "Standing"} in that source: <StatusChip value={status} />
+                    {m.status_in_that_source !== null ? "Status" : "Standing"} in that source: <StatusChip value={status} />
                   </span>
                 ) : null}
                 {m.recorded_from_cluster ? <span>Recorded from source group {m.recorded_from_cluster}</span> : null}
               </div>
               {m.why_merged ? <div className="li-note">Why merged: {m.why_merged}</div> : null}
-              <ClaimView ds={ds} claim={m.statement ?? null} />
-              {!sameCites && m.citations?.length ? (
+              <ClaimView ds={ds} claim={m.statement} />
+              {!sameCites && m.citations.length ? (
                 <Citations ds={ds} citations={m.citations} label={`${plural(m.citations.length, "quotation")} naming it`} />
               ) : null}
             </li>
@@ -137,18 +138,13 @@ function OtherMentions({ ds, data }: { ds: Dataset; data: unknown }) {
   );
 }
 
-interface SearchResult {
-  term: string;
-  hits?: { source_id: string; count: number }[];
-}
-
 /** What a search of the readable sources found, term by term. A term with no hits is shown, not dropped. */
-function SearchResults({ ds, results }: { ds: Dataset; results: SearchResult[] }) {
+function SearchResults({ ds, results }: { ds: Dataset; results: SafeSearchResult[] }) {
   const rows = results.map((r, i) => (
     <tr key={`${r.term}-${i}`}>
       <td className="small">{r.term}</td>
       <td className="small">
-        {r.hits?.length ? (
+        {r.hits.length ? (
           r.hits.map((h, j) => (
             <span key={`${h.source_id}-${j}`}>
               {j ? ", " : ""}
@@ -238,43 +234,43 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
           <dd>{s.commission_codes.length ? s.commission_codes.join(" · ") : "—"}</dd>
           <dt>Summary</dt>
           <dd>{s.summary || <span className="muted">—</span>}</dd>
-          {Array.isArray(loose(s).other_names) && (loose(s).other_names as string[]).length ? (
+          {strings(s.other_names).length ? (
             <>
               <dt>Also named as</dt>
-              <dd>{(loose(s).other_names as string[]).join(" · ")}</dd>
+              <dd className="break">{strings(s.other_names).join(" · ")}</dd>
             </>
           ) : null}
-          {typeof loose(s).importance === "string" ? (
+          {str(s.importance) ? (
             <>
               <dt>Importance (HQ classification)</dt>
-              <dd>{humanise(loose(s).importance as string)}</dd>
+              <dd>{humanise(s.importance)}</dd>
             </>
           ) : null}
-          {typeof loose(s).identifiers === "string" && loose(s).identifiers ? (
+          {str(s.identifiers) ? (
             <>
               <dt>Identifiers given where it is named</dt>
-              <dd className="small break">{loose(s).identifiers as string}</dd>
+              <dd className="small break">{str(s.identifiers)}</dd>
             </>
           ) : null}
-          {typeof loose(s).doc_kind === "string" ? (
+          {str(s.doc_kind) ? (
             <>
               <dt>Kind of document</dt>
-              <dd>{humanise(loose(s).doc_kind as string)}</dd>
+              <dd>{humanise(s.doc_kind)}</dd>
             </>
           ) : null}
-          {typeof loose(s).content_kind === "string" ? (
+          {str(s.content_kind) ? (
             <>
               <dt>Kind of content</dt>
-              <dd>{humanise(loose(s).content_kind as string)}</dd>
+              <dd>{humanise(s.content_kind)}</dd>
             </>
           ) : null}
-          {s.parts.length ? (
+          {Array.isArray(s.parts) && s.parts.length ? (
             <>
               <dt>Parts</dt>
               <dd>
                 <div className="small">
                   <Fold
-                    items={s.parts.map((p) => (
+                    items={s.parts.filter(isObject).map((p) => (
                       <li key={p.name} className="break">
                         {p.name} <span className="mono xsmall muted">{shortHash(p.sha256, 16)}</span>
                       </li>
@@ -287,12 +283,12 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
               </dd>
             </>
           ) : null}
-          {s.hq_checks.length ? (
+          {hqChecks(s.hq_checks).length ? (
             <>
-              <dt>Checked by HQ</dt>
+              <dt>Checked by HQ&apos;s build</dt>
               <dd>
                 <ul className="plain small">
-                  {s.hq_checks.map((c, i) => (
+                  {hqChecks(s.hq_checks).map((c, i) => (
                     <li key={i}>
                       <Chip tone="ok" glyph="✓">
                         Checked
@@ -434,21 +430,21 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
             <ClaimView ds={ds} claim={b.statement} />
           </dd>
           {(() => {
-            const ref = loose(b).code_ref as { repository?: string; ref?: string; commit?: string | null } | null | undefined;
-            return ref && typeof ref === "object" ? (
+            const ref = codeRef(b.code_ref);
+            return ref ? (
               <>
                 <dt>Code revision</dt>
                 <dd className="mono small break">
-                  {ref.repository ?? "—"} @ {ref.ref ?? "—"} · {ref.commit ? `commit ${ref.commit}` : "no commit on record"}
+                  {ref.repository} @ {ref.ref ?? "—"} · {ref.commit ? `commit ${ref.commit}` : "no commit on record"}
                 </dd>
               </>
             ) : null;
           })()}
-          {Array.isArray(loose(b).possibly_same_as) && (loose(b).possibly_same_as as string[]).length ? (
+          {strings(b.possibly_same_as).length ? (
             <>
               <dt>May be the same build as</dt>
               <dd>
-                <RefList ds={ds} ids={loose(b).possibly_same_as as string[]} noun="builds" />
+                <RefList ds={ds} ids={strings(b.possibly_same_as)} noun="builds" />
               </dd>
             </>
           ) : null}
@@ -460,12 +456,12 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
               </dd>
             </>
           ) : null}
-          {b.hq_checks.length ? (
+          {hqChecks(b.hq_checks).length ? (
             <>
-              <dt>Checked by HQ</dt>
+              <dt>Checked by HQ&apos;s build</dt>
               <dd>
                 <ul className="plain small">
-                  {b.hq_checks.map((c, i) => (
+                  {hqChecks(b.hq_checks).map((c, i) => (
                     <li key={i}>
                       <Chip tone="ok" glyph="✓">
                         Checked
@@ -482,10 +478,10 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
     );
   }
   if (type === "evidence") {
-    const e = envelope.data as EvidenceRecord & {
-      counts?: { passed: number; failed: number; skipped: number } | null;
-      code_ref?: { repository: string; ref: string; path?: string } | null;
-    };
+    const e = envelope.data as EvidenceRecord;
+    const counts = isObject(loose(e).counts) ? (loose(e).counts as Record<string, unknown>) : null;
+    const ref = codeRef(loose(e).code_ref);
+    const results = searchResults(e.search_results);
     return (
       <Card title="Evidence">
         <div className="stack-sm">
@@ -506,28 +502,28 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
             <dd>
               <ClaimView ds={ds} claim={e.result} />
             </dd>
-            {e.counts ? (
+            {counts ? (
               <>
                 <dt>Counts as submitted</dt>
                 <dd>
-                  {e.counts.passed} passed · {e.counts.failed} failed · {e.counts.skipped} skipped
+                  {String(counts.passed ?? "—")} passed · {String(counts.failed ?? "—")} failed · {String(counts.skipped ?? "—")} skipped
                 </dd>
               </>
             ) : null}
-            {e.code_ref ? (
+            {ref ? (
               <>
                 <dt>Code revision</dt>
                 <dd className="mono small break">
-                  {e.code_ref.repository} @ {e.code_ref.ref}
-                  {e.code_ref.path ? ` · ${e.code_ref.path}` : ""}
+                  {ref.repository} @ {ref.ref ?? "—"}
+                  {ref.path ? ` · ${ref.path}` : ""}
                 </dd>
               </>
             ) : null}
-            {Array.isArray(loose(e).search_results) && (loose(e).search_results as unknown[]).length ? (
+            {results.length ? (
               <>
                 <dt>Search results</dt>
                 <dd>
-                  <SearchResults ds={ds} results={loose(e).search_results as SearchResult[]} />
+                  <SearchResults ds={ds} results={results} />
                 </dd>
               </>
             ) : null}
@@ -644,7 +640,7 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
                 <li key={i}>
                   <div className="stack-sm" style={{ gap: 4 }}>
                     <div className="row" style={{ gap: 8 }}>
-                      <Link href={withRev(`/modules/${step.module_id}`, rev)}>
+                      <Link href={withRev(recordHref("module", step.module_id), rev)}>
                         <strong>{ds.moduleName(step.module_id)}</strong>
                       </Link>
                       {step.shared_stage !== "none" ? <Chip tone="accent">{STAGE_LABEL[step.shared_stage]}</Chip> : null}
@@ -673,7 +669,7 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
 export default async function RecordPage({ params, searchParams }: { params: Promise<{ type: string; id: string }>; searchParams: SearchParams }) {
   const { type, id: rawId } = await params;
   if (!isRecordType(type)) notFound();
-  const id = decodeURIComponent(rawId);
+  const id = routeId(rawId);
   const { principal, ctx, rev } = await loadPage(searchParams);
   const { ds } = ctx;
   const envelope = ds.get(type, id) as Envelope<AnyRecord> | undefined;
@@ -684,22 +680,24 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
   const history = await recordHistory(principal, type, id, ds.revision.rev);
   const list = LIST_PAGE[type];
   const canPropose = type !== "decision";
+  const lockedByAcceptance = bindingAcceptance(envelope.data) !== null;
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title={recordTitle(type, envelope.data)}
         id={id}
         crumbs={[{ label: list.label, href: list.href }, { label: RECORD_TYPE_LABEL[type] }]}
+        chips={envelope.meta.origin === "proposal_acceptance" ? <InboxOriginChip envelope={envelope} /> : undefined}
         actions={
-          canPropose ? (
-            <Link className="btn" href={`/proposals/new?type=${type}&id=${id}`}>
+          canPropose && !lockedByAcceptance ? (
+            <Link className="btn" href={`/proposals/new?type=${type}&id=${encodeURIComponent(id)}`}>
               Propose a change
             </Link>
           ) : null
         }
       />
+      {canPropose ? <AcceptanceLock data={envelope.data} /> : null}
 
       <div className="split">
         <div className="stack">
@@ -711,7 +709,9 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
               <Empty>
                 {envelope.meta.origin === "seed_import"
                   ? "This record cites no source document."
-                  : "This record was created inside HQ; its provenance is the version history below."}
+                  : envelope.meta.origin === "proposal_acceptance"
+                    ? "This record cites no source document. It came in through the proposal inbox: what it says is the submitter's account, filed by the founder. Its version history below shows the proposal."
+                    : "This record was created inside HQ by a founder decision; its provenance is the version history below."}
               </Empty>
             ) : (
               <Fold
@@ -736,7 +736,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
                         {s.citations.map((c, i) => (
                           <div className="cite" key={i}>
                             <q>{c.quote}</q>
-                            {c.locator ? <span className="src">{c.locator}</span> : null}
+                            {typeof c.locator === "string" && c.locator ? <span className="src">{c.locator}</span> : null}
                           </div>
                         ))}
                       </details>
@@ -801,7 +801,9 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
           {acceptance ? (
             <Card title="Acceptance status">
               <div className="stack-sm">
-                <Chip tone={acceptance.recorded_in_hq?.state === "accepted" ? "ok" : "outline"}>{acceptance.label}</Chip>
+                <Chip tone={acceptance.recorded_in_hq?.state === "accepted" ? "ok" : acceptance.recorded_in_hq?.state === "rejected" ? "bad" : "outline"}>
+                  {acceptance.label}
+                </Chip>
                 {acceptance.recorded_in_hq ? (
                   <p className="small">
                     Recorded in HQ: <strong>{acceptance.recorded_in_hq.state}</strong> by {acceptance.recorded_in_hq.decided_by}, decision{" "}

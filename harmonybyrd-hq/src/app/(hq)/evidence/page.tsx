@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { RevisionBar } from "@/components/revision-bar";
-import { Card, Chip, Empty, IdTag, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import Link from "@/components/pin-link";
+import { Card, Chip, Empty, IdTag, InboxOriginChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
 import { resolvedByHqDecisions } from "@/lib/domain/derive";
 import { type Page, loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
-import { humanise, isoDate, shortHash } from "@/lib/ui/format";
+import { humanise, isoDate, plural, shortHash } from "@/lib/ui/format";
+import { hqChecks } from "@/lib/ui/guards";
 import { recordHref, withRev } from "@/lib/ui/links";
 
 export const metadata: Metadata = { title: "Development & evidence" };
@@ -20,6 +20,12 @@ const TABS = [
   ["decisions", "Decisions"],
 ] as const;
 type Tab = (typeof TABS)[number][0];
+
+/** The first `n` characters of a statement, or "" when a stored record has none. */
+function clip(text: unknown, n: number): string {
+  if (typeof text !== "string") return "";
+  return text.length > n ? `${text.slice(0, n)}…` : text;
+}
 
 function moduleNames(ds: Dataset, ids: string[]): string {
   return ids.length ? ids.map((m) => ds.moduleName(m)).join(", ") : "—";
@@ -118,7 +124,6 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Development and evidence register"
         lede="The development lifecycle end to end: founder instruction → scoped commission → implementation → tests → independent assessment → defect repair → founder decision → retained history. An agent's statement that something is complete is not evidence of completion."
@@ -181,7 +186,8 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
             <Card title="How evidence is graded">
               <ul className="plain small">
                 <li>
-                  <StatusChip value="hq_verified" /> HQ produced or re-checked it itself (for example, recomputed a checksum from the bytes).
+                  <StatusChip value="hq_verified" /> Recorded by the build that produced this dataset (for example, a checksum recomputed from the bytes).
+                  The running application re-verifies quotations at import; it does not re-run the other checks.
                 </li>
                 <li>
                   <StatusChip value="source_reported" /> A source document reports it. HQ quotes the source and has not re-run anything.
@@ -257,7 +263,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                       <th>Module</th>
                       <th>Standing</th>
                       <th>SHA-256</th>
-                      <th>HQ check</th>
+                      <th>Checked by HQ&apos;s build</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -274,16 +280,19 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                             <div style={{ marginTop: 4 }}>
                               <Chip tone="ok">Accepted in HQ</Chip>
                             </div>
+                          ) : b.data.hq_acceptance?.state === "rejected" ? (
+                            <div style={{ marginTop: 4 }}>
+                              <Chip tone="bad">Founder rejected in HQ</Chip>
+                            </div>
                           ) : null}
                         </td>
                         <td className="mono xsmall" title={b.data.sha256 ?? undefined}>
                           {shortHash(b.data.sha256, 16)}
                         </td>
                         <td className="small">
-                          {b.data.hq_checks.length ? (
-                            <Chip tone="ok" glyph="✓">
-                              {b.data.hq_checks.length} check
-                              {b.data.hq_checks.length === 1 ? "" : "s"}
+                          {hqChecks(b.data.hq_checks).length ? (
+                            <Chip tone="ok" glyph="✓" title="Checks made by HQ's build">
+                              {plural(hqChecks(b.data.hq_checks).length, "check")} by HQ&apos;s build
                             </Chip>
                           ) : (
                             <span className="muted">none</span>
@@ -321,8 +330,8 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                     {pg.evidence.items.map((e) => (
                       <tr key={e.meta.id}>
                         <td className="title-cell" style={{ minWidth: 280 }}>
-                          <Link href={withRev(recordHref("evidence", e.meta.id), rev)}>{e.data.title}</Link> <IdTag id={e.meta.id} />
-                          <div className="small muted">{e.data.result.text.length > 180 ? `${e.data.result.text.slice(0, 180)}…` : e.data.result.text}</div>
+                          <Link href={withRev(recordHref("evidence", e.meta.id), rev)}>{e.data.title}</Link> <IdTag id={e.meta.id} /> <InboxOriginChip envelope={e} />
+                          <div className="small muted">{clip(e.data.result?.text, 180)}</div>
                         </td>
                         <td className="small">{humanise(e.data.type)}</td>
                         <td>
@@ -367,9 +376,9 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                     {pg.defects.items.map((d) => (
                       <tr key={d.meta.id}>
                         <td className="title-cell" style={{ minWidth: 280 }}>
-                          <Link href={withRev(recordHref("defect", d.meta.id), rev)}>{d.data.title}</Link> <IdTag id={d.meta.id} />
+                          <Link href={withRev(recordHref("defect", d.meta.id), rev)}>{d.data.title}</Link> <IdTag id={d.meta.id} /> <InboxOriginChip envelope={d} />
                           <div className="small muted">
-                            {d.data.statement.text.length > 180 ? `${d.data.statement.text.slice(0, 180)}…` : d.data.statement.text}
+                            {clip(d.data.statement?.text, 180)}
                           </div>
                         </td>
                         <td>
@@ -415,9 +424,9 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                     {pg.open.items.map((o) => (
                       <tr key={o.meta.id}>
                         <td className="title-cell" style={{ minWidth: 320 }}>
-                          <Link href={withRev(recordHref("open_item", o.meta.id), rev)}>{o.data.title}</Link> <IdTag id={o.meta.id} />
+                          <Link href={withRev(recordHref("open_item", o.meta.id), rev)}>{o.data.title}</Link> <IdTag id={o.meta.id} /> <InboxOriginChip envelope={o} />
                           <div className="small muted">
-                            {o.data.statement.text.length > 220 ? `${o.data.statement.text.slice(0, 220)}…` : o.data.statement.text}
+                            {clip(o.data.statement?.text, 220)}
                           </div>
                         </td>
                         <td>

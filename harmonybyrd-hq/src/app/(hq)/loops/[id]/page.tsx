@@ -1,11 +1,10 @@
-import Link from "next/link";
+import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
-import { RevisionBar } from "@/components/revision-bar";
 import type { ReactNode } from "react";
-import { Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, Notice, PageHead, RecordLink } from "@/components/ui";
+import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, InboxOriginChip, Notice, PageHead, RecordLink } from "@/components/ui";
 import { stageCoverage } from "@/lib/domain/derive";
 import { STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
-import { loadPage, type SearchParams } from "@/lib/server/page";
+import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
 import { recordHref, withRev } from "@/lib/ui/links";
 
 const listWrap = (children: ReactNode[]) => <ul className="list">{children}</ul>;
@@ -14,7 +13,7 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
   const { id } = await params;
   const { ctx, rev } = await loadPage(searchParams);
   const { ds } = ctx;
-  const loop = ds.get("loop", decodeURIComponent(id));
+  const loop = ds.get("loop", routeId(id));
   if (!loop) notFound();
   const l = loop.data;
   const steps = [...l.steps].sort((a, b) => a.order - b.order);
@@ -36,16 +35,16 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title={l.name}
         id={l.id}
         crumbs={[{ label: "Learning loop explorer", href: "/loops" }]}
         chips={
           <>
+            <InboxOriginChip envelope={loop} />
             <EpistemicChip value={l.standing} />
             {l.module_ids.map((m) => (
-              <Link key={m} href={withRev(`/modules/${m}`, rev)}>
+              <Link key={m} href={withRev(recordHref("module", m), rev)}>
                 <Chip tone="outline">{ds.moduleName(m)}</Chip>
               </Link>
             ))}
@@ -53,15 +52,18 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
         }
         actions={
           <>
-            <Link className="btn" href={`/proposals/new?type=loop&id=${l.id}`}>
-              Propose a change
-            </Link>
+            {bindingAcceptance(l) ? null : (
+              <Link className="btn" href={`/proposals/new?type=loop&id=${encodeURIComponent(l.id)}`}>
+                Propose a change
+              </Link>
+            )}
             <Link className="btn" href={withRev(`/records/loop/${l.id}`, rev)}>
               History & lineage
             </Link>
           </>
         }
       />
+      <AcceptanceLock data={l} />
       {l.standing !== "reported" ? (
         <Notice tone="warn">
           This loop is recorded as a {l.standing === "design_intention" ? "design" : "recommendation"}. Nothing here says it has been built or tried

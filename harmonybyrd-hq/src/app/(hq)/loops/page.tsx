@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { RevisionBar } from "@/components/revision-bar";
+import Link from "@/components/pin-link";
 import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, Notice, PageHead, Pager } from "@/components/ui";
 import { loopStageMatrix, stageCoverage } from "@/lib/domain/derive";
 import { type Epistemic, EPISTEMIC_LABEL, STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
@@ -41,7 +40,6 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
 
   return (
     <div className="stack">
-      <RevisionBar ctx={ctx} />
       <PageHead
         title="Learning loop explorer"
         lede="How each module is meant to produce learning, and how the modules hand a musical idea to one another. Each loop keeps its own steps and names; the shared progression is a lens laid over them only where the source supports it."
