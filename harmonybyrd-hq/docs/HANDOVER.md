@@ -15,7 +15,7 @@ in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | Repository | the working repository this commission was given |
 | Branch | `claude/harmonybyrd-hq-command-centre-76pgaq` |
 | Folder | `harmonybyrd-hq/` (nothing outside this folder was changed) |
-| Application commit | `__APP_COMMIT__` — the revision the recorded test runs were made on |
+| Application commit | `15681a3335d486b5b52fe950516151c9bad9cd31` — the revision the recorded test runs were made on |
 | Later commits on the branch | documentation and the generated test report only (see `git log -- harmonybyrd-hq`) |
 | File checksums | [FILE-MANIFEST.sha256](FILE-MANIFEST.sha256) — SHA-256 of every file in the folder at hand-over |
 
