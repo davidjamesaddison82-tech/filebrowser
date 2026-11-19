@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { claimsFor } from "@/lib/auth/principal";
-import { acceptanceStatus } from "@/lib/domain/derive";
+import { acceptanceStatus, developmentHealth, moduleStanding } from "@/lib/domain/derive";
+import type { ModuleRecord } from "@/lib/domain/schemas";
 import { getRecord, listProposals, recordFounderDecision, recordTestEvidence, reviewProposal, submitChangeProposal, submitDefectReport } from "@/lib/server/services";
 import { getDataset } from "@/lib/server/store";
 import { admin, asAppRole, expectStatus, freshWorld, type TestWorld } from "../helpers/db";
@@ -137,12 +138,22 @@ describe("AC8 — an AI client cannot create founder acceptance", () => {
         client.query("select hq.admin_put_records($1::jsonb, 'bad import', null, 'hq-import', false)", [
           JSON.stringify([{ type: "build", id: "BLD-FX-09", data: { id: "BLD-FX-09", hq_acceptance: { state: "accepted" } } }]),
         ]),
-      ).rejects.toMatchObject({ code: "HQ403" });
+      ).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(/build\/BLD-FX-09 carries HQ-recorded founder authority, which cannot be imported/) });
       await expect(
         client.query("select hq.admin_put_records($1::jsonb, 'bad import', null, 'hq-import', false)", [
           JSON.stringify([{ type: "decision", id: "FD-FX-09", data: { id: "FD-FX-09", recorded_in: "hq" } }]),
         ]),
-      ).rejects.toMatchObject({ code: "HQ403" });
+      ).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(/decision\/FD-FX-09 carries HQ-recorded founder authority/) });
+      // Even an acceptance marked "none" is HQ's own field: the import refuses the key itself, which the
+      // sealing trigger alone would let through (it only refuses a state other than "none").
+      const head = (await client.query<{ h: string }>("select hq.head_rev() as h")).rows[0].h;
+      await expect(
+        client.query("select hq.admin_put_records($1::jsonb, 'bad import', null, 'hq-import', false)", [
+          JSON.stringify([{ type: "build", id: "BLD-FX-09", data: { id: "BLD-FX-09", hq_acceptance: { state: "none", decision_id: "FD-HQ-0001" } } }]),
+        ]),
+      ).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(/carries HQ-recorded founder authority/) });
+      expect((await client.query<{ h: string }>("select hq.head_rev() as h")).rows[0].h).toBe(head);
+      expect((await client.query("select 1 from hq.record_versions where record_id in ('BLD-FX-09', 'FD-FX-09')")).rowCount).toBe(0);
     } finally {
       await client.end();
     }
@@ -197,6 +208,38 @@ describe("the founder's own decision path works, and is the only one that record
   it("accepting a build does not silently accept its module", async () => {
     const ctx = await getDataset(w.founder);
     expect(acceptanceStatus(ctx.ds, "module", "MOD-FX-ALPHA")).toMatchObject({ headline: "tested_not_accepted", recorded_in_hq: null });
+  });
+
+  it("tests-12: a recorded rejection or a cleared acceptance is never shown as acceptance", async () => {
+    // Stored through the real founder path, then read back through the real read model.
+    const result = await recordFounderDecision(w.founder, {
+      title: "Reject alpha-candidate-7; clear Alpha",
+      exact_text: "I reject alpha-candidate-7. Alpha has no acceptance from me.",
+      effects: [
+        { type: "set_acceptance", record_type: "build", record_id: "BLD-FX-01", state: "rejected" },
+        { type: "set_acceptance", record_type: "module", record_id: "MOD-FX-ALPHA", state: "none" },
+      ],
+    });
+    const ctx = await getDataset(w.founder);
+    expect(ctx.ds.get("build", "BLD-FX-01")!.data).toMatchObject({ hq_acceptance: { state: "rejected", decision_id: result.decision_id } });
+    expect(ctx.ds.get("module", "MOD-FX-ALPHA")!.data).toMatchObject({ hq_acceptance: { state: "none", decision_id: result.decision_id } });
+
+    const build = acceptanceStatus(ctx.ds, "build", "BLD-FX-01")!;
+    expect(build.recorded_in_hq).toMatchObject({ state: "rejected" });
+    expect(build).toMatchObject({ headline: "rejected_in_hq", label: "Founder rejected in HQ" });
+
+    const alpha = acceptanceStatus(ctx.ds, "module", "MOD-FX-ALPHA")!;
+    expect(alpha.recorded_in_hq).toMatchObject({ state: "none" });
+    expect(alpha.headline).not.toBe("accepted_in_hq");
+    expect(alpha.label).not.toBe("Founder acceptance recorded in HQ");
+    expect(alpha.caution).toContain(`Founder decision ${result.decision_id} cleared`);
+    const standing = moduleStanding(ctx.ds.get("module", "MOD-FX-ALPHA")!.data as ModuleRecord);
+    expect(standing.flags.acceptance_recorded_in_hq).toBe(false);
+    expect(standing.flags.rejected_in_hq).toBe(false);
+
+    const health = developmentHealth(ctx.ds);
+    expect(health.accepted_in_hq).toEqual([]);
+    expect(health.rejected_in_hq.map((i) => i.id)).toEqual(["BLD-FX-01"]);
   });
 
   it("an invalid decision changes nothing", async () => {

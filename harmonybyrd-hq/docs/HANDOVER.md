@@ -15,8 +15,8 @@ in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | Repository | the working repository this commission was given |
 | Branch | `claude/harmonybyrd-hq-command-centre-76pgaq` |
 | Folder | `harmonybyrd-hq/` (nothing outside this folder was changed) |
-| Application commit | `15681a3335d486b5b52fe950516151c9bad9cd31` — the revision the recorded test runs were made on |
-| Later commits on the branch | documentation and the generated test report only (see `git log -- harmonybyrd-hq`) |
+| Commit the recorded test runs were made on | named in [TEST-RESULTS.md](TEST-RESULTS.md) and [REPEATABILITY.md](REPEATABILITY.md) (“Source revision”) |
+| History | `git log -- harmonybyrd-hq`: the first delivery, then the fixes for the adversarial review ([REVIEW-FINDINGS.md](REVIEW-FINDINGS.md)) |
 | File checksums | [FILE-MANIFEST.sha256](FILE-MANIFEST.sha256) — SHA-256 of every file in the folder at hand-over |
 
 To produce a source package of exactly what is on the branch:
@@ -50,7 +50,7 @@ public, and the founder's documents were not authorised for publication, so ever
 | --- | --- | --- |
 | 1 | Runnable local application | this folder; `npm run setup && npm run dev` ([INSTALL.md](INSTALL.md)) |
 | 2 | Source code | `src/`, `scripts/`, `tests/` |
-| 3 | Database schema and migrations | `supabase/migrations/0001_foundation.sql` … `0004_security.sql` |
+| 3 | Database schema and migrations | `supabase/migrations/0001_foundation.sql` … `0006_write_path_audit_sessions.sql` |
 | 4 | Installation and operating documentation | [INSTALL.md](INSTALL.md), [../README.md](../README.md) |
 | 5 | Source inventory | In the application under *Sources*; `SOURCE-INVENTORY.md` in the private package |
 | 6 | Module and learning-loop explorers | In the application: *Modules*, *Learning loops* |
@@ -64,7 +64,8 @@ public, and the founder's documents were not authorised for publication, so ever
 | 14 | Recommendation for the next commission | `NEXT-COMMISSION.md` in the private package |
 
 Also: [ARCHITECTURE.md](ARCHITECTURE.md), [GOVERNANCE.md](GOVERNANCE.md), [SECURITY.md](SECURITY.md),
-[DECISIONS.md](DECISIONS.md), [PROGRESS-REGISTER.md](PROGRESS-REGISTER.md).
+[DECISIONS.md](DECISIONS.md), [PROGRESS-REGISTER.md](PROGRESS-REGISTER.md),
+[REVIEW-FINDINGS.md](REVIEW-FINDINGS.md) (the adversarial review and its fixes, generated).
 
 ## Verifying it yourself
 
@@ -85,15 +86,19 @@ npm run pack:verify -- data/packs/harmonybyrd-evidence   # every record, every q
 ## Recorded test run
 
 See [TEST-RESULTS.md](TEST-RESULTS.md) and [REPEATABILITY.md](REPEATABILITY.md). Both were made by the
-builder on the application commit above. Nobody else has re-run them, and a passing run is not an acceptance of HQ.
+builder, on the commit each names. Nobody else has re-run them, and a passing run is not an acceptance of HQ.
 
 ## What the next person needs to know first
 
 1. HQ's records come from an **evidence pack**. To change what HQ knows wholesale, build a new pack
-   and import it; to change one record, use a proposal. Never edit the database by hand — the
-   database will refuse most attempts, and the hash chain will show the rest.
-2. The rules that matter are in **`supabase/migrations/0002`–`0004`**, not in the screens. Read
-   [GOVERNANCE.md](GOVERNANCE.md) and the database tests before changing them.
+   and import it; to change one record, use a proposal. Never edit the database by hand. The
+   database refuses every write outside HQ's own write paths, but its owner or a superuser can
+   bypass that: `hq.verify_chain()` then shows deleted or rewritten versions through the revision
+   seals and the seal chain, and only a copy of the latest seal kept outside the database
+   (`hq.head_seal()`, shown on *Review items*) shows a rewrite of history and seals together.
+2. The rules that matter are in **`supabase/migrations/0002`–`0006`**, not in the screens. Read
+   [GOVERNANCE.md](GOVERNANCE.md) and the database tests before changing them. Each function a later
+   migration replaced carries a header listing its rules and the migration that added each.
 3. `src/lib/domain/derive.ts` is where every figure on every screen comes from. The screens, the
    REST API and the MCP tools all call it; change it once and all three change together.
 4. A migration that has been applied must not be edited: add a new one. The migration runner checks.

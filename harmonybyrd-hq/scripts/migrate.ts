@@ -27,7 +27,8 @@ export async function migrate(options: { reset?: boolean; adminUrl?: string; app
       const resettable = /^hq_(dev|test)(_[a-z0-9_]+)?$/.test(dbName) || process.env.HQ_ALLOW_RESET === "1";
       if (!resettable) {
         throw new Error(
-          `Refusing to reset database "${dbName}". Only hq_dev* / hq_test* databases are reset automatically; ` +
+          `Refusing to reset database "${dbName}". Only a database named hq_dev or hq_test, optionally followed by ` +
+            `"_" and lower-case letters, digits or underscores (for example hq_test_2), is reset automatically; ` +
             `set HQ_ALLOW_RESET=1 if you really mean it.`,
         );
       }
@@ -91,17 +92,31 @@ async function ensureAppLoginRole(client: import("pg").Client, appUrl: string, l
   if (/__GENERATED_[A-Z_]*__/.test(password)) {
     throw new Error("DATABASE_URL still contains the placeholder password from .env.example. Run `npm run setup` (it fills it in) or set a long random password.");
   }
-  const exists = (await client.query("select 1 from pg_roles where rolname = $1", [role])).rowCount;
   const literal = (await client.query<{ q: string }>("select quote_literal($1) as q", [password])).rows[0].q;
-  if (!exists) {
-    await client.query(`create role ${role} login noinherit password ${literal}`);
-    log(`created application login role ${role}`);
-  } else {
-    await client.query(`alter role ${role} login noinherit password ${literal}`);
-  }
-  await client.query(`grant anon, authenticated, hq_auth to ${role}`);
   const dbName = (await client.query<{ db: string }>("select current_database() as db")).rows[0].db;
-  await client.query(`grant connect on database "${dbName}" to ${role}`);
+  // Roles belong to the whole server, not to one database. Two migrations running at the same
+  // moment against different databases (for example two test databases) both touch this role, and
+  // PostgreSQL then refuses one of them ("tuple concurrently updated"). The statements are
+  // idempotent, so a refused attempt is simply tried again.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const exists = (await client.query("select 1 from pg_roles where rolname = $1", [role])).rowCount;
+      if (!exists) {
+        await client.query(`create role ${role} login noinherit password ${literal}`);
+        log(`created application login role ${role}`);
+      } else {
+        await client.query(`alter role ${role} login noinherit password ${literal}`);
+      }
+      await client.query(`grant anon, authenticated, hq_auth to ${role}`);
+      await client.query(`grant connect on database "${dbName}" to ${role}`);
+      return;
+    } catch (error) {
+      const e = error as { code?: string; message?: string };
+      const concurrent = e.code === "XX000" || e.code === "23505" || e.code === "42710" || /concurrently updated/.test(e.message ?? "");
+      if (!concurrent || attempt >= 8) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 40 * attempt + Math.floor(Math.random() * 60)));
+    }
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

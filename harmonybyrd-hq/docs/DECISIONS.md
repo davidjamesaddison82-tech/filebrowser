@@ -19,7 +19,7 @@ are open to review; none of them is a founder ruling.
 | 12 | One tool registry behind both REST and MCP | The two interfaces cannot drift apart | Separate handlers |
 | 13 | Stateless MCP over Streamable HTTP with JSON responses | Simplest correct server for request/response tools; no session state to secure | Stateful sessions with server-sent events |
 | 14 | Static bearer tokens now; OAuth 2.1 recommended as its own commission | Tokens are enough for a local prototype and for clients that accept a header. OAuth is a security-sensitive feature that deserves its own review and is only needed once a deployment is authorised | Implementing OAuth in this commission |
-| 15 | Own passphrase sign-in rather than Supabase Auth | No Supabase project. The session token uses the same claim shape, so moving to Supabase Auth is a contained change | Blocking on Supabase |
+| 15 | Own passphrase sign-in rather than Supabase Auth | No Supabase project. The session token uses the same core claims (`sub`, `role`), so moving to Supabase Auth is a contained change; since the review it also carries HQ's issuer and a session epoch, which Supabase tokens do not | Blocking on Supabase |
 | 16 | Read-only GitHub and Drive adapters that return failure values | The commission authorises preparation, not broader writes; an unavailable service must never break a page or be papered over | Write-capable integrations |
 | 17 | Evidence packs as files, built outside the application | Reading documents and turning them into cited records needs judgement and an audit trail; the application's job is to verify and hold the result | An upload-and-parse screen |
 | 18 | Keep the real evidence pack and source snapshots out of the repository | The working repository is public. The founder's documents are private and were not authorised for publication | Committing the pack |
@@ -28,3 +28,29 @@ are open to review; none of them is a founder ruling.
 | 21 | When two documents disagree about a module's state, show the more cautious reading and list the other | Never upgrade a status on the strength of the more optimistic source | Taking the latest, or the owner's |
 | 22 | Server-rendered pages with native disclosure elements and links; almost no client-side code | Fast, works without JavaScript for reading, nothing floating over content | A client-side single-page application |
 | 23 | Paging and folding for long registers | With real volumes (hundreds of items) an unpaged list is unusable; folding hides nothing permanently and always states the count | Infinite scroll |
+
+## Decisions made when fixing the adversarial review's findings
+
+Numbers 24 to 41 correspond to design decisions D1 to D18 of the fix stages; docs/REVIEW-FINDINGS.md
+lists the findings each one answers.
+
+| # | Decision | Reason | Alternative set aside |
+| --- | --- | --- | --- |
+| 24 | A proposal cannot assert what HQ did not check: its quotations are verified against source texts stored at import, HQ's own labels are refused, source labels need citations, and HQ-written fields are protected — at submission and again at acceptance (D1) | The inbox is where claims enter; a founder accepting in good faith must not turn a submitter's words into "verified" text | Trusting the founder's review to catch it |
+| 25 | A record carrying a founder acceptance or rejection cannot be changed by proposal; the decision stores the version it accepted (D2) | An acceptance binds to what was accepted, not to whatever the record later becomes | Carrying the acceptance over; marking it stale |
+| 26 | The write context is an owner-only table keyed by transaction, not a session setting, and versions go only into the open, latest revision (D3) | Any role that could set the setting could forge a founder act | Checking the setting more carefully |
+| 27 | Revision seals form a chain, and the latest seal is shown so the founder can keep a copy outside HQ (D4) | The database owner can rewrite history and seals together; only an outside copy shows it | Claiming the history is "verified" |
+| 28 | API roles cannot write the audit log directly; the application writes refusals through narrow wrappers, in their own transaction (D5) | A free-form writer let any token forge audit rows, and refusals inside the database roll their own record back | Auditing inside each refusing function (it cannot persist); a loopback connection (adds an extension and a credential) |
+| 29 | Proposal events follow a fixed order enforced by a trigger, and withdraw takes the same lock as review (D6) | Withdraw and accept could both succeed | Relying on the application to serialise them |
+| 30 | Sessions carry an epoch; signing out or a new passphrase increments it (D7) | Sign-out only deleted the cookie, so a copied cookie stayed valid for twelve hours | A list of revoked tokens |
+| 31 | Sign-in is delayed per name, never locked, and `X-Forwarded-For` is ignored unless a trusted proxy is declared (D8) | Keying on a client-supplied header let a guesser bypass the limit and let anyone lock the founder out | A hard lock-out per name and address |
+| 32 | Every JSON body is capped; each MCP batch message is answered on its own; query values are converted only as each tool declares (D9) | An unbounded body, one bad batch element or guessed types should not break other requests | Per-route limits |
+| 33 | Setup makes the secret-bearing files owner-only on every run (D10) | A file copied by hand was readable by everyone on the machine | Only setting permissions when setup creates the file |
+| 34 | Quotations need at least twelve characters and exact wording at least eight non-space characters after normalising; ids of the form `XX-HQ-n` are reserved; the import records which pack it was (D11) | A quotation of spaces matched any source; a pack could take ids HQ issues | Changing the normalisation itself |
+| 35 | Derived figures count only what a source supports or HQ's build checked; a rejection in HQ has its own standing; dates never break a page; inbox-origin records count as unverified (D12) | Several figures could be raised by an uncited claim or hide a rejection | Leaving the figures and adding warnings |
+| 36 | A founder decision may name only records that exist (D13) | A decision resolving a misspelt id would look complete and resolve nothing | Accepting free text |
+| 37 | A pinned screen keeps the pin on every link and shows a bar; screens that act on the present always show the latest and say so (D14) | Pinned pages mixed in the latest data and links silently left the pin | Pinning every screen, including the decision forms |
+| 38 | Fields only HQ's build writes are declared with exact types and cannot be proposed (D15) | Loose values crashed screens and could be set by proposal | Leaving them undeclared |
+| 39 | Screens render declared fields through type guards; a refused review in a second tab says why; bad addresses give 404 or 400, not 500 (D16) | A robust screen must not crash or stay silent on odd input | Error pages only |
+| 40 | Every tool returns the envelope and refuses arguments it does not take; live look-ups need a signed-in person, and Drive look-ups a listed file id (D17) | A silently ignored `rev` gave head data to a client that asked for a pinned revision; any token could make HQ query the founder's Drive | Documenting the exceptions only |
+| 41 | Setup fills placeholders in an existing `.env.local`, and the application refuses to start with a placeholder or short secret (D18) | The published placeholder could become the database password, and a short secret broke every sign-in | Telling people to replace them by hand |

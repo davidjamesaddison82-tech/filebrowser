@@ -418,7 +418,7 @@ const ChangeProposalInput = z.object({
   /** The dataset revision you read before writing this proposal. */
   base_rev: z.number().int().positive(),
   target: z
-    .object({
+    .strictObject({
       type: z.string(),
       id: z.string(),
       /** The version of the record you read. A proposal against an older version is refused as stale. */
@@ -723,7 +723,7 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
     const type = requireType(body.target.type);
     const target = { type, id: body.target.id };
     if (type === "decision") {
-      throw forbidden("Decision records are written only by a founder decision; they cannot be changed by proposal.");
+      await refuse(principal, target, forbidden("Decision records are written only by a founder decision; they cannot be changed by proposal."));
     }
     const protectedHere = [...PROPOSAL_PROTECTED_FIELDS, ...buildOnlyFieldsFor(type), ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : [])];
     const blocked = Object.keys(body.set).filter((key) => protectedHere.includes(key));
@@ -798,7 +798,7 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
   const type = requireType(create.record_type);
   const target = { type, id: null };
   if (!(CREATABLE_TYPES as readonly string[]).includes(type)) {
-    throw forbidden(`Records of type "${type}" cannot be created by proposal.`);
+    await refuse(principal, target, forbidden(`Records of type "${type}" cannot be created by proposal.`));
   }
   const blocked = Object.keys(create.record).filter(
     (key) => (PROPOSAL_PROTECTED_FIELDS.includes(key) && !CREATE_MAY_GIVE.includes(key)) || buildOnlyFieldsFor(type).includes(key),

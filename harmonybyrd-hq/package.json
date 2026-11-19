@@ -24,6 +24,7 @@
     "test:api": "vitest run --project api",
     "test:e2e": "playwright test --trace off",
     "test:repeat": "tsx scripts/repeatability.ts",
+    "test:mutation": "node tests/mutation/run.mjs",
     "test:all": "tsx scripts/run-all-tests.ts"
   },
   "dependencies": {

@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { claimsFor } from "@/lib/auth/principal";
 import { getEcosystemOverview, getModuleBrief, getRecord, reviewProposal, searchFounderRequirements, submitChangeProposal } from "@/lib/server/services";
-import { expectStatus, freshWorld, type TestWorld } from "../helpers/db";
+import { clearDatasetCache } from "@/lib/server/store";
+import { asAppRole, expectStatus, freshWorld, type TestWorld } from "../helpers/db";
 
 let w: TestWorld;
 beforeAll(async () => {
@@ -49,6 +51,31 @@ describe("AC5 — two independent clients retrieve the same pinned revision", ()
     expect(head.revision.content_hash).not.toBe(before.revision.content_hash);
     expect((head.data.record as { interpretation: string }).interpretation).toMatch(/modal dialogs/);
     expect(head.data.meta.version).toBe(2);
+  });
+
+  it("tests-4: a pinned read after a later write comes from the database, not from the in-process cache", async () => {
+    // The previous test warmed the cache with revision 1 and moved the head to 2. getDataset caches by
+    // (rev, stored seal), so without clearing it the pinned reads below would never reach hq.records_at.
+    clearDatasetCache();
+    const claude = await getRecord(w.claude, "requirement", "FR-FX-004", { rev: 1 });
+    clearDatasetCache();
+    const chatgpt = await getRecord(w.chatgpt, "requirement", "FR-FX-004", { rev: 1 });
+    for (const r of [claude, chatgpt]) {
+      expect(r.revision).toMatchObject({ rev: 1, pinned: true, head_rev: 2, is_head: false });
+      expect(r.data.meta).toMatchObject({ version: 1, rev: 1, origin: "seed_import" });
+      expect((r.data.record as { interpretation: string | null }).interpretation).toBeNull();
+    }
+    expect(JSON.stringify(claude.data)).toBe(JSON.stringify(chatgpt.data));
+    // The seal both clients were given is the stored one, and recomputing it from the stored
+    // records of revision 1 (as the API role, not the owner) gives the same value.
+    const recomputed = await asAppRole("authenticated", claimsFor(w.claude), async (c) =>
+      (await c.query<{ h: string }>("select hq.dataset_hash(1) as h")).rows[0].h,
+    );
+    expect(claude.revision.content_hash).toBe(recomputed);
+    // And the head, read fresh, has moved on.
+    clearDatasetCache();
+    const head = await getRecord(w.chatgpt, "requirement", "FR-FX-004");
+    expect(head.data.meta).toMatchObject({ version: 2, rev: 2, origin: "proposal_acceptance" });
   });
 
   it("search results at a pinned revision are identical for both clients", async () => {

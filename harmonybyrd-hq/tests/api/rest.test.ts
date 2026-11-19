@@ -162,6 +162,25 @@ describe("REST API — the proposal inbox and founder authority", () => {
     expect(status.body.data.headline).toBe("build_candidate");
   });
 
+  it("docs-11: a developer's token cannot review the developer's own proposal, and the proposal stays submitted", async () => {
+    const submitted = await api<{ proposal: { id: string } }>("/api/v1/tools/submit_change_proposal", {
+      token: w.tokens.developer,
+      body: { title: "Developer's own change", rationale: "Then tries to accept it.", base_rev: 1, target: { type: "requirement", id: "FR-FX-003", base_version: 1 }, set: { interpretation: "Mine." } },
+    });
+    expect(submitted.status).toBe(200);
+    const own = submitted.body.proposal.id;
+    for (const decision of ["accept", "reject", "needs_changes"]) {
+      const review = await api<ErrorBody>(`/api/v1/proposals/${own}/review`, { token: w.tokens.developer, body: { decision } });
+      expect(review.status, decision).toBe(403);
+      expect(review.body.error.message).toMatch(/Founder authority is required/);
+    }
+    const still = await api<{ proposal: { status: string } }>(`/api/v1/proposals/${own}`, { token: w.tokens.developer });
+    expect(still.body.proposal.status).toBe("submitted");
+    const record = await api<{ data: { record: { interpretation: unknown } }; revision: { rev: number } }>("/api/v1/tools/get_record?type=requirement&id=FR-FX-003", { token: w.tokens.developer });
+    expect(record.body.data.record.interpretation).toBeNull();
+    expect(record.body.revision.rev).toBe(1);
+  });
+
   it("a signed-in developer cannot review either", async () => {
     const res = await api<ErrorBody>(`/api/v1/proposals/${proposalId}/review`, { cookie: developerCookie, body: { decision: "accept" } });
     expect(res.status).toBe(403);
@@ -209,6 +228,24 @@ describe("REST API — the proposal inbox and founder authority", () => {
     expect(head.body.data.record.interpretation).toBe("No overlays.");
     const pinned = await api<{ data: { record: { interpretation: null } } }>("/api/v1/tools/get_record?type=requirement&id=FR-FX-004&rev=1", { token: w.tokens.chatgpt });
     expect(pinned.body.data.record.interpretation).toBeNull();
+  });
+
+  it("tests-4: AC5 over HTTP once the head has moved — both clients pinning revision 1 still get revision 1", async () => {
+    // Run after the acceptance above, so a server that ignored ?rev= would answer with revision 2.
+    type Pinned = { data: { record: { interpretation: string | null }; meta: { version: number; rev: number } }; revision: { rev: number; is_head: boolean; head_rev: number; pinned: boolean; content_hash: string } };
+    const path = "/api/v1/tools/get_record?type=requirement&id=FR-FX-004&rev=1";
+    const a = await api<Pinned>(path, { token: w.tokens.claude });
+    const b = await api<Pinned>(path, { token: w.tokens.chatgpt });
+    for (const res of [a, b]) {
+      expect(res.status).toBe(200);
+      expect(res.body.revision).toMatchObject({ rev: 1, is_head: false, head_rev: 2, pinned: true });
+      expect(res.body.data.meta).toMatchObject({ version: 1, rev: 1 });
+      expect(res.body.data.record.interpretation).toBeNull();
+    }
+    expect(JSON.stringify(a.body.data)).toBe(JSON.stringify(b.body.data));
+    expect(a.body.revision).toEqual(b.body.revision);
+    const overview = await api<{ revision: { rev: number; is_head: boolean; head_rev: number } }>("/api/v1/tools/get_ecosystem_overview?rev=1", { token: w.tokens.chatgpt });
+    expect(overview.body.revision).toMatchObject({ rev: 1, is_head: false, head_rev: 2 });
   });
 
   it("every denial above is in the audit log, attributed to the client that tried", async () => {

@@ -22,11 +22,11 @@ Built under commission **HB-HQ-P02-R1**.
 - **Development and evidence register** — commissions, builds, tests, defects, decisions, in an append-only, hash-chained history.
 - **Source inventory** — what was actually read (location, version, checksum, authority) and what is only named.
 - **Proposal inbox and founder decision centre** — anyone permitted may propose; only the founder, signed in as a person, can accept, reject or decide.
-- **One API for every client** — 18 tools, identical over REST and MCP, each answer stamped with the dataset revision it came from.
+- **One API for every client** — 18 tools, identical over REST and MCP. Every answer is stamped with the dataset revision it came from; every read tool except two can be pinned to an earlier revision (docs/API.md).
 
 Three rules are enforced by the database, not by convention:
 
-1. **Nothing without a source.** A record is imported only if every quotation in it is found, verbatim, in the snapshot of the document it cites.
+1. **Nothing without a source.** A record gets in only if every quotation in it is found, verbatim, in the snapshot of the document it cites. This is checked when a pack is imported and again for every proposal, when it is submitted and when the founder accepts it. A quotation must be at least twelve characters long once spacing is normalised.
 2. **Nothing is overwritten.** Every change is a new version; any earlier revision can be read exactly as it stood.
 3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing.
 
@@ -38,7 +38,7 @@ Requirements: Node.js 22.12 or later, PostgreSQL 16.
 cd harmonybyrd-hq
 npm install
 docker compose up -d        # or point .env.local at any PostgreSQL 16 server (see docs/INSTALL.md)
-npm run setup               # creates .env.local, migrates, creates identities, imports the pack
+npm run setup               # creates or completes .env.local, migrates, creates identities, imports the pack
 npm run dev                 # http://localhost:3210
 ```
 
@@ -55,9 +55,12 @@ pack is private and is delivered separately; put it at `data/packs/harmonybyrd-e
 ```bash
 npm run test:all       # type check, unit, database, build, HTTP (REST + MCP), browser
 npm run test:repeat    # run the suites twice from a clean database and compare every outcome
+npm run test:mutation  # remove one database protection at a time and check that a test notices
 ```
 
-Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md).
+Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md). An adversarial
+review, by reviewers who had not written the code, confirmed 71 defects by reproduction; each one,
+and what was done about it, is in [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) (generated).
 
 ## Documents
 
@@ -73,6 +76,7 @@ Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.m
 | [docs/TESTING.md](docs/TESTING.md) | What each suite proves, the acceptance checks, what is not tested |
 | [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | Generated report of the last run |
 | [docs/REPEATABILITY.md](docs/REPEATABILITY.md) | Generated report of the last run-twice comparison |
+| [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) | Generated report of the adversarial review: every finding and what was done |
 | [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) | Gaps, blocked integrations, limits |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Engineering decisions and their reasons |
 | [docs/PROGRESS-REGISTER.md](docs/PROGRESS-REGISTER.md) | What was done, in order, with evidence |

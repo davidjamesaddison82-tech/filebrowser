@@ -35,9 +35,9 @@ named — is in the application under *Sources*, and in the private findings rep
 | Claude (any application) | **Not connected** | Claude Code route untested; claude.ai/Desktop and the API need a public HTTPS deployment |
 | ChatGPT application | **Blocked** | OAuth 2.1 in HQ, and a public HTTPS deployment |
 | OpenAI Agents SDK / Responses API | Untested / blocked | See docs/CONNECTING-AI-CLIENTS.md |
-| GitHub | Adapter built; **not configured** | A token and the names of the real repositories. Only its failure handling is tested (no network was used in tests) |
-| Google Drive | Adapter built; **not configured** | An access token with read access to the governing documents. Only its failure handling is tested |
-| Supabase | **Not created** | The schema follows Supabase conventions and runs on plain PostgreSQL 16. No Supabase project exists; Supabase Auth is not wired in (HQ has its own sign-in) |
+| GitHub | Adapter built; **not configured** | A token and the names of the real repositories. Tested only with injected responses; no network was used in tests |
+| Google Drive | Adapter built; **not configured** | An access token with read access to the governing documents, and their file ids in `HQ_GOOGLE_DRIVE_FILE_IDS`. Tested only with injected responses and a stand-in server on the local machine |
+| Supabase | **Not created** | The schema follows Supabase conventions and runs on plain PostgreSQL 16. No Supabase project exists; Supabase Auth is not wired in (HQ has its own sign-in, and accepts only session tokens it issued itself). `service_role` can only read the schema, so imports must use the owner connection |
 | Docker Compose | **Untested** | `docker-compose.yml` is provided; Docker was not available in the build environment |
 
 ## Functional limits
@@ -56,6 +56,45 @@ named — is in the application under *Sources*, and in the private findings rep
 - **Accessibility** was considered (semantic headings, labels, keyboard reachability, contrast) but not audited with assistive technology.
 - **Browsers:** automated tests use Chromium only.
 - **Scale:** exercised with about 1,600 records. No load test.
+
+## Limits the adversarial review showed, not fixed
+
+The review's 71 findings and what was done about each are in docs/REVIEW-FINDINGS.md. These limits
+remain, by design or because fixing them was out of scope:
+
+- **The database owner or a superuser can bypass every rule** — disable triggers, rewrite rows, seals
+  and the seal chain together. `verify_chain` then still reports nothing. Only a copy of the latest
+  seal kept outside HQ shows the rewrite, and HQ has no screen that shows the stored seal of an
+  earlier revision (it takes SQL to compare an older copy). The seals of revisions that existed before
+  migration 0006 were computed when it ran, so they vouch for history only from then on.
+- **Refusals inside the database leave no audit record.** The application records refusals itself;
+  a caller that goes round it (for example straight to the database) is refused without a trace. If
+  writing an audit entry fails, the entry is lost and the request is answered anyway.
+- **One proposal rule is in the application only:** linked evidence, build and decision ids must
+  exist. A caller that goes straight to the database can still submit a dangling id; the founder sees
+  it when reviewing.
+- **A defect created through `submit_change_proposal`** can still set its own `reported_by` and
+  `reported_via`; `submit_defect_report` sets them from the caller.
+- **A pack** (not a proposal) can give a lifecycle dimension other than founder acceptance the basis
+  `verified` with no citation, and it counts towards the module's standing. Packs are built outside
+  the application and checked by the builder.
+- **Quotation length is counted differently** for characters outside the Basic Multilingual Plane
+  (for example emoji): the database counts each as one character, the application as two. A
+  quotation near the twelve-character minimum that contains them can pass one check and fail the other.
+- **Sign-in can be slowed**, not blocked: wrong attempts for a known name queue up and each waits up
+  to 8 seconds. If the database is unreachable at sign-out, only that browser's cookie is removed;
+  copies stay valid until they expire (twelve hours).
+- **Anyone who may propose can test whether a phrase occurs in a source** (that is what the
+  quotation check answers). Readers cannot.
+- **A client's well-formed `X-Request-Id`** is kept, so a client can reuse another request's id in
+  the audit log. The principal recorded is still correct.
+- **`verify_chain` called with no identity** sees no rows and so reports nothing. The application
+  always calls it as a signed-in principal.
+- **The automated suites exercise the tighter pack rules on the synthetic fixture only** (minimum
+  quotation length, ISO dates, typed build-only fields, reserved ids, the reported founder-acceptance
+  basis). The real pack was checked against them separately by the builder: it verifies with no
+  errors and imports under the new migrations (see the private findings report). A stored record
+  that fails the schema still loads, with an integrity warning.
 
 ## Quality of the evidence pack
 

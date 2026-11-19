@@ -196,6 +196,22 @@ describe("D6 / db-8 — withdraw_proposal checks the caller", () => {
     expect((await history(id)).events).toEqual(["submitted"]);
   });
 
+  it("a principal whose role was lowered to reader cannot withdraw a proposal it made before (HQ403)", async () => {
+    const id = await propose(w.developer, "FR-FX-001", "Role check.");
+    const client = await admin();
+    try {
+      await client.query("update hq.principals set app_role = 'reader' where handle = 'developer'");
+      await expect(asAppRole("authenticated", claimsFor(w.developer), (c) => c.query("select hq.withdraw_proposal($1)", [id]))).rejects.toMatchObject({
+        code: "HQ403",
+        message: expect.stringMatching(/role "reader" may not withdraw proposals/),
+      });
+    } finally {
+      await client.query("update hq.principals set app_role = 'developer' where handle = 'developer'");
+      await client.end();
+    }
+    expect((await history(id)).events).toEqual(["submitted"]);
+  });
+
   it("another principal cannot withdraw it (HQ404), and the submitter still can", async () => {
     const id = await propose(w.claude, "FR-FX-002", "Ownership check.");
     for (const who of [w.chatgpt, w.developer]) {

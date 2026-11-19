@@ -32,9 +32,17 @@ A missing, unknown, revoked or expired token gets `401` with `WWW-Authenticate: 
 }
 ```
 
+Every tool answers with this envelope, the three inbox tools and `list_my_proposals` included.
+
 - `revision` says exactly which dataset revision the answer was computed from.
-- Pass `rev` to any read tool to **pin** a revision. Two clients that pin the same revision receive identical `data`.
+- Pass `rev` to a read tool to **pin** a revision. Two clients that pin the same revision receive
+  identical `data`. Every read tool takes `rev` except `get_recent_changes` and `list_my_proposals`,
+  which always answer at the latest revision. A `rev` beyond the latest revision is `404`.
 - `provenance.sources` lists the sources the returned records cite, with checksums.
+- The inbox tools and `list_my_proposals` answer at the latest revision. Their result is in `data`
+  and, for clients written before the envelope, also at the top level (`proposal`, `status`, `note`;
+  `proposals`).
+- `search_records` returns `total` (every match), `returned`, `truncated` and at most 60 `hits`.
 
 ## Errors
 
@@ -42,17 +50,24 @@ A missing, unknown, revoked or expired token gets `401` with `WWW-Authenticate: 
 { "error": { "code": "forbidden", "message": "…", "detail": { }, "request_id": "…" } }
 ```
 
-| Status | Meaning |
-| --- | --- |
-| 400 | Malformed request |
-| 401 | No valid identity |
-| 403 | Identity is valid but may not do this (also: cross-site request refused) |
-| 404 | No such record, tool or proposal — or a proposal that is not yours |
-| 409 | Conflict: the proposal is stale — its target changed after the proposal was written |
-| 422 | The input is invalid, or a proposal tries to set a protected field |
-| 503 | The database is unavailable. HQ does not answer from memory |
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 400 | `invalid_json` | The body is not a JSON object |
+| 401 | `unauthenticated` | No valid identity |
+| 403 | `forbidden` | Identity is valid but may not do this. Includes a proposal that sets a protected or build-only field, uses one of HQ's own labels, or tries to change or create a decision record (`detail.protected_fields` lists the fields), and a cross-site request |
+| 404 | `not_found` | No such record, tool, revision or proposal — or a proposal that is not yours |
+| 409 | `conflict` | The proposal is stale (its target changed after it was written); its target carries a founder acceptance or rejection recorded in HQ (`detail.acceptance`); or the proposal is already closed |
+| 413 | `payload_too_large` | The body is larger than `HQ_MAX_BODY_BYTES` (default 1,048,576 bytes; `detail.max_bytes`) |
+| 422 | `invalid_request` | The input is invalid. Includes an argument the tool does not take, a quotation that cannot be verified (`detail.unverified_quotations`: `index`, `source_id`, `reason` — `no_text`, `too_short` or `not_found` — and `message`), a linked id that does not exist (`detail.unknown_links`), and a founder decision naming records that do not exist (`detail.problems`) |
+| 503 | `service_unavailable` | The database is unavailable. HQ does not answer from memory |
 
-Refusals (401, 403) are written to the audit log.
+The rules behind the 403, 409 and 422 refusals of a proposal are in docs/GOVERNANCE.md.
+
+Refusals with 401 and 403, and refused proposals, are written to the audit log.
+
+**Request ids.** A client may send `X-Request-Id` to correlate its calls. HQ uses it (in the
+response header, the error body and the audit log) only if it is 1–64 characters of letters, digits,
+`.`, `_` and `-`; otherwise HQ generates one. The MCP endpoint always generates its own.
 
 ## REST
 
@@ -62,14 +77,32 @@ Refusals (401, 403) are written to the audit log.
 | `GET /api/v1/whoami` | Your identity and what you may do | any identity |
 | `GET /api/v1/health` | Liveness and database reachability. No records | none |
 | `GET /api/v1/tools` | The tools, with JSON Schemas for their arguments | read |
-| `GET /api/v1/tools/<name>?arg=value` | Call a **read** tool. Arguments as query parameters | read |
+| `GET /api/v1/tools/<name>?arg=value` | Call a **read** tool. Arguments as query parameters (see below) | read |
 | `POST /api/v1/tools/<name>` | Call any tool. Arguments as a JSON body | read, or propose for the three inbox tools |
 | `GET /api/v1/proposals/<id>` | One proposal, if it is yours (or you are the founder) | read |
-| `GET /api/v1/integrations` | Status of the optional GitHub and Drive adapters | read |
+| `GET /api/v1/integrations` | Status of the optional GitHub and Drive adapters, and live look-ups (see below) | read |
 | `POST /api/v1/proposals/<id>/review` | Accept, reject or ask for changes | **founder session only** |
 | `POST /api/v1/decisions` | Record a founder decision | **founder session only** |
 
 The last two refuse every bearer token with `403`, whoever it belongs to.
+
+**Query arguments.** A query value is converted only as the tool's input schema declares that
+argument: `true` or `false` for a true/false argument, a decimal number for a number argument,
+comma-separated values for a list argument. Everything else stays text, so
+`search_records?query=false` searches for the word “false”.
+
+**Integrations.** `GET /api/v1/integrations` returns whether each adapter is configured
+(`google_drive.allowed_file_ids` is the number of listed files). With query parameters it also makes
+a read-only look-up:
+
+- `?github=<owner>/<name>&ref=<branch, tag or commit>[&path=<file>]` — only for a repository listed in `HQ_GITHUB_REPOSITORIES`;
+- `?drive_file=<file id>` — only for a file id listed in `HQ_GOOGLE_DRIVE_FILE_IDS` (otherwise `not_configured`).
+
+Look-ups are made only for a founder or developer signed in to HQ. Any other caller, every API token
+included, receives `lookup: { "ok": false, "reason": "forbidden" }`, and HQ sends nothing outward.
+
+**Body size.** Every JSON body, REST and MCP, is limited to `HQ_MAX_BODY_BYTES` (default 1,048,576
+bytes). A larger body is refused with `413`.
 
 Example:
 
@@ -83,7 +116,10 @@ curl -s -H "Authorization: Bearer $HQ_TOKEN" -H "Content-Type: application/json"
 
 ## Tools
 
-Arguments marked * are required. Every read tool also accepts `rev`.
+Arguments marked * are required. Every read tool except `get_recent_changes` and
+`list_my_proposals` also accepts `rev`. A tool refuses any argument it does not take, with `422` and
+the message `<tool> does not take the argument "<name>".` This includes unknown keys inside
+`submit_change_proposal`'s `target`.
 
 ### Read (15)
 
@@ -94,28 +130,32 @@ Arguments marked * are required. Every read tool also accepts `rev`.
 | `list_learning_loops` | — | All loops against the shared progression, stage coverage, cross-module pathways |
 | `get_learning_loop` | `loop_id`* | One loop in full, in its source's own steps |
 | `search_founder_requirements` | `query`, `module`, `category`, `disposition`, `implementation_state`, `source_id`, `outstanding` | Requirements with durable ids and exact original wording |
-| `find_outstanding_requirements` | `module` | Requirements with no implementation record, test evidence or founder disposition; modules with no source; documents HQ could not read |
+| `find_outstanding_requirements` | `module` | Requirements with no implementation record, verified test evidence or founder disposition; modules with no source; documents HQ could not read. Only linked evidence that a source reports or HQ's build checked counts (`has_linked_evidence`); `test_evidence` gives the verified, unverified and missing ids |
 | `get_acceptance_status` | `type`*, `id`* | Proposal / prototype / tested / accepted, kept apart; acceptance reported in a source versus recorded in HQ |
 | `get_source_lineage` | `type`*, `id`* | Sources cited (location, version, checksum, authority), exact quotations, version history with hash chain, what refers to it |
 | `get_development_dependencies` | `type`*, `id`* | What it depends on, what depends on it, what blocks it |
 | `get_record` | `type`*, `id`* | Any record exactly as stored, with its version history |
-| `search_records` | `query`*, `types` | Full-text search across all record types |
+| `search_records` | `query`*, `types` | Full-text search across all record types: the true `total`, and at most 60 hits (`truncated` says whether there were more) |
 | `list_sources` | — | The source-access inventory, including documents named but not read |
 | `get_review_items` | — | Conflicts, possible duplicates, acceptance without an instrument, unverified claims, dangling references |
-| `get_recent_changes` | `limit` | Dataset revisions: what, when, why, by whom, under which commission |
-| `list_my_proposals` | `status` | The caller's own proposals and their review notes |
+| `get_recent_changes` | `limit` | Dataset revisions: what, when, why, by whom, under which commission. Not pinnable |
+| `list_my_proposals` | `status` | The caller's own proposals and their review notes, in `data.proposals`. Not pinnable |
 
 ### Add to the inbox (3) — need the `propose` scope
 
 | Tool | Arguments | Effect |
 | --- | --- | --- |
-| `submit_change_proposal` | `title`*, `rationale`*, `base_rev`*, and either `target` + `set` (change a record) or `create` (new record); `kind`, `evidence`, `idempotency_key` | A proposal in the inbox. Changes nothing until the founder accepts it |
+| `submit_change_proposal` | `title`*, `rationale`*, `base_rev`*, and either `target` (`type`, `id`, `base_version`) + `set` (change a record) or `create` (`record_type`, `record`) (new record); `kind`, `evidence`, `idempotency_key` | A proposal in the inbox. Changes nothing until the founder accepts it |
 | `submit_defect_report` | `title`*, `description`*, `module_ids`*, `base_rev`*; `build_id`, `severity`, `evidence`, `idempotency_key` | A proposed defect record |
 | `record_test_evidence` | `title`*, `result_summary`*, `base_rev`*; `type`, `module_ids`, `build_id`, `code_ref`, `counts`, `artifact_sha256`, `date`, `idempotency_key` | Proposed evidence, permanently labelled as an unverified submission |
 
 `base_rev` is the dataset revision you read before writing. For a change to an existing record,
-`target` also carries the record `version` you read. If the record has changed since, the proposal
-is refused as stale when it is submitted, or marked stale when it is reviewed — never merged silently.
+`target` is `{ "type": …, "id": …, "base_version": … }`, where `base_version` is the record version
+you read. If the record has changed since, the proposal is refused as stale when it is submitted
+(`409`), or marked stale when it is reviewed — never merged silently.
+
+What a proposal may contain — verified quotations, which labels it may use, which fields it cannot
+set — is in docs/GOVERNANCE.md, “What a proposal may assert”.
 
 `idempotency_key` makes a retry safe: a second submission by the same client with the same key
 returns the first proposal (marked `idempotent_replay`) instead of creating another.
@@ -134,7 +174,19 @@ conflicts); issuing or revoking credentials. These exist only in the founder's s
 - Stateless: no session id, no server-initiated stream. `GET` and `DELETE` return `405`.
 - `tools/list` shows a client only the tools its token may call: a read-only token is not shown the three inbox tools.
 - A tool result has `content` (the envelope as JSON text) and `structuredContent` (the envelope as an object).
-  A refusal is returned as a tool result with `isError: true`, carrying the same error code and message as REST.
+- A refusal raised while running a tool the credential may call — invalid arguments, a stale
+  target version, a protected field, an unverifiable quotation, a database refusal — is a tool result with
+  `isError: true`, carrying the same `{ "error": { code, status, message, detail } }` as REST.
+- Calling a tool the credential may not call is a JSON-RPC error `-32602`
+  (“Tool "<name>" is not available to this credential: it needs the "<scope>" scope…”), with
+  `error.data` `{ "code": "forbidden", "status": 403, "required_scope": … }`. An unknown tool is
+  `-32602` with `error.data` `{ "code": "not_found", "status": 404 }`. `params` and `arguments` that
+  are not objects are `-32602`.
+- A batch holds 1 to 50 messages, and each is answered on its own: a message that is not a valid
+  JSON-RPC request gets its own `-32600` error (with `id: null` if it has no valid id), and an
+  internal failure of one message gets `-32603` for that message; the others still run. An empty or
+  over-long batch is `-32600` with HTTP 400.
+- A body over `HQ_MAX_BODY_BYTES` is HTTP 413 with a `-32600` error whose `data.code` is `payload_too_large`.
 - A browser request from another origin is refused.
 
 ```bash

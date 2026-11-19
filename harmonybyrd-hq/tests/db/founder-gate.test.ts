@@ -6,8 +6,8 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 import { claimsFor } from "@/lib/auth/principal";
-import { submitChangeProposal } from "@/lib/server/services";
-import { admin, asAppRole, freshWorld, type TestWorld, worldState } from "../helpers/db";
+import { PROPOSAL_PROTECTED_FIELDS, submitChangeProposal } from "@/lib/server/services";
+import { admin, asAppRole, expectStatus, freshWorld, type TestWorld, worldState } from "../helpers/db";
 
 let w: TestWorld;
 let proposal: string;
@@ -71,6 +71,15 @@ describe("tests-1 — the database refuses founder acts from non-founder interac
   });
 });
 
+async function protectedFieldsFromDatabase(): Promise<string[]> {
+  const client = await admin();
+  try {
+    return (await client.query<{ f: string }>("select unnest(hq.protected_fields()) as f")).rows.map((r) => r.f);
+  } finally {
+    await client.end();
+  }
+}
+
 describe("tests-6 — submit_proposal's own role, scope, protected-field and stale checks", () => {
   const submit = (claims: object, payload: object, baseVersion = 1, type = "requirement", id = "FR-FX-002") =>
     asAppRole("authenticated", claims, (c) =>
@@ -103,6 +112,58 @@ describe("tests-6 — submit_proposal's own role, scope, protected-field and sta
     expect(await worldState()).toEqual(before);
   });
 
+  it("on create, every protected field outside the provenance allow-list is refused (HQ403)", async () => {
+    // A created record may state where it comes from (source_id, locator, source_date, attribution,
+    // exact_wording); every other protected field is HQ's or the founder's to write.
+    const fields = await protectedFieldsFromDatabase();
+    const mayGive = ["exact_wording", "source_id", "locator", "source_date", "attribution"];
+    const refused = fields.filter((f) => !mayGive.includes(f));
+    expect(refused.length).toBe(fields.length - mayGive.length);
+    const before = await worldState();
+    for (const field of refused) {
+      await expect(
+        submit(claimsFor(w.claude), { op: "create", record_type: "evidence", record: { title: "A test run", type: "test_run", [field]: "x" } }, 0, "evidence", "EV-FX-01"),
+        field,
+      ).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(new RegExp(`field "${field}" is protected`)) });
+    }
+    expect(await worldState()).toEqual(before);
+  });
+
+  it("a top-level source label set on a record that cites nothing is refused by the database (HQ422)", async () => {
+    // The fixture's PATH-FX-01 and LOOP-FX-02 carry no citations, so "reported" would be an unsourced claim.
+    // Only the merged-record check in hq._validate_against_target sees this: the payload alone has no citations key.
+    const before = await worldState();
+    await expect(submit(claimsFor(w.claude), { op: "update", set: { basis: "reported" } }, 1, "pathway", "PATH-FX-01")).rejects.toMatchObject({
+      code: "HQ422",
+      message: expect.stringMatching(/a "reported" statement must cite at least one source \(field "basis"\)/),
+    });
+    await expect(submit(claimsFor(w.developer), { op: "update", set: { standing: "reported" } }, 1, "loop", "LOOP-FX-02")).rejects.toMatchObject({
+      code: "HQ422",
+      message: expect.stringMatching(/field "standing"/),
+    });
+    expect(await worldState()).toEqual(before);
+  });
+
+  it("a created requirement whose exact wording has fewer than 8 visible characters is refused, even if the source contains it (HQ422)", async () => {
+    const before = await worldState();
+    await expect(
+      submit(claimsFor(w.claude), { op: "create", record_type: "requirement", record: { title: "Tempo", exact_wording: " tempo ", source_id: "SRC-F01", locator: "Alpha module" } }, 0, "requirement", null as unknown as string),
+    ).rejects.toMatchObject({ code: "HQ422", message: expect.stringMatching(/exact_wording quoting SRC-F01 has fewer than 8 characters other than spaces/) });
+    expect(await worldState()).toEqual(before);
+  });
+
+  it("a citation without a verbatim quote, or with a source id that is not text, is refused by the database (HQ422)", async () => {
+    // Such a citation would otherwise skip the quotation check, which only looks at {source_id, quote} pairs.
+    const before = await worldState();
+    for (const citation of [{ source_id: "SRC-F01", locator: "Alpha module" }, { source_id: 7, quote: "Alpha lets a learner practise a scale pattern slowly" }, "SRC-F01"]) {
+      await expect(
+        submit(claimsFor(w.claude), { op: "update", set: { statement: { text: "A sourced reading.", epistemic: "reported", citations: [citation] } } }, 1, "module", "MOD-FX-ALPHA"),
+        JSON.stringify(citation),
+      ).rejects.toMatchObject({ code: "HQ422", message: expect.stringMatching(/each citation needs a source_id and a verbatim quote/) });
+    }
+    expect(await worldState()).toEqual(before);
+  });
+
   it("a reader, a token without the propose scope and a stale base version are refused, and nothing is written", async () => {
     const before = await worldState();
     await expect(submit(claimsFor(w.reader), valid)).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(/role "reader" may not submit proposals/) });
@@ -112,5 +173,31 @@ describe("tests-6 — submit_proposal's own role, scope, protected-field and sta
     expect(await worldState()).toEqual(before);
     // The valid call itself is accepted into the inbox.
     expect((await submit(claimsFor(w.claude), valid)).rows[0].submit_proposal).toMatchObject({ status: "submitted" });
+  });
+});
+
+describe("docs-11 — every protected field is refused through the application too, and the two lists agree", () => {
+  it("the application's protected list is exactly the database's", async () => {
+    expect([...PROPOSAL_PROTECTED_FIELDS].sort()).toEqual((await protectedFieldsFromDatabase()).sort());
+  });
+
+  it("a proposal setting any protected field is refused with 403 by the service, on update and on create, and nothing is written", async () => {
+    const before = await worldState();
+    const base = { title: "Set a protected field", rationale: "Testing every protected field.", base_rev: 1 };
+    const mayGive = ["exact_wording", "source_id", "locator", "source_date", "attribution"];
+    for (const field of PROPOSAL_PROTECTED_FIELDS) {
+      const err = await expectStatus(
+        submitChangeProposal(w.claude, { ...base, target: { type: "requirement", id: "FR-FX-002", base_version: 1 }, set: { [field]: "x" } }),
+        403,
+      );
+      expect(err.message, field).toMatch(new RegExp(`Protected fields cannot be changed by a proposal: ${field}\\.`));
+      if (mayGive.includes(field)) continue;
+      const created = await expectStatus(
+        submitChangeProposal(w.developer, { ...base, create: { record_type: "evidence", record: { title: "A test run", type: "test_run", [field]: "x" } } }),
+        403,
+      );
+      expect(created.message, field).toMatch(new RegExp(`Protected fields cannot be set by a proposal: ${field}\\.`));
+    }
+    expect(await worldState()).toEqual(before);
   });
 });

@@ -148,6 +148,44 @@ describe("D3 — the sealing trigger no longer trusts a setting, and sealed revi
     expect(await sealsHold()).toBe(true);
   });
 
+  it("Rule 0: a version cannot go into a revision that is no longer the latest, even the one this transaction opened", async () => {
+    await expect(
+      ownerTx(async (c) => {
+        const rev = Number((await c.query<{ r: string }>("select hq._begin_revision('seed_import', 'Rule 0 case', null, $1) as r", [ids["hq-import"]])).rows[0].r);
+        // A later revision appears (only the owner can do this, by inserting the row itself).
+        await c.query("insert into hq.dataset_revisions (rev, parent_rev, kind, summary, created_by) values ($1, $2, 'seed_import', 'Later', $3)", [rev + 1, rev, ids["hq-import"]]);
+        return c.query("select hq._append_record('open_item', 'OPEN-FX-R0', '{\"id\":\"OPEN-FX-R0\"}'::jsonb, false, $1, $2, 'seed_import', null)", [rev, ids["hq-import"]]);
+      }),
+    ).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(/dataset revision \d+ is not the latest revision/) });
+  });
+
+  it("Rule 0: a record's new version can never go into an earlier revision than its previous version", async () => {
+    await expect(
+      ownerTx(async (c) => {
+        // Plant a version in a far later revision with every trigger and foreign key off (superuser only),
+        // then write the same record normally: the new version would land before the planted one.
+        await c.query("set local session_replication_role = replica");
+        await c.query(
+          `insert into hq.record_versions (record_type, record_id, version, rev, data, content_hash, row_hash, created_by, origin)
+           values ('open_item', 'OPEN-FX-RG', 1, 999, '{"id":"OPEN-FX-RG"}', '', '', $1, 'seed_import')`,
+          [ids["hq-import"]],
+        );
+        await c.query("set local session_replication_role = origin");
+        const rev = (await c.query<{ r: string }>("select hq._begin_revision('seed_import', 'Regression case', null, $1) as r", [ids["hq-import"]])).rows[0].r;
+        return c.query("select hq._append_record('open_item', 'OPEN-FX-RG', '{\"id\":\"OPEN-FX-RG\"}'::jsonb, false, $1, $2, 'seed_import', null)", [rev, ids["hq-import"]]);
+      }),
+    ).rejects.toMatchObject({ code: "HQ403", message: expect.stringMatching(/already has a version in revision 999; a new version cannot go into earlier revision/) });
+  });
+
+  it("a version's data.id must be its record id", async () => {
+    await expect(
+      ownerTx(async (c) => {
+        const rev = (await c.query<{ r: string }>("select hq._begin_revision('seed_import', 'Id case', null, $1) as r", [ids["hq-import"]])).rows[0].r;
+        return c.query("select hq._append_record('open_item', 'OPEN-FX-ID', '{\"id\":\"OPEN-FX-OTHER\"}'::jsonb, false, $1, $2, 'seed_import', null)", [rev, ids["hq-import"]]);
+      }),
+    ).rejects.toMatchObject({ code: "HQ422", message: expect.stringMatching(/record data.id \(OPEN-FX-OTHER\) must equal record_id \(OPEN-FX-ID\)/) });
+  });
+
   it("Rule 1: an origin is refused unless this transaction opened a revision for it", async () => {
     const cases: [string, string, string, RegExp][] = [
       ["seed_import", "hq-import", "founder_decision", /founder_decision records can only be written by hq.record_founder_decision/],

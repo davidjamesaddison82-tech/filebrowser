@@ -240,7 +240,7 @@ export const TOOLS: ToolDefinition[] = [
       rationale: z.string().min(3).max(8000).describe("Why the change is right, and what supports it."),
       base_rev: z.number().int().positive().describe("The dataset revision you read."),
       target: z
-        .object({ type: recordType, id: z.string(), base_version: z.number().int().positive().describe("The record version you read.") })
+        .strictObject({ type: recordType, id: z.string(), base_version: z.number().int().positive().describe("The record version you read.") })
         .optional(),
       set: z.record(z.string(), z.unknown()).optional().describe("Top-level fields to replace on the target record."),
       create: z.strictObject({ record_type: recordType, record: z.record(z.string(), z.unknown()) }).optional(),

@@ -63,8 +63,13 @@ test.describe("navigation and controls (acceptance check 10)", () => {
       await expect(page.getByRole("heading", { level: 1 })).not.toBeEmpty();
       const figure = Number(/^\d+/.exec(tile.text)?.[0] ?? "NaN");
       expect(Number.isNaN(figure), `tile "${tile.text.slice(0, 40)}" starts with its figure`).toBe(false);
-      // The list page states the same figure the tile showed.
-      await expect(page.locator("main")).toContainText(new RegExp(`\\b${figure}\\b`));
+      // tests-12: the list page's own count heading states exactly the tile's figure (not just any
+      // number somewhere on the page), and lists that many entries (a long list is paged).
+      await expect(page.locator("main .card-head h2").first(), tile.href).toHaveText(`${figure} ${figure === 1 ? "item" : "items"}`);
+      const listed = await page.locator("main .card ul.list > li").count();
+      if ((await page.locator("main .pager-top").count()) === 0) expect(listed, `${tile.href}: entries listed`).toBe(figure);
+      else expect(listed, `${tile.href}: a first page of entries`).toBeLessThan(figure);
+      if (figure === 0) await expect(page.locator("main")).toContainText("Nothing falls under this heading");
     }
   });
 
@@ -73,8 +78,20 @@ test.describe("navigation and controls (acceptance check 10)", () => {
     await expect(page.locator("main")).toContainText("Tested — not accepted");
     await expect(page.locator("main")).toContainText(/Passing tests are not founder acceptance/i);
     await page.goto("/");
-    await expect(page.locator("main")).toContainText("Founder acceptance recorded in HQ");
-    await expect(page.locator("main")).toContainText("Tested, not accepted");
+    // tests-12: not just that both labels appear — Alpha is counted under "tested, not accepted" and
+    // nowhere as accepted. Nothing in the fixture carries an HQ acceptance, so that figure is 0.
+    const tile = (key: string) => page.locator(`main a.tile[href="/health/${key}"]`);
+    await expect(tile("accepted_in_hq").locator(".n")).toHaveText("0");
+    await expect(tile("accepted_in_hq")).toContainText("Founder acceptance recorded in HQ");
+    const tested = Number(await tile("tested_not_accepted").locator(".n").textContent());
+    expect(tested).toBeGreaterThanOrEqual(1);
+    await tile("accepted_in_hq").click();
+    await expect(page).toHaveURL(/\/health\/accepted_in_hq$/);
+    await expect(page.locator("main")).not.toContainText("MOD-FX-ALPHA");
+    await expect(page.locator("main")).toContainText("Nothing falls under this heading");
+    await page.goto("/health/tested_not_accepted");
+    await expect(page.locator('main a[href="/modules/MOD-FX-ALPHA"]').first()).toBeVisible();
+    await expect(page.locator("main .card-head h2").first()).toHaveText(`${tested} ${tested === 1 ? "item" : "items"}`);
   });
 
   test("the dashboard has its five areas, and priorities are labelled as recommendations, not approvals", async ({ page }) => {
@@ -164,7 +181,8 @@ test.describe("navigation and controls (acceptance check 10)", () => {
     }
   });
 
-  test("an unknown record is a clear 'not found', not a blank screen", async ({ page }) => {
+  test("an unknown record is a clear 'not found', not a blank screen", async ({ page, allowResourceStatuses }) => {
+    allowResourceStatuses(404); // the page itself is the expected refusal
     const response = await page.goto("/modules/MOD-DOES-NOT-EXIST");
     expect(response?.status()).toBe(404);
   });
@@ -175,7 +193,8 @@ test.describe("pinned revisions and addresses that do not exist (ui-7, D14, D16)
     await signIn(page, "founder");
   });
 
-  test("a revision that does not exist or is not a number gives the 404 page, never a 500 or the latest", async ({ page }) => {
+  test("a revision that does not exist or is not a number gives the 404 page, never a 500 or the latest", async ({ page, allowResourceStatuses }) => {
+    allowResourceStatuses(404); // each page below is the expected refusal
     for (const path of ["/?rev=99", "/?rev=1e9", "/?rev=abc", "/?rev=0", "/?rev=-1", "/?rev=1.5", "/modules/MOD-FX-ALPHA?rev=99", "/records/source/SRC-F01?rev=99"]) {
       const response = await page.goto(path);
       expect(response?.status(), path).toBe(404);

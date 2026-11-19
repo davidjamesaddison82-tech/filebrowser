@@ -116,6 +116,37 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
       }),
       409,
     );
+    // The database binds a rejection on its own too, at submission and in the sealing trigger.
+    const before = await worldState();
+    const version = await versionOf("module", "MOD-FX-BETA");
+    const headRev = await head();
+    await expect(
+      asAppRole("authenticated", claimsFor(w.developer), (c) =>
+        c.query("select hq.submit_proposal('change_proposal', 'module', 'MOD-FX-BETA', $1, $2, 'Direct', 'Direct probe.', $3::jsonb)", [
+          version,
+          headRev,
+          JSON.stringify({ op: "update", set: { summary: "Reworded." } }),
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "HQ409", message: expect.stringMatching(/MOD-FX-BETA carries a founder acceptance recorded in HQ/) });
+    const client = await admin();
+    try {
+      await client.query("begin");
+      const founderId = (await client.query<{ id: string }>("select id from hq.principals where handle = 'founder'")).rows[0].id;
+      const rev = (await client.query<{ r: string }>("select hq._begin_revision('proposal_acceptance', 'Forged write', null, $1) as r", [founderId])).rows[0].r;
+      const current = (await client.query<{ data: Record<string, unknown> }>("select data from hq.record_versions where record_id = 'MOD-FX-BETA' order by version desc limit 1")).rows[0].data;
+      await expect(
+        client.query("select hq._append_record('module', 'MOD-FX-BETA', $1::jsonb, false, $2, $3, 'proposal_acceptance', null)", [
+          JSON.stringify({ ...current, summary: "Reworded." }),
+          rev,
+          founderId,
+        ]),
+      ).rejects.toMatchObject({ code: "HQ409", message: expect.stringMatching(/only a founder decision can change it/) });
+    } finally {
+      await client.query("rollback").catch(() => undefined);
+      await client.end();
+    }
+    expect(await worldState()).toEqual(before);
   });
 
   it("the sealing trigger refuses a non-founder write that keeps the acceptance over changed content", async () => {

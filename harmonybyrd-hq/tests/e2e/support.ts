@@ -80,24 +80,66 @@ export async function headRevision(page: Page): Promise<number> {
   return body.revision.rev;
 }
 
+/** The browser's console text for a sub-resource or document that came back with an HTTP error. */
+const FAILED_RESOURCE = /Failed to load resource: the server responded with a status of (\d{3})/;
+
 /**
- * `test` with a guard: any uncaught page error or console error fails the test,
- * so a screen that "works" while throwing in the background does not pass.
+ * `test` with a guard: any uncaught page error, any console error, and any response from HQ itself
+ * with status 400 or above fails the test, so a screen that "works" while throwing, or while one of
+ * its own requests is refused or missing, does not pass.
+ *
+ * A test that deliberately makes the browser load something HQ refuses (a 404 page, a 403 action)
+ * says so, for exactly the statuses it expects, and asserts on the refusal itself:
+ *   test.use({ allowedResourceStatuses: [404] })   // for every test in a describe block or file
+ *   allowResourceStatuses(404)                      // inside one test, before the request
+ * Nothing else is allowed. 5xx answers and failed requests are never allowed: the browser reports
+ * them as console errors, and this guard counts every console error.
+ *
+ * Requests made with page.request (the API client) are not browser loads and are not watched;
+ * tests that use it assert on the status directly.
  */
-export const test = base.extend<{ problems: string[] }>({
+export const test = base.extend<{
+  allowedResourceStatuses: number[];
+  allowResourceStatuses: (...statuses: number[]) => void;
+  allowedThisTest: Set<number>;
+  problems: string[];
+}>({
+  allowedResourceStatuses: [[], { option: true }],
+  // A fresh set per test, so one test's allowance never leaks into the next.
+  allowedThisTest: async ({ allowedResourceStatuses }, use) => {
+    await use(new Set(allowedResourceStatuses));
+  },
+  allowResourceStatuses: async ({ allowedThisTest }, use) => {
+    await use((...statuses) => {
+      for (const status of statuses) {
+        if (status >= 500) throw new Error(`a ${status} answer is never an expected refusal`);
+        allowedThisTest.add(status);
+      }
+    });
+  },
   problems: [
-    async ({ page }, use) => {
+    async ({ page, allowedThisTest, baseURL }, use) => {
       const problems: string[] = [];
+      const allowed = (status: number) => status < 500 && allowedThisTest.has(status);
+      const origin = baseURL ? new URL(baseURL).origin : null;
       page.on("pageerror", (error) => problems.push(`page error: ${error.message}`));
       page.on("console", (message) => {
         if (message.type() !== "error") return;
         const text = message.text();
-        // A refused request is reported by the browser as a console error; tests that expect a refusal assert on it directly.
-        if (/Failed to load resource: the server responded with a status of (401|403|404|409|422)/.test(text)) return;
+        const status = FAILED_RESOURCE.exec(text);
+        if (status && allowed(Number(status[1]))) return;
         problems.push(`console error: ${text}`);
       });
+      // The console message does not name the URL; this does. Only HQ's own answers are judged here.
+      page.on("response", (response) => {
+        const status = response.status();
+        if (status < 400 || allowed(status)) return;
+        const url = new URL(response.url());
+        if (origin && url.origin !== origin) return;
+        problems.push(`HTTP ${status} from ${url.pathname}${url.search}`);
+      });
       await use(problems);
-      expect(problems, "the page must not log errors").toEqual([]);
+      expect(problems, "the page must not log errors or receive unexpected refusals").toEqual([]);
     },
     { auto: true },
   ],

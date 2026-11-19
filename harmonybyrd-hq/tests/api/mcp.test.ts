@@ -205,6 +205,32 @@ describe("MCP — proposals are isolated and revision-aware", () => {
   });
 });
 
+describe("MCP — AC5 once the head has moved (tests-4)", () => {
+  it("both clients pinning revision 1 get revision 1, not the head, from every pinnable read tool", async () => {
+    // Runs after the acceptance above, so the head is past revision 1 and an ignored rev would show.
+    const head = ((await call(claude, "get_ecosystem_overview", {})).structuredContent as { revision: { rev: number } }).revision.rev;
+    expect(head).toBeGreaterThan(1);
+    for (const [tool, args] of [
+      ["get_ecosystem_overview", { rev: 1 }],
+      ["get_module_brief", { module: "MOD-FX-BETA", rev: 1 }],
+      ["search_founder_requirements", { query: "score", rev: 1 }],
+      ["get_learning_loop", { loop_id: "LOOP-FX-01", rev: 1 }],
+      ["get_source_lineage", { type: "build", id: "BLD-FX-02", rev: 1 }],
+      ["find_outstanding_requirements", { rev: 1 }],
+      ["get_record", { type: "requirement", id: "FR-FX-002", rev: 1 }],
+    ] as const) {
+      const a = (await call(claude, tool, args)).structuredContent as { data: unknown; revision: { rev: number; is_head: boolean; head_rev: number } };
+      const b = (await call(chatgpt, tool, args)).structuredContent as typeof a;
+      expect(a.revision, tool).toMatchObject({ rev: 1, is_head: false, head_rev: head });
+      expect(JSON.stringify(a.data), tool).toBe(JSON.stringify(b.data));
+      expect(a.revision).toEqual(b.revision);
+    }
+    const record = (await call(chatgpt, "get_record", { type: "requirement", id: "FR-FX-002", rev: 1 })).structuredContent as { data: { record: { interpretation: unknown }; meta: { version: number } } };
+    expect(record.data.record.interpretation).toBeNull();
+    expect(record.data.meta.version).toBe(1);
+  });
+});
+
 describe("MCP — protocol details (raw HTTP)", () => {
   const post = (body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${TEST_BASE_URL}/api/mcp`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${w.tokens.claude}`, ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) });

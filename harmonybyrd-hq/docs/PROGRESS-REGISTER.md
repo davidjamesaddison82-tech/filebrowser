@@ -62,11 +62,22 @@ Status words: **done** (built and checked as described), **partial**, **blocked*
 | Found by | Defect | Fix |
 | --- | --- | --- |
 | Database suite | A decision recorded in HQ failed its own schema (label needing a citation, none given) | Label corrected in migration 0003 |
-| Browser suite | The sign-in throttle counted successful sign-ins and could lock out normal use | Count failures only; clear on success |
+| Browser suite | The sign-in throttle counted successful sign-ins and could lock out normal use | Count failures only; clear on success (later replaced by a per-name delay with no lock-out; see below) |
 | Browser suite | After acceptance the proposal page lost its confirmation and showed the new value as “before” | The page shows the recorded outcome and the true earlier value |
 | Browser suite | The token form's input pattern was invalid and ignored by the browser | Pattern corrected |
 | Real-data check | With real volumes, registers were tens of thousands of pixels long, the module map was unreadable, and one page scrolled sideways | Paging, folding, a map that shows connections on demand, wrapping of long identifiers |
 | Real-data check | The dashboard counted inspected-but-empty repositories and un-ingested artefacts as “sources read” | Count only sources with a text snapshot |
+
+## Adversarial review and fixes
+
+| Step | Status | Evidence |
+| --- | --- | --- |
+| Adversarial review: seven reviewers who had not written HQ, one lens each (database governance; sign-in, sessions and API; evidence integrity; honesty of derived figures; screens; documentation; tests), each in its own database; every finding then checked by a second reviewer trying to refute it | **done** — 71 findings confirmed by reproduction, none refuted | docs/REVIEW-FINDINGS.md (generated) |
+| Fix stage 1 — database rules: what a proposal may assert (verified quotations, labels, protected and build-only fields), acceptance binding, reserved ids, decision references; the write path, seal chain, audit-log wrappers, proposal state order, session epochs; evidence-pack rules and derived figures | **done** | `supabase/migrations/0005_proposal_evidence_rules.sql`, `0006_write_path_audit_sessions.sql`; `src/lib/domain/`; `tests/db/proposal-evidence-rules.test.ts`, `acceptance-binding.test.ts`, `write-path.test.ts`, `chain-verification.test.ts`, `proposal-states.test.ts`, `audit-log.test.ts`, `sessions.test.ts`, `founder-gate.test.ts`, `setup-files.test.ts`; `tests/unit/schemas.test.ts`, `derive-honesty.test.ts`, `pack.test.ts` |
+| Fix stage 2 — sign-in, sessions, HTTP and MCP, screens: delay instead of lock-out, safe redirect, ending sessions, body cap, batch handling, strict tool arguments, look-up limits, start-up check; pinned-revision bar and links, type guards, inbox-origin marking, acceptance lock, rejected standing, seal on *Review items* | **done** | `src/lib/auth/`, `src/lib/server/`, `src/app/`, `src/components/`, `src/lib/ui/`; `tests/unit/sign-in.test.ts`, `http.test.ts`, `ui-screens.test.ts`; `tests/api/hardening.test.ts`, `sessions.test.ts`, `server-config.test.ts`; new tests in `tests/e2e/01-auth`, `02-navigation`, `05-governance` |
+| Fix stage 3 — tests that would have stayed green with their protection deleted; documentation | **done** for the documentation (this register, docs/GOVERNANCE.md, SECURITY.md, API.md, ARCHITECTURE.md, INSTALL.md, KNOWN-GAPS.md, DECISIONS.md 24–41, FOUNDER-GUIDE.md, TESTING.md) | docs/REVIEW-FINDINGS.md for the test changes |
+| Re-run of every suite after the fixes | see the generated reports | docs/TEST-RESULTS.md; docs/REPEATABILITY.md |
+| Limits the review showed that were not fixed | **recorded** | docs/KNOWN-GAPS.md, “Limits the adversarial review showed, not fixed” |
 
 ## Interruptions
 
