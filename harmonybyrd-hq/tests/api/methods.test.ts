@@ -118,3 +118,48 @@ describe("every API route answers every method with a request id (H8)", () => {
     }
   });
 });
+
+describe("ROUND5 K8 (Z11): methods outside the seven standard ones", () => {
+  const OTHER = ["PROPFIND", "QUERY", "SEARCH", "LINK", "PURGE", "M-SEARCH", "MKCOL"];
+  const { port } = new URL(TEST_BASE_URL);
+
+  /** One request over a raw socket: fetch cannot send these methods. */
+  async function raw(method: string, url: string): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+    const net = await import("node:net");
+    const text = await new Promise<string>((resolve) => {
+      const socket = net.connect(Number(port), "127.0.0.1");
+      let got = "";
+      socket.on("connect", () => socket.write(`${method} ${url} HTTP/1.1\r\nhost: 127.0.0.1:${port}\r\nconnection: close\r\n\r\n`));
+      socket.on("data", (d) => (got += d));
+      socket.on("close", () => resolve(got));
+      socket.on("error", () => resolve(got));
+      socket.setTimeout(15_000, () => socket.destroy());
+    });
+    const [head, ...rest] = text.split("\r\n\r\n");
+    const lines = head.split("\r\n");
+    const headers = Object.fromEntries(lines.slice(1).map((l) => [l.slice(0, l.indexOf(":")).toLowerCase(), l.slice(l.indexOf(":") + 1).trim()]));
+    return { status: Number(lines[0].split(" ")[1]), headers, body: rest.join("\r\n\r\n") };
+  }
+
+  it.each(ROUTES.filter((r) => r.url !== HEALTH).map((r) => [r.file, r.url]))("%s: 405 with the route's Allow and a fresh request id", async (_file, url) => {
+    const allow = (await send("OPTIONS", url)).headers.get("allow");
+    const ids = new Set<string>();
+    for (const method of OTHER) {
+      const res = await raw(method, url);
+      expect(res.status, `${method} ${url}`).toBe(405);
+      expect(res.headers.allow, `${method} ${url}`).toBe(allow);
+      expect(res.headers["x-request-id"] ?? "", `${method} ${url}`).toMatch(UUID);
+      ids.add(res.headers["x-request-id"]);
+      if (url !== "/api/mcp") expect(res.body).toContain(res.headers["x-request-id"]);
+    }
+    expect(ids.size).toBe(OTHER.length);
+  });
+
+  it("the proxy's table of Allow headers is the routes' own", async () => {
+    const { allowFor } = await import("@/proxy");
+    for (const route of ROUTES) {
+      if (route.url === HEALTH) expect(allowFor(route.url)).toBeNull();
+      else expect(allowFor(route.url), route.url).toBe((await send("OPTIONS", route.url)).headers.get("allow"));
+    }
+  });
+});

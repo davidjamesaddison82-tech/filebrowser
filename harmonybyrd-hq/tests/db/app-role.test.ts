@@ -17,6 +17,10 @@ import { TEST_ADMIN_URL, TEST_DATABASE } from "../helpers/env";
 const ROLE = `${TEST_DATABASE}_approle`.slice(0, 63);
 const DB_A = `${TEST_DATABASE}_role_a`.slice(0, 63);
 const DB_B = `${TEST_DATABASE}_role_b`.slice(0, 63);
+/** ROUND5 K8: a role of this test's own, given attributes HQ's application role must not have. */
+const ODD_ROLE = `${TEST_DATABASE}_oddrole`.slice(0, 63);
+const DB_C = `${TEST_DATABASE}_role_c`.slice(0, 63);
+const ODD_PASSWORD = "odd-role-password-0123456789";
 const PASSWORD_A = "first-installation-password-0123456789";
 const PASSWORD_B = "second-installation-password-0123456789";
 const REFUSAL = new RegExp(
@@ -79,8 +83,9 @@ const mayConnect = (database: string) =>
 
 async function cleanUp() {
   await asOwner(async (c) => {
-    for (const db of [DB_A, DB_B]) await c.query(`drop database if exists "${db}" with (force)`);
+    for (const db of [DB_A, DB_B, DB_C]) await c.query(`drop database if exists "${db}" with (force)`);
     await c.query(`drop role if exists ${ROLE}`);
+    await c.query(`drop role if exists ${ODD_ROLE}`);
   });
 }
 
@@ -88,7 +93,7 @@ beforeAll(async () => {
   await cleanUp();
   await asOwner(async (c) => {
     // Neither database lets PUBLIC connect, so the connect grant made by migration is what lets the role in.
-    for (const db of [DB_A, DB_B]) {
+    for (const db of [DB_A, DB_B, DB_C]) {
       await c.query(`create database "${db}"`);
       await c.query(`revoke connect on database "${db}" from public`);
     }
@@ -161,5 +166,53 @@ describe("the application role is server-wide: an existing one is never silently
     expect(await signsIn(DB_A, PASSWORD_B)).toBe(true);
     expect(await signsIn(DB_A, PASSWORD_A)).toBe(false);
     expect(await mayConnect(DB_B)).toBe(true);
+  }, 180_000);
+});
+
+describe("ROUND5 K8 (Z13) — an existing role with an attribute HQ's application role must not have is refused, naming it", () => {
+  const oddUrl = (database: string) => at(TEST_ADMIN_URL, database, ODD_ROLE, ODD_PASSWORD);
+  const attributes = () =>
+    asOwner(async (c) =>
+      (
+        await c.query<{ rolsuper: boolean; rolbypassrls: boolean; rolcreaterole: boolean; rolcreatedb: boolean; rolinherit: boolean; rolcanlogin: boolean }>(
+          "select rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolinherit, rolcanlogin from pg_roles where rolname = $1",
+          [ODD_ROLE],
+        )
+      ).rows[0],
+    );
+  const make = (attrs: string) =>
+    asOwner(async (c) => {
+      await c.query(`drop role if exists ${ODD_ROLE}`);
+      await c.query(`create role ${ODD_ROLE} ${attrs} password '${ODD_PASSWORD}'`);
+    });
+
+  for (const [attrs, named] of [
+    ["superuser login inherit", /is SUPERUSER, INHERIT\./],
+    ["login noinherit bypassrls", /is BYPASSRLS\./],
+    ["login noinherit createrole", /is CREATEROLE\./],
+    ["login noinherit createdb", /is CREATEDB\./],
+    ["login inherit", /is INHERIT\./],
+    ["nologin noinherit", /is NOLOGIN\./],
+  ] as const) {
+    it(`a role created "${attrs}" is refused before anything is applied, and keeps its attributes`, async () => {
+      await make(attrs);
+      const before = await attributes();
+      await expect(migrate({ adminUrl: adminUrl(DB_C), appUrl: oddUrl(DB_C), quiet: true })).rejects.toThrow(named);
+      await expect(migrate({ adminUrl: adminUrl(DB_C), appUrl: oddUrl(DB_C), quiet: true })).rejects.toThrow(/HQ's application role must not be a superuser/);
+      expect(await attributes()).toEqual(before);
+      expect(await migrationsIn(DB_C)).toBe(0);
+    }, 120_000);
+  }
+
+  it("with HQ_ALLOW_ROLE_PASSWORD_CHANGE=1, migration sets it to LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB", async () => {
+    await make("superuser createdb createrole bypassrls inherit nologin");
+    process.env.HQ_ALLOW_ROLE_PASSWORD_CHANGE = "1";
+    try {
+      await migrate({ adminUrl: adminUrl(DB_C), appUrl: oddUrl(DB_C), quiet: true });
+    } finally {
+      delete process.env.HQ_ALLOW_ROLE_PASSWORD_CHANGE;
+    }
+    expect(await attributes()).toEqual({ rolsuper: false, rolbypassrls: false, rolcreaterole: false, rolcreatedb: false, rolinherit: false, rolcanlogin: true });
+    expect(await migrationsIn(DB_C)).toBeGreaterThan(0);
   }, 180_000);
 });

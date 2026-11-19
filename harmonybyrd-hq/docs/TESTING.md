@@ -77,7 +77,9 @@ attempt is refused *and* nothing changed. Examples:
   levels down in a list, on reworded text that keeps the label, and on a withdrawal of a reported
   acceptance that rewrites the statement; a change to evidence a source reports (retitled, moved,
   relinked) or to a source HQ has read; a requirement made implemented and tested, or a tested one
-  relinked; a field its record type does not have (`"hq_acceptance "`, `Standing`, a 1 MB key, a key
+  relinked (ROUND5: also retitled, moved or given other code, in `tests/db/round5-claims.test.ts`,
+  with the loops and pathways a source describes, what identifies a build, and a module's evidence
+  level); a field its record type does not have (`"hq_acceptance "`, `Standing`, a 1 MB key, a key
   of another type); and “Not a valid value” anywhere in it. Each is tried four ways: through the
   application as an AI client and as a developer, straight at `hq.submit_proposal`, and planted in
   the inbox and then accepted through the application (with the same `detail.rule` and `detail.field`
@@ -338,6 +340,63 @@ purpose. None was weakened.
 - `tests/api/sign-in.test.ts`: 500 sign-ins with over-long names no longer write 500 rows: at most
   120 a minute are written in full and a summary row counts the rest, and the test checks that every
   one of the 500 is accounted for.
+- `tests/api/hardening.test.ts`, the outstanding-requirements test: proposing `implemented_tested`
+  with linked evidence for FR-FX-003 was accepted (200); it is now refused (403, `detail.rule`
+  `tested_claim`, `detail.field` `implementation_state`), and the test goes on with
+  `implemented_unverified`, after which the requirement is still outstanding. (This entry was left out
+  when the fourth round's changes were first listed.)
+
+## Expectations changed in the fifth round
+
+After the re-check of the fourth round, these expectations changed because the behaviour changed on
+purpose (ROUND5 K1–K8). None was weakened; each case that used a field that is now protected goes on
+with one that is not, and the refusal is tested in `tests/db/round5-claims.test.ts`.
+
+- `tests/db/proposal-claims.test.ts`: “L6: an imported pathway keeps commission_example, and a change
+  elsewhere in it is accepted” is now refused (403, `source_label`, field `basis`) and goes through
+  only once the proposal relabels the pathway `submitter_claim` (K1); “H3: a tested requirement can
+  be retitled, and its links resent unchanged” is now refused (403, `tested_claim`, field `title`)
+  and goes through once the proposal moves it to `implemented_unverified` (K2); the two cases that
+  change a tested requirement's links now expect the message of K2's freeze, with the same rule and
+  field; the module created in “a record of every type a proposal may create” now has
+  `evidence_level` `commission_list_only`, not `named_only` (K4).
+- `tests/db/acceptance-claims.test.ts`: a reported build given a checksum, or pointed at another
+  source as its artifact, is now refused as a protected field (K3), before the freeze of a reported
+  build is reached; the two cases are listed as K3 and expect that message. The proposal that moves a
+  build on before a stale acceptance now changes its label, not its file name.
+- `tests/db/acceptance-binding.test.ts`: the proposals on an accepted, then cleared, build change
+  its label only, not its file name or checksum (K3), so the acceptance is what is tested.
+- `tests/db/proposal-evidence-rules.test.ts`: the created module whose lifecycle reports a founder
+  acceptance now carries `evidence_level` `commission_list_only`, so the acceptance rule is what
+  answers (K4); the review-screen test no longer submits a checksum change on a build (K3) and checks
+  that a planted one is still flagged as sensitive.
+- `tests/db/proposal-states.test.ts`: the withdrawal test proposes on FR-FX-004, not on the tested
+  FR-FX-001 (K2).
+- `tests/unit/conform.test.ts`: a recommendation stamped “Proposed through the inbox by claude”
+  reads “This recommendation was proposed through the inbox by claude.” (K5).
+- `tests/unit/audit-limit.test.ts`: a summary now also says what the refusals it held back named
+  (`objectIds`, `clientAddresses`, empty in that case) (K7).
+- `tests/e2e/07-odd-values.spec.ts`, the named cases: in the lists (a module's builds, the
+  register's builds, evidence and defects, the requirement list) a record that fails validation now
+  reads “Not counted — cannot be read” where it read “Not a valid value”; the module whose lifecycle
+  holds a number now shows every dimension as not counted (twelve rows, no state dot), and its
+  lifecycle-matrix row is marked *Not reliable* with every cell not counted, where one cell read
+  “Not a valid value” (K6). The proposals opened while odd records are stored now change FR-FX-002,
+  not the tested FR-FX-001 (K2).
+
+The fifth round's own tests: `tests/db/round5-claims.test.ts` (K1–K4 four ways each, the honest
+changes each rule leaves open, and a second clear straight at the database, K5);
+`tests/db/app-role.test.ts` (an existing role that is a superuser, bypasses row-level security, may
+create roles or databases, inherits, or cannot log in, K8); `tests/unit/round5.test.ts` (the
+verifiers' counter-examples of K6, the propose form's sentence, the inbox module's notes and the
+well-formed text helpers); the property in `tests/unit/conform.test.ts`, which now also compares the
+module brief's lists with positive labels, the open defects beside them, the order of the
+priorities, the lifecycle matrix row and the figures of a module that fails validation;
+`tests/unit/audit-limit.test.ts` and `tests/unit/sign-in.test.ts` (K7); `tests/api/audit-volume.test.ts`
+(125 refused sign-ins for unknown names, then 4 for a real account, all 4 written, K7);
+`tests/api/echo-bounds.test.ts` (the JSON-RPC id, the search query and a lone surrogate, K8);
+`tests/api/methods.test.ts` (methods outside the seven, K8); `tests/e2e/07-odd-values.spec.ts`
+(“ROUND5 K6”: the lists, counts, lifecycle view, lifecycle matrix and priorities on the screens).
 
 ## Every file the application needs is in the repository
 
@@ -373,8 +432,9 @@ archive).
   looked through and never reported (opacity 0.01 is reported), and text that a `clip-path` cuts away
   is not checked.
 - **Where it measures.** Each screen is measured at the top, part-way down (every 0.8 window heights,
-  at most ten positions, spread evenly on a longer page) and scrolled to its end, and each covering
-  says where it was seen (`top`, `middle at N px`, `end`). Each kind has a
+  at most ten positions, spread evenly on a longer page) and scrolled to its end, and, for each sticky
+  element, where it is stuck; each covering says where it was seen (`top`, `middle at N px`, `where a
+  sticky element is stuck, at N px`, `end`). Each kind has a
   test in `03b-layout-detector.spec.ts` that first shows the overlay hides text and then that the
   detector names it; a clean control with decorative pseudo-elements, a raised badge, a transform
   that moves nothing and a closed quotation must report nothing. What it still cannot see is listed
@@ -410,6 +470,12 @@ clear; the “Not a valid value” check removed; `hq.log_access` accepting any 
 object, or a tool name added; the freeze's own validity test loosened; the `epistemic` check cut to
 one level; and the record type in a refusal left uncut. The mutations of the rules 0009 replaced
 (`ml2_label_needs_citation`, `ml5_merged_citation`, `mg2a…`, `mg2b…`) are gone, as their rules are.
+Migration 0010's rules have them too (the `mk…` entries): the freeze of a loop or pathway a source
+describes removed, narrowed to the source labels, or opened by any relabel; the freeze of a tested
+requirement removed (and `mh3b_tested_links`, whose 0009 rule 0010 replaced, now narrows that freeze
+back to the links); what identifies a build unprotected, or its artifact source left out; a module's
+evidence level unprotected, the created module's level unchecked or allowed to be `named_only`; and a
+second clear allowed straight at the database.
 
 A full run (no mutation named) writes `tests/mutation/RESULTS.txt`. Its first line names the code it
 ran against: the commit (`git rev-parse HEAD`, followed by “with uncommitted changes” when

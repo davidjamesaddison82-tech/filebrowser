@@ -8,8 +8,10 @@
  * so the flood does not use up another test's budget either.
  */
 import { beforeAll, describe, expect, it } from "vitest";
+import { ensurePrincipal, setPassphrase } from "../../scripts/lib/principals";
 import { admin, freshWorld, type TestWorld } from "../helpers/db";
 import { TEST_BASE_URL } from "../helpers/env";
+import { postSignIn } from "../helpers/http";
 
 let w: TestWorld;
 beforeAll(async () => {
@@ -20,7 +22,14 @@ interface Row {
   id: string;
   request_id: string | null;
   principal_id: string | null;
-  detail: { reason?: string; summary?: boolean; not_written?: number } | null;
+  object_id: string | null;
+  detail: {
+    reason?: string;
+    summary?: boolean;
+    not_written?: number;
+    held_back_object_ids?: { first: string[]; distinct: number };
+    held_back_client_addresses?: { first: string[]; distinct: number };
+  } | null;
   minute: string;
 }
 
@@ -29,7 +38,7 @@ async function rowsAfter(id: string, action: string): Promise<Row[]> {
   try {
     return (
       await client.query<Row>(
-        "select id::text, request_id, principal_id::text, detail, to_char(date_trunc('minute', at), 'HH24:MI') as minute from hq.audit_log where id > $1::bigint and action = $2 order by hq.audit_log.id",
+        "select id::text, request_id, principal_id::text, object_id, detail, to_char(date_trunc('minute', at), 'HH24:MI') as minute from hq.audit_log where id > $1::bigint and action = $2 order by hq.audit_log.id",
         [id, action],
       )
     ).rows;
@@ -113,4 +122,39 @@ describe("refusal rows of callers without a valid identity are bounded (H7)", ()
     expect(rows).toHaveLength(200);
     expect(rows.every((r) => r.principal_id === w.claudeReadOnly.id && !r.detail?.summary)).toBe(true);
   }, 60_000);
+});
+
+describe("ROUND5 K7 — the limiter hides nothing aimed at a real account", () => {
+  it("after 125 refused sign-ins for names that do not exist, 4 wrong passphrases for a real account in the same minute are all written; the summary names what it held back", async () => {
+    const client = await admin();
+    try {
+      // An account of this test's own, so the failures throttle no other test's sign-in.
+      const { id } = await ensurePrincipal(client, { handle: "r5target", displayName: "Round 5 probe", kind: "human", appRole: "reader" });
+      await setPassphrase(client, id, "r5-target-passphrase-0123");
+    } finally {
+      await client.end();
+    }
+    if (Date.now() % 60_000 > 30_000) await new Promise((r) => setTimeout(r, untilNextMinute()));
+    const from = await lastId();
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: 6 }, async () => {
+        while (next < 125) {
+          next += 1;
+          await postSignIn(`nobody${next}`, "wrong");
+        }
+      }),
+    );
+    for (let i = 0; i < 4; i += 1) await postSignIn("r5target", `wrong-${i}`);
+    const during = await rowsAfter(from, "session.sign_in");
+    expect(during.filter((r) => r.object_id === "r5target")).toHaveLength(4);
+    const written = during.filter((r) => r.object_id?.startsWith("nobody")).length;
+    expect(written).toBeLessThanOrEqual(120);
+
+    await new Promise((r) => setTimeout(r, untilNextMinute()));
+    const summary = (await rowsAfter(from, "session.sign_in")).find((r) => r.detail?.summary === true);
+    // Each held-back refusal named a different name, so there are as many distinct names as refusals not written.
+    expect(summary?.detail).toMatchObject({ reason: "no_match", not_written: 125 - written, held_back_object_ids: { distinct: 125 - written } });
+    expect(summary!.detail!.held_back_object_ids!.first.every((name) => name.startsWith("nobody"))).toBe(true);
+  }, 180_000);
 });

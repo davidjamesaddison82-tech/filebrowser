@@ -2,10 +2,11 @@
 
 This describes what the build does and what was tested. It is not an external security review; none
 has been done. An adversarial review found 71 defects, which were then fixed in rounds; each of
-the first three rounds was re-checked by verifiers who re-ran the attacks. The reviewers, the engineers who made the fixes and
+the first four rounds was re-checked by verifiers who re-ran the attacks. The reviewers, the engineers who made the fixes and
 the verifiers were all AI agents of the same build process, not independent people. The re-check of
-the third round (migration 0008) found no high-severity defect; a fourth round (migration 0009) fixed
-what it found and has not yet been re-checked. See docs/REVIEW-FINDINGS.md, docs/PROGRESS-REGISTER.md,
+the third round (migration 0008) found no high-severity defect, and nor did the re-check of the
+fourth round (migration 0009); a fifth and last round (migration 0010) fixed what it found and was
+not re-checked by anyone. See docs/REVIEW-FINDINGS.md, docs/PROGRESS-REGISTER.md,
 and docs/KNOWN-GAPS.md for what remains.
 
 ## Boundaries the commission set, and how the build kept them
@@ -29,7 +30,12 @@ place that asserts identity, so its password is a secret on a par with the sessi
 role belongs to the whole PostgreSQL server, not to one database. Migration and setup therefore never
 change the password of a role that already exists, unless told to with
 `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1`: they stop instead, so a second installation on the same server
-cannot take over the first one's role (docs/INSTALL.md). The owner connection is used only by scripts.
+cannot take over the first one's role (docs/INSTALL.md). They also stop when the role that already
+exists is a superuser, bypasses row-level security, may create roles or databases, inherits the
+privileges of the roles granted to it (`INHERIT`), or cannot log in, and the message names the
+attribute; with `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` migration sets it to `LOGIN NOINHERIT NOSUPERUSER
+NOBYPASSRLS NOCREATEROLE NOCREATEDB` instead. A role migration creates has those attributes from the
+start. The owner connection is used only by scripts.
 
 **Server-side enforcement.** The rules in docs/GOVERNANCE.md are enforced in PostgreSQL (the one
 exception is marked there): row-level security for what can be read, `SECURITY DEFINER` functions
@@ -55,7 +61,7 @@ every function then in schema `hq`, reading the list from the catalogue so that 
 does not change PostgreSQL's default privileges, so a function created later **is** executable by
 PUBLIC (and so by `service_role`) until its own migration revokes it. Every migration must therefore
 revoke EXECUTE from PUBLIC for each function it creates and grant it only to the roles that need it;
-migrations 0008 and 0009 do so for each function they create or replace, and revoke every API role's
+migrations 0008, 0009 and 0010 do so for each function they create or replace, and revoke every API role's
 access to the tables they add. `tests/db/service-role.test.ts`
 reads the catalogue and fails if any function in schema `hq` is executable by PUBLIC.
 Imports run on the owner connection.
@@ -170,18 +176,41 @@ the caller, the action and the outcome. The log is append-only and readable only
   `reason`, else its `code`, cut to 40 characters), at most 120 refusals a minute are written in
   full. The rest are counted, and when the minute ends one summary row is written under the same
   action, outcome *denied*, with no request id and a detail `{ summary: true, reason, not_written,
-  minute_start }`. At most 100 action and reason pairs are counted in a minute; further pairs share
-  one counter, summarised under the action `audit.other_refusals`. Rows of a signed-in caller, and
-  every allowed row, are always written. The bound is per server process (two processes each write
-  their own 120), counts are lost if the process stops before the minute ends, and once a minute's
-  120 are written, the row for a particular refused request may not be there to find by its request
-  id. A caller that reaches the database directly is not bounded by it (see `hq.log_refusal` below).
+  minute_start, held_back_object_ids, held_back_client_addresses, note }`. Each `held_back_…` lists the
+  first 10 distinct values among the refusals not written (`first`, each cut to 80 characters) and
+  how many distinct ones there were (`distinct`, counted exactly up to 1,000; past that
+  `distinct_is_at_least: true`). At most 100 action and reason pairs are counted in a minute; further
+  pairs share one counter, summarised under the action `audit.other_refusals`. Rows of a signed-in
+  caller, and every allowed row, are always written. **A refused sign-in whose name is an existing
+  principal's is always written too** (unless it was refused for an over-long passphrase, before any
+  look-up), whatever the count: the throttle already bounds how many of
+  those reach a passphrase check, and the audit log is visible to the founder only, so writing them
+  tells no one which names exist. A flood of refusals for names that do not exist therefore cannot
+  hide guesses at a real account. The bound is per server process (two processes each write their own
+  120), counts are lost if the process stops before the minute ends, and a caller that reaches the
+  database directly is not bounded by it (see `hq.log_refusal` below).
+- **What an operator can reconstruct after a flood.** For each minute, action and reason: the first
+  120 refusals in full (object, client address under `HQ_TRUST_PROXY=1`, request id, time, and for a
+  sign-in the failure count and lane); every refused sign-in that named an existing account (apart
+  from one refused for an over-long passphrase, which is answered before any look-up); and, in
+  the summary, how many more there were, the first 10 distinct names and client addresses among them
+  and how many distinct ones. What cannot be reconstructed: the time and request id of each refusal
+  held back, names and addresses past the first 10, and anything about a refused API token — a 401
+  over MCP or REST records neither the token nor a client address, so a summary of those holds only a
+  count. An attempt with a stolen or guessed token can therefore still be hidden among refusals of
+  requests that carry no token (docs/KNOWN-GAPS.md).
 - **The request id is the server's.** Every answer of every route under `/api` carries an id HQ
-  generates, in `x-request-id`, whatever the method; `GET /api/v1/health` is the one route with none.
-  A method a route does not implement is answered 405 with `Allow`, a fresh id and the usual error
-  body (`{ "error": { "code": "method_not_allowed", "message": …, "request_id": … } }`; on `/api/mcp`
-  a JSON-RPC error `-32000`), and `OPTIONS` is answered 204 with `Allow` and an id
-  (`tests/api/methods.test.ts` sends every method to every route). Every MCP answer carries the id,
+  generates, in `x-request-id`, for every method that reaches HQ's code; `GET /api/v1/health` is the
+  one route with none. A standard method a route does not implement is answered 405 with `Allow`, a
+  fresh id and the usual error body (`{ "error": { "code": "method_not_allowed", "message": …,
+  "request_id": … } }`; on `/api/mcp` a JSON-RPC error `-32000`), and `OPTIONS` is answered 204 with
+  `Allow` and an id. Any other method the server passes on (`PROPFIND`, `QUERY`, `SEARCH`, `LINK`,
+  `PURGE`, `M-SEARCH` and the like) is answered the same 405 by `src/proxy.ts`
+  (`tests/api/methods.test.ts` sends the seven standard methods and these to every route). Three
+  kinds of request are answered before HQ's code runs, with no request id: `TRACE` (500 from the
+  framework, which also writes a short stack trace to the server log for each one), a method name
+  Node's HTTP parser does not know or that is not in capitals (`FOO`, `get`: 400), and `CONNECT`
+  (the connection is closed). Every MCP answer carries the id,
   including the 401, the cross-origin refusal, a database error, an unsupported protocol version, a
   parse error, an over-long body and a bad batch. The audit rows the REST and MCP layers write store
   it as `request_id`: an allowed call, a 401 or 403 answer, the MCP 401 and the MCP cross-origin
@@ -221,15 +250,22 @@ the caller, the action and the outcome. The log is append-only and readable only
   a name HQ has no tool for; it never puts the address the client typed into the action.
 - **Error messages echo only part of what the client sent.** An id, name or argument a client sent
   is echoed in an error message or detail in at most 80 characters (a record type in 40, an
-  undeclared field of a proposal in 60). A list of unknown arguments names at most 10, with a count of
+  undeclared field of a proposal in 60), cut on whole characters, never inside a pair of UTF-16
+  surrogates. A list of unknown arguments names at most 10, with a count of
   the rest, and the list of problems in a 422 holds at most 10 lines, each of at most 200 characters,
-  with a count of the rest. So a 1 MB argument name or id gives an answer of a few kilobytes
+  with a count of the rest. `search_records` repeats its query in at most 80 characters, and a
+  JSON-RPC `id` longer than 128 characters, or one that is not a string, number or `null`, is
+  refused (`-32600`) and answered with `id: null`. So a 1 MB argument name, id or query gives an answer of a few kilobytes
   (`tests/api/echo-bounds.test.ts`, `tests/db/proposal-claims.test.ts` “ROUND4 H7”). A GitHub
   look-up for a repository that is not on the allow-list names it in at most 80 characters; the
   allow-list is compared with the whole name (`tests/unit/integrations.test.ts`).
 - A detail larger than 6,000 bytes is shortened to a preview by the application. The database also
   refuses any new audit row whose detail is over 16,384 bytes (rows written before migration 0007 are
-  not re-checked).
+  not re-checked). **Text is made well formed before it is echoed or logged:** a lone UTF-16
+  surrogate (as in a JSON string `"\ud83d"`), which PostgreSQL's `jsonb` refuses and a strict UTF-8
+  reader may refuse, becomes the replacement character U+FFFD in every echo and in every audit detail,
+  keys included, so such a value can no longer make a refusal's audit row disappear
+  (`src/lib/text.ts`).
 
 **Secrets.** `npm run setup` creates `.env.local`, or fills in the generated values if an existing
 one still has the placeholders, and makes both `.env.local` and `.hq-local-credentials.json`
@@ -278,10 +314,12 @@ with an added key or a state such as `Yes`, and values outside their lists — t
 application, directly in the database, and planted in the inbox and then accepted (refused); a
 planted proposal that would leave an invalid record, accepted through the application (refused with
 422); a proposal that labels its own words as reported by a source, rewrites evidence a source
-reports or a source HQ has read, says a requirement is implemented and tested, sets a field its
+reports or a source HQ has read, says a requirement is implemented and tested, changes a tested
+requirement or a loop or pathway a source describes without withdrawing that status, changes what
+identifies a build or a module's evidence level, sets a field its
 record type does not have, or writes back “Not a valid value” — each through the application as an
 AI client and as a developer, directly in the database, and planted in the inbox and then accepted
-(refused, `tests/db/proposal-claims.test.ts`); a founder decision clearing an acceptance that was
+(refused, `tests/db/proposal-claims.test.ts`, `tests/db/round5-claims.test.ts`); a founder decision clearing an acceptance that was
 never recorded (refused); `service_role` writing
 history, forging a founder act or calling any function but the read helpers (refused); a proposal
 asserting an acceptance (refused, through the application and directly in the database); direct `UPDATE`/`DELETE`/`TRUNCATE` on the record history,

@@ -50,9 +50,17 @@ export function pathwayBasisDisplay(value: unknown): { tone: Tone; glyph: string
   return { tone: t.tone, glyph: t.glyph, short: t.short, title: EPISTEMIC_LABEL[value as Epistemic] };
 }
 
+/** How a recommendation created through the inbox is stamped: "Proposed through the inbox by <handle>" (hq.review_proposal). */
+const INBOX_MAKER = "Proposed through the inbox";
+
 /** Who made a recommendation, as a sentence for its page. A recommendation that names nobody is nobody's, not HQ's (L7). */
 export function recommendationMaker(madeBy: unknown): string {
   if (madeBy === MADE_BY_NOT_STATED) return "This recommendation does not say who made it.";
+  // ROUND5 K5: the stamp hq.review_proposal writes on a recommendation created through the inbox.
+  if (madeBy === INBOX_MAKER) return "This recommendation was proposed through the inbox.";
+  if (typeof madeBy === "string" && madeBy.startsWith(`${INBOX_MAKER} by `) && madeBy.length > INBOX_MAKER.length + 4) {
+    return `This recommendation was proposed through the inbox by ${madeBy.slice(INBOX_MAKER.length + 4)}.`;
+  }
   if (typeof madeBy === "string" && madeBy && madeBy !== NOT_VALID) return `This is a recommendation by ${madeBy}.`;
   return "This recommendation names no maker HQ can read.";
 }

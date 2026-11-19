@@ -316,7 +316,10 @@ rep("mh2b_source_freeze_access_only", VAT, """(coalesce(jsonb_typeof(p_cur.data 
 rep("mh2c_source_freeze_no_stored_text", VAT, "\n          or exists (select from hq.source_texts t where t.source_id = p_cur.record_id)", "")
 # H3: implemented and tested.
 rep("mh3a_tested_state", CPC, "    if (v_after -> 'implementation_state') = '\"implemented_tested\"'::jsonb\n       and", "    if false\n       and")
-rep("mh3b_tested_links", CPC, "        if v_doc ? v_key and (v_doc -> v_key) is distinct from (v_before -> v_key) then", "        if false then")
+# (0010 K2 replaced 0009's rule on a tested requirement's links with a freeze of the whole record; this
+# mutant now narrows the freeze back to the links.)
+rep("mh3b_tested_links", CPC, "      raise exception 'field \"%\": %', left(v_key, 80), v_tested_frozen using errcode = 'HQ403';",
+    "      if v_key in ('linked_evidence_ids', 'linked_build_ids') then raise exception 'field \"%\": %', left(v_key, 80), v_tested_frozen using errcode = 'HQ403'; end if;")
 # H4: only declared fields.
 rep("mh4a_declared_fields_removed", CPC, "  if v_key is not null then", "  if false then")
 sql("mh4b_declared_field_added", "insert into hq.record_fields (record_type, field) values ('build', 'Standing');")
@@ -334,6 +337,24 @@ rep("mh12a_freeze_any_string", RAC, """
                           where e.record_type = 'build' and e.path = 'standing' and (v_after ->> 'standing') = any (e.allowed))""", "")
 rep("mh12b_epistemic_one_level", CFE, "'strict $.** ? (@.type() == \"object\")'", "'strict $.* ? (@.type() == \"object\")'")
 rep("mh12c_record_type_unbounded", VP, "left(coalesce(v_type, ''), 40)", "coalesce(v_type, '')")
+
+# ---- 0010 (ROUND5) ----
+# K1: a loop or pathway a source describes is frozen unless the proposal relabels it.
+rep("mk1a_loop_freeze_removed", CPC, "  if v_update and p_type in ('loop', 'pathway') then", "  if false then")
+rep("mk1b_loop_freeze_source_labels_only", CPC, "'commission_example', 'verified', 'hq_recommendation'];", "'commission_example'];")
+rep("mk1c_loop_freeze_any_relabel", CPC, "(v_after ->> v_key) in ('submitter_claim', 'no_evidence')", "(v_after ->> v_key) is not null")
+# K2: a requirement shown as implemented and tested is frozen unless the proposal moves it away.
+rep("mk2a_tested_freeze_removed", CPC, "       and (v_after -> 'implementation_state') = '\"implemented_tested\"'::jsonb then\n      select o.k", "       and false then\n      select o.k")
+# K3: what identifies a build.
+rep("mk3a_build_identity_removed", VP, "      if v_type = 'build' and v_key in ('sha256', 'bytes', 'filename', 'artifact_source_id') then", "      if false then")
+rep("mk3b_build_identity_no_artifact", VP, "v_key in ('sha256', 'bytes', 'filename', 'artifact_source_id')", "v_key in ('sha256', 'bytes', 'filename')")
+# K4: a module's evidence level.
+rep("mk4a_level_update_removed", VP, "      if v_type = 'module' and v_key = 'evidence_level' then", "      if false then")
+rep("mk4b_level_create_removed", VP, "  if v_op = 'create' and v_type = 'module' and (v_doc -> 'evidence_level')", "  if false and (v_doc -> 'evidence_level')")
+rep("mk4c_level_create_named_only", VP, "(v_doc -> 'evidence_level') is distinct from '\"commission_list_only\"'::jsonb", "(v_doc ->> 'evidence_level') not in ('commission_list_only', 'named_only')")
+# K5 (Z19): a second clear straight at the database (the verifier's own3).
+rep("mk5_second_clear_allowed", FD, "coalesce(v_cur.data #>> '{hq_acceptance,state}', '') not in ('accepted', 'rejected') then",
+    "coalesce(v_cur.data #>> '{hq_acceptance,state}', '') not in ('accepted', 'rejected', 'none') then")
 
 sql("noop", "select 1;")
 

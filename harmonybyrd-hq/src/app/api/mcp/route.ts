@@ -15,8 +15,11 @@ import { fromDatabaseError, HqError } from "@/lib/server/errors";
 import { assertSameOrigin, json, otherMethods, readBodyText } from "@/lib/server/http";
 import { HQ_NOTICE } from "@/lib/server/services";
 import { findTool, TOOLS, toolInputSchema } from "@/lib/server/tools";
+import { cutText } from "@/lib/text";
 
 const MAX_BATCH = 50;
+/** ROUND5 K8: the longest JSON-RPC id HQ answers with; a longer one is refused (-32600, id null). */
+const MAX_ID_CHARS = 128;
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const SERVER_INFO = { name: "harmonybyrd-hq", title: "HarmonyByrd HQ", version: "0.1.0" };
 
@@ -50,11 +53,13 @@ function allowedTools(principal: Principal) {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** The id to answer with: the message's own id when it is a valid one, otherwise null. */
+/** A valid JSON-RPC id: a string of at most MAX_ID_CHARS characters, or a finite number. */
+const isValidId = (id: unknown): id is string | number => (typeof id === "string" && id.length <= MAX_ID_CHARS) || (typeof id === "number" && Number.isFinite(id));
+
+/** The id to answer with: the message's own id when it is a valid one, otherwise null (it is never echoed whole). */
 function replyId(message: unknown): RpcMessage["id"] {
   if (!isObject(message)) return null;
-  const id = message.id;
-  return typeof id === "string" || typeof id === "number" ? id : null;
+  return isValidId(message.id) ? message.id : null;
 }
 
 /**
@@ -64,9 +69,13 @@ function replyId(message: unknown): RpcMessage["id"] {
 async function handle(raw: unknown, principal: Principal, requestId: string): Promise<unknown | null> {
   if (!isObject(raw)) return rpcError(null, -32600, "Invalid JSON-RPC request: each message must be a JSON object.");
   const message = raw as RpcMessage;
-  const validId = message.id === undefined || message.id === null || typeof message.id === "string" || typeof message.id === "number";
+  const validId = message.id === undefined || message.id === null || isValidId(message.id);
   if (message.jsonrpc !== "2.0" || typeof message.method !== "string" || !validId) {
-    return rpcError(replyId(raw), -32600, 'Invalid JSON-RPC request: it needs "jsonrpc": "2.0", a string "method" and, if present, a string or number "id".');
+    return rpcError(
+      replyId(raw),
+      -32600,
+      `Invalid JSON-RPC request: it needs "jsonrpc": "2.0", a string "method" and, if present, a string "id" of at most ${MAX_ID_CHARS} characters or a number "id".`,
+    );
   }
   const isNotification = message.id === undefined;
   const { method, id } = message;
@@ -110,7 +119,7 @@ async function handle(raw: unknown, principal: Principal, requestId: string): Pr
       // as the MCP specification has it; `data` carries the same code REST would answer with.
       if (!tool) {
         // The name is echoed back only in part: it is whatever the client sent.
-        return rpcError(id, -32602, `Unknown tool "${name.slice(0, 80)}". tools/list shows the tools this credential can call.`, { code: "not_found", status: 404 });
+        return rpcError(id, -32602, `Unknown tool "${cutText(name, 80)}". tools/list shows the tools this credential can call.`, { code: "not_found", status: 404 });
       }
       if (!allowedTools(principal).includes(tool)) {
         await audit(claimsFor(principal), { action: `mcp.${name}`, outcome: "denied", requestId, detail: { reason: "scope" } });
@@ -144,7 +153,7 @@ async function handle(raw: unknown, principal: Principal, requestId: string): Pr
     }
     default:
       if (method.startsWith("notifications/")) return null;
-      return isNotification ? null : rpcError(id, -32601, `Method "${method.slice(0, 80)}" is not supported by this server.`);
+      return isNotification ? null : rpcError(id, -32601, `Method "${cutText(method, 80)}" is not supported by this server.`);
   }
 }
 
@@ -172,7 +181,7 @@ export async function POST(request: Request) {
 
   const versionHeader = request.headers.get("mcp-protocol-version");
   if (versionHeader && !SUPPORTED_VERSIONS.includes(versionHeader)) {
-    return json(rpcError(null, -32600, `Unsupported MCP protocol version "${versionHeader.slice(0, 40)}". Supported: ${SUPPORTED_VERSIONS.join(", ")}.`), {
+    return json(rpcError(null, -32600, `Unsupported MCP protocol version "${cutText(versionHeader, 40)}". Supported: ${SUPPORTED_VERSIONS.join(", ")}.`), {
       status: 400,
       headers: idHeader,
     });

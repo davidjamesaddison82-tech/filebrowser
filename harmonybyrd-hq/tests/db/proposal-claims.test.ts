@@ -51,6 +51,7 @@ const SOURCE_LABEL = /a proposal's claim is the submitter's own: label it submit
 const FROZEN_EVIDENCE = /evidence that a source reports or HQ's build checked is changed only by an import; submit new evidence instead/i;
 const FROZEN_SOURCE = /a source HQ has read is changed only by an import/i;
 const TESTED = /record the tests as evidence; only an import marks a requirement as implemented and tested \(the founder can record it as satisfied by a decision\)/i;
+const TESTED_FROZEN = /a requirement shown as implemented and tested is changed only by an import; a proposal may move it to another implementation state and then change it/i;
 const UNKNOWN = (field: string, type: string) => new RegExp(`field "${field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" is not a field of a ${type} record`, "i");
 const MARKER = /a proposal cannot contain the text "Not a valid value"/i;
 
@@ -283,7 +284,7 @@ const CASES: Case[] = [
     body: { target: { type: "requirement", id: "FR-FX-001" }, set: { linked_evidence_ids: ["EV-FX-02"] } },
     status: 403,
     sqlstate: "HQ403",
-    message: TESTED,
+    message: TESTED_FROZEN, // ROUND5 K2: the freeze of a tested requirement, which replaced the rule on its links
     detail: { rule: "tested_claim", field: "linked_evidence_ids" },
   },
   {
@@ -292,7 +293,7 @@ const CASES: Case[] = [
     body: { target: { type: "requirement", id: "FR-FX-001" }, set: { linked_build_ids: ["BLD-FX-01", "BLD-FX-02"] } },
     status: 403,
     sqlstate: "HQ403",
-    message: TESTED,
+    message: TESTED_FROZEN, // ROUND5 K2: the freeze of a tested requirement, which replaced the rule on its links
     detail: { rule: "tested_claim", field: "linked_build_ids" },
   },
   {
@@ -683,12 +684,17 @@ describe("ROUND4 H1 — what still goes through: leave an imported claim as it i
     expect(answer.data).toMatchObject({ valid: true, record: { basis: "submitter_claim" } });
   });
 
-  it("L6: an imported pathway keeps commission_example, and a change elsewhere in it is accepted", async () => {
-    await accept(await submitChangeProposal(w.developer, await serviceInput({ target: { type: "pathway", id: "PATH-FX-EX" }, set: { description: "Improvise first, then practise." } })));
-    expect(await stored("pathway", "PATH-FX-EX")).toMatchObject({ basis: "commission_example", description: "Improvise first, then practise." });
-    // Resending the label it already holds is not setting it.
-    await accept(await submitChangeProposal(w.claude, await serviceInput({ target: { type: "pathway", id: "PATH-FX-EX" }, set: { basis: "commission_example", name: "Gamma to Alpha" } })));
-    expect(await stored("pathway", "PATH-FX-EX")).toMatchObject({ basis: "commission_example", name: "Gamma to Alpha" });
+  // ROUND5 K1 changed this: an imported pathway that keeps commission_example is frozen for proposals; a
+  // change elsewhere goes through once the proposal relabels it as the submitter's claim.
+  it("L6 / ROUND5 K1: an imported pathway that keeps commission_example is not changed by proposal; relabelled as the submitter's claim, it is", async () => {
+    const before = await worldState();
+    for (const set of [{ description: "Improvise first, then practise." }, { basis: "commission_example", name: "Gamma to Alpha" }]) {
+      const err = await expectStatus(submitChangeProposal(w.developer, await serviceInput({ target: { type: "pathway", id: "PATH-FX-EX" }, set })), 403);
+      expect(err.detail).toMatchObject({ rule: "source_label", field: "basis" });
+    }
+    expect(await worldState()).toEqual(before);
+    await accept(await submitChangeProposal(w.claude, await serviceInput({ target: { type: "pathway", id: "PATH-FX-EX" }, set: { basis: "submitter_claim", name: "Gamma to Alpha" } })));
+    expect(await stored("pathway", "PATH-FX-EX")).toMatchObject({ basis: "submitter_claim", name: "Gamma to Alpha" });
   });
 
   it("the application's own check finds each H1 case before the database is asked", async () => {
@@ -720,10 +726,21 @@ describe("ROUND4 H2, H3, H4 — what still goes through", () => {
     expect(isOutstanding(ds.get("requirement", "FR-FX-002")!.data as RequirementRecord, ds)).toBe(true);
   });
 
-  it("H3: a tested requirement can be retitled, and its links resent unchanged", async () => {
+  // ROUND5 K2 changed this: a tested requirement is frozen for proposals unless the proposal moves it to
+  // another state; retitling it with its links resent unchanged is now refused.
+  it("H3 / ROUND5 K2: a tested requirement is not retitled by proposal while it stays tested; moved to another state, it may be", async () => {
     const links = (await stored("requirement", "FR-FX-001")).linked_evidence_ids;
-    await accept(await submitChangeProposal(w.developer, await serviceInput({ target: { type: "requirement", id: "FR-FX-001" }, set: { title: "Slow before fast (retitled)", linked_evidence_ids: links } })));
-    expect(await stored("requirement", "FR-FX-001")).toMatchObject({ title: "Slow before fast (retitled)", implementation_state: "implemented_tested", linked_evidence_ids: links });
+    const before = await worldState();
+    const err = await expectStatus(
+      submitChangeProposal(w.developer, await serviceInput({ target: { type: "requirement", id: "FR-FX-001" }, set: { title: "Slow before fast (retitled)", linked_evidence_ids: links } })),
+      403,
+    );
+    expect(err.detail).toMatchObject({ rule: "tested_claim", field: "title" });
+    expect(await worldState()).toEqual(before);
+    await accept(
+      await submitChangeProposal(w.developer, await serviceInput({ target: { type: "requirement", id: "FR-FX-001" }, set: { implementation_state: "implemented_unverified", title: "Slow before fast (retitled)", linked_evidence_ids: links } })),
+    );
+    expect(await stored("requirement", "FR-FX-001")).toMatchObject({ title: "Slow before fast (retitled)", implementation_state: "implemented_unverified", linked_evidence_ids: links });
   });
 
   it("H4: the tools that build a record still pass: submit_defect_report and record_test_evidence (with code_ref and counts), through to acceptance", async () => {
@@ -751,7 +768,8 @@ describe("ROUND4 H2, H3, H4 — what still goes through", () => {
       ["open_item", { kind: "risk", title: "A risk", statement: claim("It may fail.") }],
       ["recommendation", { title: "Do this next", rationale: "Because.", rank: 9, status: "proposed" }],
       ["requirement", { exact_wording: "Every pattern must be playable at a slow tempo before a fast one.", source_id: "SRC-F01", attribution: "direct_quote", title: "Slow first", category: "pedagogy", implementation_state: "no_record" }],
-      ["module", { name: "Epsilon", kind: "experiment", family: "fixture", evidence_level: "named_only", lifecycle: unknownLifecycle }],
+      // ROUND5 K4: a created module carries the lowest evidence level (it was "named_only" before).
+      ["module", { name: "Epsilon", kind: "experiment", family: "fixture", evidence_level: "commission_list_only", lifecycle: unknownLifecycle }],
       ["loop", { name: "Epsilon loop", standing: "submitter_claim" }],
       ["pathway", { name: "Alpha to Gamma", basis: "submitter_claim", steps: [{ order: 1, module_id: "MOD-FX-ALPHA", role: "practice" }, { order: 2, module_id: "MOD-FX-GAMMA", role: "improvise" }] }],
       ["commission", { code: "FX-COM-2", title: "A second commission", status: "proposed" }],

@@ -19,6 +19,7 @@ import {
   InvalidRecordNotice,
   KnownLink,
   ListedChip,
+  NotCountedChip,
   ListedText,
   Notice,
   PageHead,
@@ -27,7 +28,7 @@ import {
   UnreadableNotice,
 } from "@/components/ui";
 import { unreadableFields } from "@/lib/domain/conform";
-import { moduleBrief } from "@/lib/domain/derive";
+import { createdInHq, moduleBrief } from "@/lib/domain/derive";
 import type { Claim, ModuleRecord } from "@/lib/domain/schemas";
 
 type Capability = ModuleRecord["capabilities"][number];
@@ -114,7 +115,8 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
     ["intended_absent", "unknown"],
   );
   const defects = byOrder(brief.defects, (d) => d.status, ["open", "unknown", "deferred", "resolved"]);
-  const openDefects = brief.defects.filter((d) => d.status === "open");
+  // ROUND5 K6: derive's one definition of an open defect (a defect HQ cannot read is open).
+  const openDefects = brief.defects.filter((d) => d.open);
   const builds = byOrder(brief.builds, (b) => b.standing, ["accepted_reported", "candidate_not_accepted", "development", "unknown"]);
   const openItems = byOrder(brief.open_items, (o) => o.kind, [
     "blocker",
@@ -131,19 +133,26 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
   const evidence = byOrder(brief.evidence, (e) => e.verification, ["hq_verified"]);
   const sources = [...brief.sources].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? "") || a.id.localeCompare(b.id));
   const connectionCount = brief.connections_out.length + brief.connections_in.length + brief.children.length;
+  // ROUND5 K6: a count beside a list counts only the records HQ can read (each entry's ref.readable, from
+  // derive); the others are listed as "not counted — cannot be read".
+  const readableLoops = brief.loops.filter((l) => l.readable);
+  const readablePathways = brief.pathways.filter((p) => p.readable);
+  const readableBuilds = brief.builds.filter((b) => b.ref.readable);
+  const readableEvidence = brief.evidence.filter((e) => e.ref.readable);
+  const notCounted = (n: number) => (n > 0 ? `; ${n} not counted — cannot be read` : "");
 
   const index: [string, string, number | null][] = [
     ["purpose", "Purpose", null],
-    ["loops", "Loops", brief.loops.length],
+    ["loops", "Loops", readableLoops.length],
     ["capabilities", "Capabilities", m.capabilities.length],
     ["lifecycle", "Tests & acceptance", null],
-    ["builds", "Builds", brief.builds.length],
+    ["builds", "Builds", readableBuilds.length],
     ["defects", "Defects", brief.defects.length],
     ["blockers", "Blockers", m.blockers.length + brief.open_items.length],
     ["connections", "Connections", connectionCount],
     ["requirements", "Requirements", brief.requirements.length],
     ["decisions", "Decisions", brief.decisions.length + brief.commissions.length],
-    ["evidence", "Evidence", brief.evidence.length],
+    ["evidence", "Evidence", readableEvidence.length],
     ["sources", "Sources", brief.sources.length],
   ];
 
@@ -248,10 +257,18 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
       {ctx.warnings.some((w) => w.type === "module" && w.id === brief.module.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/module/${encodeURIComponent(brief.module.meta.id)}`, rev)} unreadableFields={unreadableFields(ctx.ds, brief.module)} /> : null}
       {brief.standing.caution ? <Notice tone="warn">{brief.standing.caution}</Notice> : null}
       {m.evidence_level === "commission_list_only" ? (
-        <Notice tone="warn">
-          This module is named in the illustrative list of commission HB-HQ-P02-R1. No source HQ could read describes it, so every field below is
-          empty rather than guessed. It is listed so that it is not forgotten.
-        </Notice>
+        createdInHq(brief.module.meta.id) ? (
+          // ROUND5 K4: a module created through the inbox carries the lowest level; what it holds is the submitter's.
+          <Notice tone="warn">
+            No source HQ could read describes this module. It was created through the proposal inbox, so what it says is the submitter&apos;s
+            claim.
+          </Notice>
+        ) : (
+          <Notice tone="warn">
+            This module is named in the illustrative list of commission HB-HQ-P02-R1. No source HQ could read describes it, so every field below is
+            empty rather than guessed. It is listed so that it is not forgotten.
+          </Notice>
+        )
       ) : null}
       {m.aliases.length || brief.parent || commissionEntry ? (
         <div className="small muted stack-sm" style={{ gap: 2 }}>
@@ -297,14 +314,22 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
             </dl>
           </Card>
 
-          <Card title="Core learning loop" id="loops" hint={brief.loops.length ? `${plural(brief.loops.length, "loop")} recovered` : undefined}>
+          <Card
+            title="Core learning loop"
+            id="loops"
+            hint={brief.loops.length ? `${plural(readableLoops.length, "loop")} recovered${notCounted(brief.loops.length - readableLoops.length)}` : undefined}
+          >
             <div className="stack-sm">
               {m.core_loop ? (
                 <ClaimView ds={ds} claim={m.core_loop} />
-              ) : brief.loops.length ? (
+              ) : readableLoops.length ? (
                 <p className="small muted" style={{ margin: 0 }}>
                   No source sums up this module&apos;s core loop in one statement.{" "}
-                  {brief.loops.length === 1 ? "One loop was" : `${brief.loops.length} loops were`} recovered from the sources:
+                  {readableLoops.length === 1 ? "One loop was" : `${readableLoops.length} loops were`} recovered from the sources:
+                </p>
+              ) : brief.loops.length ? (
+                <p className="small muted" style={{ margin: 0 }}>
+                  No loop HQ can read was recovered for this module.
                 </p>
               ) : (
                 <p className="small muted" style={{ margin: 0 }}>
@@ -316,6 +341,12 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                   items={brief.loops.map((l) => (
                     <li key={l.id}>
                       <Link href={withRev(recordHref("loop", l.id), rev)}>{l.title}</Link> <IdTag id={l.id} />
+                      {l.readable ? null : (
+                        <>
+                          {" "}
+                          <NotCountedChip />
+                        </>
+                      )}
                     </li>
                   ))}
                   limit={6}
@@ -325,11 +356,20 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
               ) : null}
               {brief.pathways.length ? (
                 <div className="small">
-                  <div className="muted">Appears in {plural(brief.pathways.length, "cross-module pathway")}:</div>
+                  <div className="muted">
+                    Appears in {plural(readablePathways.length, "cross-module pathway")}
+                    {notCounted(brief.pathways.length - readablePathways.length)}:
+                  </div>
                   <Fold
                     items={brief.pathways.map((p) => (
                       <li key={p.id}>
                         <Link href={withRev(recordHref("pathway", p.id), rev)}>{p.title}</Link>
+                        {p.readable ? null : (
+                          <>
+                            {" "}
+                            <NotCountedChip />
+                          </>
+                        )}
                       </li>
                     ))}
                     limit={3}
@@ -391,12 +431,12 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
           </Card>
 
           <Card title="Tests, evidence and acceptance" id="lifecycle" hint="Independent dimensions — not a completion percentage" flush>
-            <LifecycleDetail ds={ds} module={m} />
+            <LifecycleDetail ds={ds} module={m} reliable={brief.reliable} />
           </Card>
         </div>
 
         <div className="stack">
-          <Card title="Executable versions" id="builds" hint={`${brief.builds.length} on record`} flush>
+          <Card title="Executable versions" id="builds" hint={`${readableBuilds.length} on record${notCounted(brief.builds.length - readableBuilds.length)}`} flush>
             {builds.length === 0 ? (
               <Empty>No executable version is on record.</Empty>
             ) : (
@@ -407,8 +447,9 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                       {b.ref.title}
                     </Link>
                     <div className="row" style={{ gap: 6 }}>
-                      <BuildStandingChip build={ds.get("build", b.ref.id)?.data ?? { standing: b.standing }} />
-                      {b.sha256 ? (
+                      <BuildStandingChip ds={ds} build={ds.get("build", b.ref.id)?.data ?? { standing: b.standing }} readable={b.ref.readable} />
+                      <InboxMark ds={ds} id={b.ref.id} />
+                      {!b.ref.readable ? null : b.sha256 ? (
                         <span className="mono xsmall muted break">sha256 {shortHash(b.sha256, 16)}</span>
                       ) : (
                         <span className="xsmall muted">no hash on record</span>
@@ -434,7 +475,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                       <Link className="li-title" href={withRev(recordHref("defect", d.ref.id), rev)}>
                         {d.ref.title}
                       </Link>
-                      <StatusChip value={d.status} field="defect.status" />
+                      {d.ref.readable ? <StatusChip value={d.status} field="defect.status" /> : <NotCountedChip />}
                       <InboxMark ds={ds} id={d.ref.id} />
                     </div>
                   </li>
@@ -456,7 +497,8 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                   <Fold
                     items={openItems.map((o) => (
                       <li key={o.ref.id}>
-                        <Link href={withRev(recordHref("open_item", o.ref.id), rev)}>{o.ref.title}</Link> <ListedChip field="open_item.kind" value={o.kind} tone="warn" />{" "}
+                        <Link href={withRev(recordHref("open_item", o.ref.id), rev)}>{o.ref.title}</Link>{" "}
+                        {o.ref.readable ? <ListedChip field="open_item.kind" value={o.kind} tone="warn" /> : <NotCountedChip />}{" "}
                         <InboxMark ds={ds} id={o.ref.id} />
                       </li>
                     ))}
@@ -476,6 +518,12 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                         Recommendation
                       </Chip>{" "}
                       <Link href={withRev(recordHref("recommendation", r.id), rev)}>{r.title}</Link>
+                      {r.readable ? null : (
+                        <>
+                          {" "}
+                          <NotCountedChip />
+                        </>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -508,8 +556,9 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                     </Link>
                     <div className="row" style={{ gap: 6 }}>
                       <IdTag id={r.ref.id} />
-                      <StatusChip value={r.implementation_state} field="requirement.implementation_state" />
+                      {r.ref.readable ? <StatusChip value={r.implementation_state} field="requirement.implementation_state" /> : <NotCountedChip />}
                       {r.outstanding ? <Chip tone="warn">Outstanding</Chip> : null}
+                      <InboxMark ds={ds} id={r.ref.id} />
                     </div>
                   </li>
                 ))}
@@ -525,7 +574,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
             id="decisions"
             hint={
               brief.decisions.length
-                ? `${plural(brief.decisions.length, "decision")}, ${brief.decisions.filter((d) => d.status === "issued").length} recorded as issued`
+                ? `${plural(brief.decisions.length, "decision")}, ${brief.decisions.filter((d) => d.ref.readable && d.status === "issued").length} recorded as issued`
                 : undefined
             }
             flush
@@ -551,7 +600,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                         <Link className="li-title" href={withRev(recordHref("decision", d.ref.id), rev)}>
                           {d.ref.title}
                         </Link>
-                        <StatusChip value={d.status} field="decision.status" label={`Decision ${humanise(d.status).toLowerCase()}`} />
+                        {d.ref.readable ? <StatusChip value={d.status} field="decision.status" label={`Decision ${humanise(d.status).toLowerCase()}`} /> : <NotCountedChip />}
                       </div>
                     </li>
                   )),
@@ -568,7 +617,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
             id="evidence"
             hint={
               brief.evidence.length
-                ? `${brief.evidence.filter((e) => e.verification === "hq_verified").length} of ${brief.evidence.length} checked by HQ's build`
+                ? `${readableEvidence.filter((e) => e.verification === "hq_verified").length} of ${readableEvidence.length} checked by HQ's build${notCounted(brief.evidence.length - readableEvidence.length)}`
                 : undefined
             }
             flush
@@ -583,7 +632,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                       <Link className="li-title" href={withRev(recordHref("evidence", e.ref.id), rev)}>
                         {e.ref.title}
                       </Link>
-                      <StatusChip value={e.verification} field="evidence.verification" />
+                      {e.ref.readable ? <StatusChip value={e.verification} field="evidence.verification" /> : <NotCountedChip />}
                       <InboxMark ds={ds} id={e.ref.id} />
                     </div>
                     <div className="li-note">

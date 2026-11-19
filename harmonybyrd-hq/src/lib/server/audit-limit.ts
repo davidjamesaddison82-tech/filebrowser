@@ -7,18 +7,43 @@
  * one summary row (same action, detail.summary = true) says how many were not written.
  *
  * Signed-in callers are never limited: their rows name a principal and are what the audit log is for.
+ * Neither is a refused sign-in whose name is an existing principal's (ROUND5 K7): the caller says so
+ * (admitAudit's `unlimited`), so a flood of harmless refusals cannot hide guesses at a real account.
+ *
+ * A summary names what it held back (ROUND5 K7): the first HELD_SHOWN distinct object ids and client
+ * addresses of the refusals it did not write, each cut to 80 characters, and how many distinct ones
+ * there were (counted exactly up to HELD_COUNTED; past that the count says "at least").
+ *
  * Memory is bounded too: at most MAX_KEYS action/reason pairs are tracked in a minute; any further pair
- * shares one overflow counter, and a minute's counters are dropped once its summary is written.
+ * shares one overflow counter, each counter keeps at most HELD_COUNTED distinct values of each kind, and
+ * a minute's counters are dropped once its summary is written.
  */
+
+import { cutText } from "@/lib/text";
 
 export const PER_MINUTE = 120;
 export const MAX_KEYS = 100;
+/** How many distinct held-back object ids and client addresses a summary lists. */
+export const HELD_SHOWN = 10;
+/** How many distinct held-back values of each kind a counter remembers, to count them. */
+export const HELD_COUNTED = 1000;
+const HELD_MAX_CHARS = 80;
 const MINUTE_MS = 60_000;
 const REASON_MAX = 40;
 
 /** The action the summary of the overflow counter is written under. */
 export const OVERFLOW_ACTION = "audit.other_refusals";
 export const OVERFLOW_REASON = "other";
+
+/** What a summary says of one kind of value its held-back refusals carried. */
+export interface HeldValues {
+  /** The first HELD_SHOWN distinct values, in the order they came. */
+  first: string[];
+  /** How many distinct values there were (exact up to HELD_COUNTED). */
+  distinct: number;
+  /** True when there were more than HELD_COUNTED: `distinct` is then a lower bound. */
+  atLeast: boolean;
+}
 
 export interface RefusalSummary {
   action: string;
@@ -27,6 +52,16 @@ export interface RefusalSummary {
   notWritten: number;
   /** Start of the minute, epoch milliseconds. */
   minuteStart: number;
+  /** The object ids (a sign-in's name, say) of the refusals not written. */
+  objectIds: HeldValues;
+  /** The client addresses of the refusals not written (recorded only under HQ_TRUST_PROXY=1). */
+  clientAddresses: HeldValues;
+}
+
+/** What a held-back refusal named, for its summary. */
+export interface HeldBack {
+  objectId?: string | null;
+  clientAddress?: string | null;
 }
 
 interface Counter {
@@ -35,7 +70,16 @@ interface Counter {
   minute: number;
   written: number;
   dropped: number;
+  objectIds: Set<string>;
+  objectIdsOverflow: boolean;
+  clientAddresses: Set<string>;
+  clientAddressesOverflow: boolean;
 }
+
+/** A value cut to HELD_MAX_CHARS characters on code points, as well-formed text. */
+const cutHeld = (value: string) => cutText(value, HELD_MAX_CHARS);
+
+const heldValues = (set: Set<string>, overflow: boolean): HeldValues => ({ first: [...set].slice(0, HELD_SHOWN), distinct: set.size, atLeast: overflow });
 
 export interface RefusalLimiterOptions {
   perMinute?: number;
@@ -52,6 +96,18 @@ const defaultSchedule = (run: () => void, delayMs: number) => {
   const timer = setTimeout(run, delayMs);
   timer.unref?.();
 };
+
+function newCounter(action: string, reason: string, minute: number): Counter {
+  return { action, reason, minute, written: 0, dropped: 0, objectIds: new Set(), objectIdsOverflow: false, clientAddresses: new Set(), clientAddressesOverflow: false };
+}
+
+function remember(counter: Counter, set: "objectIds" | "clientAddresses", overflow: "objectIdsOverflow" | "clientAddressesOverflow", value: unknown): void {
+  if (typeof value !== "string" || value === "") return;
+  const cut = cutHeld(value);
+  if (counter[set].has(cut)) return;
+  if (counter[set].size >= HELD_COUNTED) counter[overflow] = true;
+  else counter[set].add(cut);
+}
 
 export class RefusalLimiter {
   readonly perMinute: number;
@@ -75,8 +131,8 @@ export class RefusalLimiter {
     return this.counters.size;
   }
 
-  /** Whether this refusal is written in full (true) or only counted (false). */
-  admit(action: string, reason: string): boolean {
+  /** Whether this refusal is written in full (true) or only counted (false); `held` is what it names, for the summary. */
+  admit(action: string, reason: string, held: HeldBack = {}): boolean {
     const now = this.now();
     this.flush(now);
     const minute = Math.floor(now / MINUTE_MS);
@@ -87,12 +143,12 @@ export class RefusalLimiter {
       key = `${OVERFLOW_ACTION}\u0000${OVERFLOW_REASON}`;
       counter = this.counters.get(key);
       if (!counter) {
-        counter = { action: OVERFLOW_ACTION, reason: OVERFLOW_REASON, minute, written: 0, dropped: 0 };
+        counter = newCounter(OVERFLOW_ACTION, OVERFLOW_REASON, minute);
         this.counters.set(key, counter);
       }
     }
     if (!counter) {
-      counter = { action, reason: cutReason, minute, written: 0, dropped: 0 };
+      counter = newCounter(action, cutReason, minute);
       this.counters.set(key, counter);
     }
     if (counter.written < this.perMinute) {
@@ -100,6 +156,8 @@ export class RefusalLimiter {
       return true;
     }
     counter.dropped += 1;
+    remember(counter, "objectIds", "objectIdsOverflow", held.objectId);
+    remember(counter, "clientAddresses", "clientAddressesOverflow", held.clientAddress);
     this.scheduleFlush(minute);
     return false;
   }
@@ -111,7 +169,14 @@ export class RefusalLimiter {
       if (counter.minute >= minute) continue;
       this.counters.delete(key);
       if (counter.dropped > 0) {
-        const summary = { action: counter.action, reason: counter.reason, notWritten: counter.dropped, minuteStart: counter.minute * MINUTE_MS };
+        const summary: RefusalSummary = {
+          action: counter.action,
+          reason: counter.reason,
+          notWritten: counter.dropped,
+          minuteStart: counter.minute * MINUTE_MS,
+          objectIds: heldValues(counter.objectIds, counter.objectIdsOverflow),
+          clientAddresses: heldValues(counter.clientAddresses, counter.clientAddressesOverflow),
+        };
         try {
           void Promise.resolve(this.onSummary(summary)).catch(() => undefined);
         } catch {
@@ -144,24 +209,36 @@ export function refusalReason(detail: unknown): string {
 
 /** The detail of a summary row. */
 export function summaryDetail(summary: RefusalSummary): Record<string, unknown> {
+  const held = (v: HeldValues) => ({ first: v.first, distinct: v.distinct, ...(v.atLeast ? { distinct_is_at_least: true } : {}) });
   return {
     summary: true,
     reason: summary.reason,
     not_written: summary.notWritten,
     minute_start: new Date(summary.minuteStart).toISOString(),
-    note: `${summary.notWritten} more refusal(s) of callers without a valid identity in this minute were counted but not written one by one.`,
+    // ROUND5 K7: what the refusals not written named.
+    held_back_object_ids: held(summary.objectIds),
+    held_back_client_addresses: held(summary.clientAddresses),
+    note:
+      `${summary.notWritten} more refusal(s) of callers without a valid identity in this minute were counted but not written one by one. ` +
+      `They named ${summary.objectIds.distinct}${summary.objectIds.atLeast ? " or more" : ""} distinct object id(s) and came from ` +
+      `${summary.clientAddresses.distinct}${summary.clientAddresses.atLeast ? " or more" : ""} recorded client address(es); the first ${HELD_SHOWN} of each are listed. Their times and request ids are not kept.`,
   };
 }
 
 /**
  * Whether an audit event is written in full. Only refusals from callers without a valid identity
- * (no claims) go through the limiter; every row of a signed-in caller is written.
+ * (no claims) go through the limiter; every row of a signed-in caller is written, and so is a refusal
+ * the caller marks `unlimited` (ROUND5 K7: a refused sign-in whose name is an existing principal's).
  */
 export function admitAudit(
   limiter: RefusalLimiter,
   claims: object | null,
-  event: { action: string; outcome: "allowed" | "denied" | "error"; detail?: unknown },
+  event: { action: string; outcome: "allowed" | "denied" | "error"; detail?: unknown; objectId?: string | null; unlimited?: boolean },
 ): boolean {
-  if (claims !== null || event.outcome === "allowed") return true;
-  return limiter.admit(event.action, refusalReason(event.detail));
+  if (claims !== null || event.outcome === "allowed" || event.unlimited === true) return true;
+  const detail = event.detail && typeof event.detail === "object" && !Array.isArray(event.detail) ? (event.detail as Record<string, unknown>) : {};
+  return limiter.admit(event.action, refusalReason(event.detail), {
+    objectId: event.objectId ?? null,
+    clientAddress: typeof detail.client_address === "string" ? detail.client_address : null,
+  });
 }

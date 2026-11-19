@@ -57,7 +57,8 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
           rationale: "Metadata correction.",
           base_rev: await head(),
           target: { type: "build", id: "BLD-FX-02", base_version: await versionOf("build", "BLD-FX-02") },
-          set: { filename: "beta-build-3-untested.html", sha256: "2".repeat(64), label: "Beta build 3" },
+          // Label only: what identifies a build (file name, checksum) is refused earlier, as protected (ROUND5 K3).
+          set: { label: "Beta build 3" },
         }),
         409,
       );
@@ -180,7 +181,8 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
         rationale: "The handover names it.",
         base_rev: await head(),
         target: { type: "build", id: "BLD-FX-01", base_version: await versionOf("build", "BLD-FX-01") },
-        set: { filename: "alpha-candidate-7.html" },
+        // A label: a build's file name can no longer be changed by proposal (ROUND5 K3).
+        set: { label: "alpha-candidate-7 (named)" },
       }),
     );
     const filed = await reviewProposal(w.founder, id, "accept");

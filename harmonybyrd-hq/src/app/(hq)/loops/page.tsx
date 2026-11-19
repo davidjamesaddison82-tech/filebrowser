@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, KnownLink, Notice, PageHead, Pager, PathwayBasisChip } from "@/components/ui";
+import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, KnownLink, NotCountedChip, Notice, PageHead, Pager, PathwayBasisChip } from "@/components/ui";
+import { isReadable } from "@/lib/domain/conform";
 import { loopStageMatrix, stageCoverage } from "@/lib/domain/derive";
 import { type Epistemic, EPISTEMIC_LABEL, STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -19,14 +20,15 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
   let rows = allRows;
   if (moduleFilter) rows = rows.filter((r) => r.module_ids.includes(moduleFilter));
   if (familyFilter) rows = rows.filter((r) => r.module_ids.some((m) => familyOf(m) === familyFilter));
-  if (standingFilter) rows = rows.filter((r) => r.standing === standingFilter);
+  // ROUND5 K6: a loop HQ cannot read is listed under no standing.
+  if (standingFilter) rows = rows.filter((r) => r.readable && r.standing === standingFilter);
   const filtered = Boolean(moduleFilter || familyFilter || standingFilter);
   const pg = paginate(rows, params);
   const pager = <Pager {...pg} params={params} basePath="/loops" noun="loops" />;
   const coverage = stageCoverage(ds);
   const modulesWithLoops = [...new Set(allRows.flatMap((r) => r.module_ids))].sort((a, b) => ds.moduleName(a).localeCompare(ds.moduleName(b)));
   const familiesWithLoops = [...new Set(modulesWithLoops.map(familyOf).filter(Boolean))].sort();
-  const standings = [...new Set(allRows.map((r) => r.standing))];
+  const standings = [...new Set(allRows.filter((r) => r.readable).map((r) => r.standing))];
   /** Steps that share an order value are alternatives at the same point ("A or B"). */
   const stepGroups = (steps: (typeof ds.pathways)[number]["data"]["steps"]) => {
     const groups: (typeof steps)[] = [];
@@ -88,7 +90,7 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
                     <strong>{p.data.name}</strong>
                   </Link>
                   <IdTag id={p.meta.id} />
-                  <PathwayBasisChip value={p.data.basis} />
+                  {isReadable(p) ? <PathwayBasisChip value={p.data.basis} /> : <NotCountedChip />}
                 </div>
                 <div className="path">
                   {stepGroups(p.data.steps).map((group, i) => (
@@ -198,7 +200,7 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
                       <td className="title-cell" style={{ minWidth: 220 }}>
                         <Link href={withRev(`/loops/${row.loop_id}`, rev)}>{row.name}</Link>
                         <div className="row" style={{ gap: 6, marginTop: 3 }}>
-                          <EpistemicChip value={row.standing as Epistemic} />
+                          {row.readable ? <EpistemicChip value={row.standing as Epistemic} /> : <NotCountedChip />}
                         </div>
                         <div className="muted xsmall" style={{ marginTop: 3 }}>
                           {row.module_ids.map((m) => ds.moduleName(m)).join(" · ")}

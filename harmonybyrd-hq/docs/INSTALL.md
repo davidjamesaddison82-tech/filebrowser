@@ -43,7 +43,7 @@ npm run setup
    `__GENERATED_…__` placeholders still left in it. Either way it makes `.env.local` readable by its
    owner only (0600), and warns if it was readable by others. It then stops if `HQ_JWT_SECRET` is
    still a placeholder or shorter than 32 characters, or `DATABASE_URL` still holds the placeholder password;
-2. applies the migrations in `supabase/migrations` (`0001_foundation.sql` to `0009_review_round4.sql`,
+2. applies the migrations in `supabase/migrations` (`0001_foundation.sql` to `0010_review_round5.sql`,
    in order) and creates the application login role named in `DATABASE_URL` if it does not exist
    (see “One application role per installation” below);
 3. creates the local identities — `founder`, `developer`, `reader` (people) and `claude`, `chatgpt`
@@ -66,9 +66,14 @@ The application login role (`hq_app` in `.env.example`) belongs to the whole Pos
 to one database. Before it applies any migration, `npm run setup` (and `npm run db:migrate`) checks
 whether that role already exists:
 
-- if it does not, it is created with the password in `DATABASE_URL`;
-- if it does and the password in `DATABASE_URL` signs in as it, its password is left alone and only
-  its grants on this database are made;
+- if it does not, it is created with the password in `DATABASE_URL`, as `LOGIN NOINHERIT
+  NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB`;
+- if it does and it is a superuser, bypasses row-level security, may create roles or databases,
+  inherits privileges (`INHERIT`) or cannot log in, migration stops before anything is applied, with a
+  message that names the attribute (“role <name> already exists on this server and is SUPERUSER,
+  INHERIT. …”): HQ does not run as such a role;
+- if it does and the password in `DATABASE_URL` signs in as it, its password and attributes are left
+  alone and only its grants on this database are made;
 - if it does and the password does not sign in, migration stops before anything is applied, with:
   “role <name> already exists on this server with a different password. It may belong to another HQ
   installation: use a different role name in DATABASE_URL, or set HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 to
@@ -79,7 +84,8 @@ user name in `DATABASE_URL` (for example `postgres://hq_app_second:__GENERATED_A
 before running setup. Changing the password of an existing role would stop the other installation
 from connecting, and would let the new password open the other installation's database. Set
 `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` for one run only when you mean to change it, for example after
-losing the password: `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 npm run db:migrate`. Any other value does not
+losing the password: `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 npm run db:migrate`. With it, migration also
+sets an existing role to `LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB`. Any other value does not
 count. On a server whose `pg_hba.conf` lets these connections in without a password (`trust`), any
 password signs in, so the check cannot tell two installations apart. The test suites use the role
 and password of `DATABASE_URL` in `.env.local` (or of `HQ_TEST_DATABASE_URL`), on the same server,
@@ -165,7 +171,7 @@ by `_` and lower-case letters, digits or underscores (for example `hq_test_ci`),
 | --- | --- | --- |
 | `HQ_ADMIN_DATABASE_URL` | setup, migrations, seeding, tests | Owner connection. **Never used by the web application** |
 | `DATABASE_URL` | web application | The application's login role: it owns nothing and can only assume the API roles. The role is server-wide: use a role name of its own for each installation on one server |
-| `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` | setup, migrations | Lets migration change the password of an application role that already exists. Without it, migration stops instead. Set it for one run, not in `.env.local` |
+| `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` | setup, migrations | Lets migration change the password of an application role that already exists, and set its attributes to `LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB`. Without it, migration stops instead. Set it for one run, not in `.env.local` |
 | `HQ_JWT_SECRET` | web application | Signs session cookies and the sign-in device cookie (HS256, at least 32 characters; the application refuses to start with a placeholder or a shorter value). Changing it ends every session and every device cookie |
 | `HQ_PACK_DIR` | seeding | Which pack `npm run db:seed` imports |
 | `HQ_BASE_URL` | web application | Address shown in the connection guide |

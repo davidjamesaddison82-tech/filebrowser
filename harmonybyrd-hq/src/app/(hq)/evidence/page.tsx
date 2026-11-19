@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { BuildStandingChip, Card, Chip, Empty, IdTag, InboxOriginChip, KnownLink, ListedText, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import { BuildStandingChip, Card, Chip, Empty, IdTag, InboxOriginChip, KnownLink, ListedText, NotCountedChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 
-import type { DatasetView } from "@/lib/domain/conform";
-import { resolvedByHqDecisions } from "@/lib/domain/derive";
+import { type DatasetView, isReadable } from "@/lib/domain/conform";
+import { defectIsOpen, resolvedByHqDecisions } from "@/lib/domain/derive";
 import { type Page, loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
 import { humanise, isoDate, plural, shortHash } from "@/lib/ui/format";
 import { hqChecks } from "@/lib/ui/guards";
@@ -52,7 +52,8 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
   const commissions = ds.commissions.filter((c) => inModule(c.data.module_ids));
   const builds = ds.builds.filter((b) => inModule(undefined, b.data.module_id) && (!status || b.data.standing === status));
   const evidence = ds.evidence.filter((e) => inModule(e.data.module_ids) && (!status || e.data.verification === status));
-  const defects = ds.defects.filter((d) => inModule(d.data.module_ids) && (!status || d.data.status === status));
+  // ROUND5 K6: "open" is derive's one definition (a defect HQ cannot read is open).
+  const defects = ds.defects.filter((d) => inModule(d.data.module_ids) && (!status || (status === "open" ? defectIsOpen(d) : isReadable(d) && d.data.status === status)));
   const openItems = ds.openItems.filter((o) => inModule(o.data.module_ids) && (!status || o.data.kind === status));
   const decisions = ds.decisions.filter((d) => inModule(d.data.module_ids) && (!status || d.data.status === status));
   const resolved = resolvedByHqDecisions(ds);
@@ -105,7 +106,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
     },
     {
       label: "Defects",
-      n: ds.defects.filter((d) => d.data.status === "open").length,
+      n: ds.defects.filter(defectIsOpen).length,
       href: href("defects", { status: "open" }),
       note: "open, never silently dropped",
     },
@@ -235,7 +236,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                         </td>
                         <td className="nowrap">{isoDate(c.data.date)}</td>
                         <td>
-                          <StatusChip value={c.data.status} field="commission.status" />
+                          {isReadable(c) ? <StatusChip value={c.data.status} field="commission.status" /> : <NotCountedChip />}
                         </td>
                         <td className="small">{moduleNames(ds, c.data.module_ids)}</td>
                         <td className="num">{c.data.output_source_ids.length}</td>
@@ -276,8 +277,8 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                         </td>
                         <td className="small">{b.data.module_id ? ds.moduleName(b.data.module_id) : "—"}</td>
                         <td>
-                          <BuildStandingChip build={b.data} />
-                          {b.data.hq_acceptance?.state === "accepted" ? (
+                          <BuildStandingChip ds={ds} build={b.data} readable={isReadable(b)} />
+                          {!isReadable(b) ? null : b.data.hq_acceptance?.state === "accepted" ? (
                             <div style={{ marginTop: 4 }}>
                               <Chip tone="ok">Accepted in HQ</Chip>
                             </div>
@@ -291,7 +292,9 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           {shortHash(b.data.sha256, 16)}
                         </td>
                         <td className="small">
-                          {hqChecks(b.data.hq_checks).length ? (
+                          {!isReadable(b) ? (
+                            <NotCountedChip />
+                          ) : hqChecks(b.data.hq_checks).length ? (
                             <Chip tone="ok" glyph="✓" title="Checks made by HQ's build">
                               {plural(hqChecks(b.data.hq_checks).length, "check")} by HQ&apos;s build
                             </Chip>
@@ -338,7 +341,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           <ListedText field="evidence.type" value={e.data.type} />
                         </td>
                         <td>
-                          <StatusChip value={e.data.verification} field="evidence.verification" />
+                          {isReadable(e) ? <StatusChip value={e.data.verification} field="evidence.verification" /> : <NotCountedChip />}
                         </td>
                         <td className="small">{moduleNames(ds, e.data.module_ids)}</td>
                         <td className="nowrap">{isoDate(e.data.date)}</td>
@@ -355,7 +358,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
       {tab === "defects" ? (
         <Card
           title={`${defects.length} defects`}
-          hint={`${defects.filter((d) => d.data.status === "open").length} open`}
+          hint={`${defects.filter(defectIsOpen).length} open`}
           flush
           foot={pager(pg.defects, "defects")}
         >
@@ -385,7 +388,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           </div>
                         </td>
                         <td>
-                          <StatusChip value={d.data.status} field="defect.status" />
+                          {isReadable(d) ? <StatusChip value={d.data.status} field="defect.status" /> : <NotCountedChip />}
                         </td>
                         <td className="small">
                           <ListedText field="defect.severity" value={d.data.severity} />
@@ -435,7 +438,11 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           </div>
                         </td>
                         <td>
-                          <Chip tone={resolved.has(o.meta.id) ? "ok" : "warn"}>{resolved.has(o.meta.id) ? "Resolved in HQ" : <ListedText field="open_item.kind" value={o.data.kind} />}</Chip>
+                          {isReadable(o) ? (
+                            <Chip tone={resolved.has(o.meta.id) ? "ok" : "warn"}>{resolved.has(o.meta.id) ? "Resolved in HQ" : <ListedText field="open_item.kind" value={o.data.kind} />}</Chip>
+                          ) : (
+                            <NotCountedChip />
+                          )}
                         </td>
                         <td className="small">{moduleNames(ds, o.data.module_ids)}</td>
                       </tr>
@@ -479,10 +486,10 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                             {d.data.code ? <div className="mono xsmall muted">{d.data.code}</div> : null}
                           </td>
                           <td>
-                            <StatusChip value={d.data.status} field="decision.status" />
+                            {isReadable(d) ? <StatusChip value={d.data.status} field="decision.status" /> : <NotCountedChip />}
                           </td>
                           <td>
-                            <Chip tone={d.data.recorded_in === "hq" ? "ok" : "outline"}>{d.data.recorded_in === "hq" ? "In HQ" : "In a source"}</Chip>
+                            {isReadable(d) ? <Chip tone={d.data.recorded_in === "hq" ? "ok" : "outline"}>{d.data.recorded_in === "hq" ? "In HQ" : "In a source"}</Chip> : null}
                           </td>
                           <td className="nowrap">{isoDate(d.data.date)}</td>
                           <td className="small">{moduleNames(ds, d.data.module_ids)}</td>

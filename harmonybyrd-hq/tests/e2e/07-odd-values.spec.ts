@@ -102,19 +102,24 @@ test.describe("screens show odd stored values as not valid (G1f)", () => {
     await expect(facts).not.toContainText("Accepted");
     await check("/modules/MOD-FX-ALPHA");
     // (In the module's builds; since ROUND4 H6b the record is also listed, as one HQ cannot read, at the top of the page.)
-    await expect(page.locator("#builds li", { hasText: "odd-standing-build" }).first()).toContainText("Not a valid value");
+    // ROUND5 K6: in a list, a record HQ cannot read shows "Not counted — cannot be read" in place of its status.
+    const NOT_COUNTED = "Not counted — cannot be read";
+    await expect(page.locator("#builds li", { hasText: "odd-standing-build" }).first()).toContainText(NOT_COUNTED);
     await check("/evidence?tab=builds");
-    await expect(page.locator("tr", { hasText: "odd-standing-build" }).first()).toContainText("Not a valid value");
-    await expect(page.locator("tr", { hasText: "odd-word-build" }).first()).toContainText("Not a valid value");
+    await expect(page.locator("tr", { hasText: "odd-standing-build" }).first()).toContainText(NOT_COUNTED);
+    await expect(page.locator("tr", { hasText: "odd-word-build" }).first()).toContainText(NOT_COUNTED);
 
     // The module with a number as a lifecycle state.
     await check("/modules/MOD-ODD-NUMBER");
     await expect(page.locator("main")).toContainText("Not a valid value");
-    await expect(page.locator(".lc-row .lc-invalid")).toHaveCount(1);
+    // ROUND5 K6: the module's own record fails validation, so no dimension shows a state: each says it is not counted.
+    await expect(page.locator(".lc-row", { hasText: NOT_COUNTED })).toHaveCount(12);
+    await expect(page.locator(".lc-row .lc-dot")).toHaveCount(0);
     await check("/modules?view=lifecycle");
     const oddRow = page.locator("tr", { hasText: "Odd lifecycle module" }).first();
-    await expect(oddRow.locator(".lc-invalid")).toHaveCount(1);
-    await expect(oddRow.locator(".lc-invalid")).toHaveAttribute("title", /: Not a valid value/);
+    await expect(oddRow).toContainText("Not reliable");
+    await expect(oddRow.locator(".lc-invalid")).toHaveCount(12);
+    await expect(oddRow.locator(".lc-invalid").first()).toHaveAttribute("title", /: Not counted — cannot be read/);
     await check("/modules");
     await check("/");
 
@@ -124,19 +129,19 @@ test.describe("screens show odd stored values as not valid (G1f)", () => {
     await expect(evFacts).toContainText("Not a valid value");
     await expect(evFacts).not.toContainText("Founder acceptance");
     await check("/evidence?tab=evidence");
-    await expect(page.locator("tr", { hasText: "Odd type evidence" }).first()).toContainText("Not a valid value");
+    await expect(page.locator("tr", { hasText: "Odd type evidence" }).first()).toContainText(NOT_COUNTED);
 
     // The defect with null as its status.
     await check("/records/defect/DEF-ODD-NULL");
     await expect(page.locator(".card", { has: page.getByRole("heading", { name: "Defect", exact: true }) })).toContainText("Not a valid value");
     await check("/evidence?tab=defects");
-    await expect(page.locator("tr", { hasText: "Odd status defect" }).first()).toContainText("Not a valid value");
+    await expect(page.locator("tr", { hasText: "Odd status defect" }).first()).toContainText(NOT_COUNTED);
 
     // The requirement with a number as its disposition and a list as its implementation state.
     await check("/requirements/FR-ODD-NUMBER");
     await expect(page.locator("main")).toContainText("Not a valid value");
     await check("/requirements");
-    await expect(page.locator("tr", { hasText: "Odd disposition requirement" }).first()).toContainText("Not a valid value");
+    await expect(page.locator("tr", { hasText: "Odd disposition requirement" }).first()).toContainText(NOT_COUNTED);
 
     for (const url of LISTS) await check(url);
     for (const [type, id] of [["build", "BLD-ODD-ARRAY"], ["module", "MOD-ODD-NUMBER"], ["evidence", "EV-ODD-OBJECT"], ["defect", "DEF-ODD-NULL"], ["requirement", "FR-ODD-NUMBER"]]) {
@@ -155,7 +160,8 @@ test.describe("screens show odd stored values as not valid (G1f)", () => {
       ((await (await page.request.get(`/api/v1/tools/get_record?type=${type}&id=${id}`)).json()) as { data: { meta: { version: number } } }).data.meta.version;
     for (const [type, id, set] of [
       ["module", "MOD-FX-ALPHA", { summary: "Alpha, reworded while odd records are stored (browser test)." }],
-      ["requirement", "FR-FX-001", { title: "Slow tempo first (reworded, browser test)" }],
+      // FR-FX-002: FR-FX-001 is implemented and tested, which a proposal can no longer change (ROUND5 K2).
+      ["requirement", "FR-FX-002", { title: "A requirement, reworded while odd records are stored (browser test)" }],
       ["defect", "DEF-FX-02", { title: "A defect, reworded while odd records are stored (browser test)" }],
     ] as const) {
       const res = await page.request.post("/api/v1/tools/submit_change_proposal", {
@@ -272,6 +278,51 @@ test.describe("ROUND4 H6 and H1: the screens verifier's records", () => {
     // Y14: Beta build 2 keeps its review item.
     await page.goto("/review");
     await expect(page.locator("main")).toContainText("Beta build 2 is reported as accepted");
+  });
+
+  test("ROUND5 K6: lists and counts leave out what HQ cannot read; a module HQ cannot read shows no lifecycle state; the open-defect count is derive's", async ({ page }) => {
+    const NOT_COUNTED = "Not counted — cannot be read";
+    // Gamma: the invalid build reported as accepted is listed as not counted, without its standing, and not counted beside the list.
+    const gammaBrief = (await (await page.request.get("/api/v1/tools/get_module_brief?module=MOD-FX-GAMMA")).json()) as { data: { builds: { ref: { id: string; readable: boolean } }[] } };
+    const readableBuilds = gammaBrief.data.builds.filter((b) => b.ref.readable).length;
+    const notCountedBuilds = gammaBrief.data.builds.length - readableBuilds;
+    expect(gammaBrief.data.builds.find((b) => b.ref.id === "BLD-R4-ACC")!.ref.readable).toBe(false);
+    await page.goto("/modules/MOD-FX-GAMMA");
+    const builds = page.locator("#builds");
+    await expect(builds).toContainText(`${readableBuilds} on record; ${notCountedBuilds} not counted — cannot be read`);
+    const row = builds.locator("li", { hasText: "r4-accepted" });
+    await expect(row).toContainText(NOT_COUNTED);
+    await expect(row).not.toContainText("Acceptance reported");
+    // The open-defect count beside the list is the register's (a defect HQ cannot read is open).
+    const overview = (await (await page.request.get("/api/v1/tools/get_ecosystem_overview")).json()) as { data: { modules: { id: string; open_defects: number }[]; priorities: { id: string; readable: boolean }[] } };
+    const gammaOpen = overview.data.modules.find((m) => m.id === "MOD-FX-GAMMA")!.open_defects;
+    await expect(page.locator("#defects")).toContainText(`${gammaOpen} open of`);
+    // Delta: the invalid loop that names it is listed as not counted, and gives it no loop.
+    await page.goto("/modules/MOD-FX-DELTA");
+    await expect(page.locator("#loops").locator("li", { hasText: "r4 loop" })).toContainText(NOT_COUNTED);
+    await expect(page.locator("#loops")).not.toContainText("1 loop recovered;");
+    // A module whose own record fails validation: no lifecycle state, basis or tick on its page, and its matrix row is marked.
+    await page.goto("/modules/MOD-RV3-BLK");
+    const lifecycle = page.locator("#lifecycle");
+    await expect(lifecycle).toContainText(NOT_COUNTED);
+    await expect(lifecycle).not.toContainText("Checked by HQ's build");
+    await expect(lifecycle.locator(".lc-yes")).toHaveCount(0);
+    await page.goto("/modules?view=lifecycle");
+    const matrixRow = page.locator("tr", { hasText: "rv3 blocker module" });
+    await expect(matrixRow).toContainText("Not reliable");
+    await expect(matrixRow.locator(".lc-yes, .lc-partial")).toHaveCount(0);
+    // The register's builds tab: the invalid build has no standing chip.
+    await page.goto("/evidence?tab=builds");
+    await expect(page.locator("tr", { hasText: "r4-accepted" })).toContainText(NOT_COUNTED);
+    await expect(page.locator("tr", { hasText: "r4-accepted" })).not.toContainText("Acceptance reported");
+    // The dashboard: the recommendation HQ cannot read comes last and says it is not counted; its blocker is not hidden.
+    const order = overview.data.priorities.map((p) => p.id);
+    expect(order.indexOf("REC-RV3-BLK")).toBeGreaterThan(order.indexOf("REC-FX-02"));
+    expect(overview.data.priorities.find((p) => p.id === "REC-RV3-BLK")!.readable).toBe(false);
+    await page.goto("/");
+    const rec = page.locator("li", { hasText: "rv3 blocked recommendation" });
+    await expect(rec).toContainText(NOT_COUNTED);
+    await expect(rec).toContainText("Blocked by: Not readable — see the stored record.");
   });
 
   test("H6e (Y18) and H6d (Y17): a check whose result is not valid has no tick, and no attribution is made up", async ({ page }) => {

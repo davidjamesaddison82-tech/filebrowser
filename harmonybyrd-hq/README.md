@@ -26,14 +26,16 @@ Built under commission **HB-HQ-P02-R1**.
 
 Three rules are enforced by the database, not by convention:
 
-1. **Nothing without a source.** A record gets in only if every quotation in it is found, verbatim, in the snapshot of the document it cites. This is checked when a pack is imported and again for every proposal, when it is submitted and when the founder accepts it. A quotation must be at least twelve characters long once spacing is normalised. A verbatim quotation shows that the words are in the source, not that they are about what they are attached to, so whatever enters through the proposal inbox is the submitter's claim: only an import can label something as reported by a source, and records HQ did not write (evidence a source reports or HQ's build checked, sources HQ has read) cannot be rewritten by proposal.
+1. **Nothing without a source.** A record gets in only if every quotation in it is found, verbatim, in the snapshot of the document it cites. This is checked when a pack is imported and again for every proposal, when it is submitted and when the founder accepts it. A quotation must be at least twelve characters long once spacing is normalised. A verbatim quotation shows that the words are in the source, not that they are about what they are attached to, so whatever enters through the proposal inbox is the submitter's claim: only an import can label something as reported by a source, and records HQ did not write (evidence a source reports or HQ's build checked, sources HQ has read) cannot be rewritten by proposal. A loop or pathway a source describes can be changed by proposal only together with relabelling it as the submitter's claim, and what identifies a build and a module's evidence level only by an import (docs/GOVERNANCE.md).
 2. **Nothing is overwritten.** Every change is a new version; any earlier revision can be read exactly as it stood.
-3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing. No proposal can even claim an acceptance, or change a build a source reports as accepted except to withdraw that report: acceptance is recorded only by a founder decision in HQ, or reported by an imported source. Nor can a proposal say a requirement is implemented and tested. The database checks the values that drive these labels, and the fields each record type has, itself, so a proposal that goes round the application cannot store a build standing such as `accepted`, a founder-acceptance state such as `Yes`, or a look-alike field such as `"hq_acceptance "` either.
+3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing. No proposal can even claim an acceptance, or change a build a source reports as accepted except to withdraw that report: acceptance is recorded only by a founder decision in HQ, or reported by an imported source. Nor can a proposal say a requirement is implemented and tested, or change one that is without moving it to another state. The database checks the values that drive these labels, and the fields each record type has, itself, so a proposal that goes round the application cannot store a build standing such as `accepted`, a founder-acceptance state such as `Yes`, or a look-alike field such as `"hq_acceptance "` either.
 
 ## Quick start
 
 Requirements: Node.js 22.12 or later, PostgreSQL 16. For the browser tests, the Chromium that
 Playwright drives (`npx playwright install chromium`); for the mutation check, `python3`.
+
+From the repository's root (the folder that holds `harmonybyrd-hq`):
 
 ```bash
 cd harmonybyrd-hq
@@ -45,7 +47,8 @@ npm run dev                 # http://localhost:3210
 
 On a PostgreSQL server that already holds another HQ installation, give this one its own
 application role name in `DATABASE_URL` first: setup stops rather than change the password of a
-role that exists (docs/INSTALL.md).
+role that exists, and stops too if an existing role is a superuser or has another attribute HQ's
+application role must not have (docs/INSTALL.md).
 
 `npm run setup` prints a passphrase for each local identity (founder, developer, reader) and an
 API token for each AI client (claude, chatgpt). They are also saved in `.hq-local-credentials.json`,
@@ -69,10 +72,12 @@ was made on and describes that commit, not necessarily the code as it is now.
 An adversarial review confirmed 71 defects by reproduction. The reviewers had not written the code,
 but they — like the engineers who fixed the defects and the verifiers who re-checked the fixes — were
 AI agents of the same build process, not independent people. The defects were fixed in rounds, and
-each of the first three rounds was re-checked by re-running the attacks. The re-check of the third round (migration
+each of the first four rounds was re-checked by re-running the attacks. The re-check of the third round (migration
 0008) gave 38 results: 24 fixed, 13 only partly fixed and 1 a documented limit; it found 30 new
-defects, none of high severity, 8 of medium and 22 of low. A fourth round (migration 0009) fixed what
-it found and has not yet been re-checked. Each finding, and what was done about it, is in
+defects, none of high severity, 8 of medium and 22 of low. The re-check of the fourth round
+(migration 0009) gave 47 results: 38 fixed and 9 only partly fixed; it found 27 new defects, none of
+high severity, 9 of medium and 18 of low. A fifth and last round (migration 0010) fixed what it found
+and was **not re-checked** by anyone. Each finding, and what was done about it, is in
 [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) (generated) and
 [docs/PROGRESS-REGISTER.md](docs/PROGRESS-REGISTER.md); what remains is in
 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). None of this satisfies an acceptance gate.

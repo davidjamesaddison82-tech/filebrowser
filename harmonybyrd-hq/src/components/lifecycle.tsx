@@ -6,7 +6,7 @@ import { LIFECYCLE_DIMENSIONS, LIFECYCLE_LABEL, type ModuleRecord } from "@/lib/
 import { isObject, lifecycleReports, type SafeLifecycleReport } from "@/lib/ui/guards";
 import { NOT_VALID } from "@/lib/ui/format";
 import { recordHref } from "@/lib/ui/links";
-import { Citations, EpistemicChip } from "./ui";
+import { Chip, Citations, EpistemicChip, NOT_COUNTED, NotCountedChip } from "./ui";
 
 const GLYPH: Record<string, { glyph: string; label: string }> = {
   yes: { glyph: "●", label: "Yes" },
@@ -63,18 +63,35 @@ export function LifecycleMatrix({ rows }: { rows: LifecycleRow[] }) {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.module_id}>
+            <tr key={row.module_id} data-reliable={row.reliable ? undefined : "false"}>
               <td className="name">
                 <Link href={recordHref("module", row.module_id)}>{row.name}</Link>
+                {row.reliable ? null : (
+                  <>
+                    {" "}
+                    <Chip tone="bad" glyph="!" title="This module's own record cannot be read in full: none of its lifecycle states is counted">
+                      Not reliable
+                    </Chip>
+                  </>
+                )}
               </td>
-              {row.cells.map((cell) => (
-                <td key={cell.dimension}>
-                  <LifecycleDot
-                    state={cell.state}
-                    title={`${LIFECYCLE_LABEL[cell.dimension].label}: ${glyphOf(cell.state).label}${typeof cell.note === "string" && cell.note ? ` — ${cell.note}` : ""}`}
-                  />
-                </td>
-              ))}
+              {row.cells.map((cell) =>
+                // ROUND5 K6: a module HQ cannot read shows no state in any cell, only that it is not counted.
+                row.reliable ? (
+                  <td key={cell.dimension}>
+                    <LifecycleDot
+                      state={cell.state}
+                      title={`${LIFECYCLE_LABEL[cell.dimension].label}: ${glyphOf(cell.state).label}${typeof cell.note === "string" && cell.note ? ` — ${cell.note}` : ""}`}
+                    />
+                  </td>
+                ) : (
+                  <td key={cell.dimension}>
+                    <span className="lc-dot lc-invalid" title={`${LIFECYCLE_LABEL[cell.dimension].label}: ${NOT_COUNTED}`} role="img" aria-label={`${LIFECYCLE_LABEL[cell.dimension].label}: ${NOT_COUNTED}`}>
+                      !
+                    </span>
+                  </td>
+                ),
+              )}
             </tr>
           ))}
         </tbody>
@@ -102,8 +119,12 @@ function entryOf(module: ModuleRecord, dimension: string): { state: unknown; bas
   return { state: entry.state, basis: entry.basis, note: typeof entry.note === "string" ? entry.note : "", citations: entry.citations };
 }
 
-/** One module's lifecycle, dimension by dimension, with the basis and sources for each. */
-export function LifecycleDetail({ ds, module }: { ds: DatasetView; module: ModuleRecord }) {
+/**
+ * One module's lifecycle, dimension by dimension, with the basis and sources for each. ROUND5 K6: for a
+ * module whose own record fails validation (`reliable` false), no dimension shows a state, a basis or a
+ * tick: each says it is not counted; the note and quotations it holds are still shown.
+ */
+export function LifecycleDetail({ ds, module, reliable = true }: { ds: DatasetView; module: ModuleRecord; reliable?: boolean }) {
   const others = otherReports(module);
   return (
     <div>
@@ -117,16 +138,22 @@ export function LifecycleDetail({ ds, module }: { ds: DatasetView; module: Modul
               <div className="muted xsmall">{LIFECYCLE_LABEL[d].question}</div>
             </div>
             <div className="row" style={{ gap: 6 }}>
-              <LifecycleDot state={entry.state} />
-              <span className="small">{glyphOf(entry.state).label}</span>
+              {reliable ? (
+                <>
+                  <LifecycleDot state={entry.state} />
+                  <span className="small">{glyphOf(entry.state).label}</span>
+                </>
+              ) : (
+                <NotCountedChip />
+              )}
             </div>
             <div className="stack-sm" style={{ gap: 4 }}>
               {entry.note ? <div className="small">{entry.note}</div> : null}
               <div className="row" style={{ gap: 8 }}>
-                <EpistemicChip value={entry.basis} />
-                <Citations ds={ds} citations={entry.citations} by={entry.basis} />
+                {reliable ? <EpistemicChip value={entry.basis} /> : null}
+                <Citations ds={ds} citations={entry.citations} by={reliable ? entry.basis : undefined} />
               </div>
-              {alt.map((o, i) => (
+              {(reliable ? alt : []).map((o, i) => (
                 <div className="lc-other" key={i}>
                   <div className="small">
                     <strong>Another source reports:</strong> <LifecycleDot state={o.state} /> {glyphOf(o.state).label}

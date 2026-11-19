@@ -434,7 +434,8 @@ const CASES: Case[] = [
     body: {
       create: {
         record_type: "module",
-        record: { name: "Epsilon", lifecycle: gammaLifecycleWith({ state: "yes", basis: "reported", note: "", citations: [BETA_ACCEPTED] }) },
+        // The lowest evidence level, which a created module must carry (ROUND5 K4), so the acceptance rule is what answers.
+        record: { name: "Epsilon", evidence_level: "commission_list_only", lifecycle: gammaLifecycleWith({ state: "yes", basis: "reported", note: "", citations: [BETA_ACCEPTED] }) },
       },
     },
     status: 403,
@@ -783,10 +784,16 @@ describe("D1d — the founder's review shows what the proposal touches", () => {
       base_rev: (await getDataset(w.founder)).head,
       // BLD-FX-01: a build a source reports as accepted (BLD-FX-02) is frozen for proposals (ROUND3 G1a).
       target: { type: "build", id: "BLD-FX-01", base_version: await baseVersion("build", "BLD-FX-01") },
-      set: { statement: { text: "Alpha candidate 7, not accepted.", epistemic: "submitter_claim", citations: [] }, sha256: "2".repeat(64), label: "Alpha candidate 7" },
+      // No sha256: what identifies a build can no longer be changed by proposal (ROUND5 K3); a planted one is checked below.
+      set: { statement: { text: "Alpha candidate 7, not accepted.", epistemic: "submitter_claim", citations: [] }, label: "Alpha candidate 7" },
     });
     const impact = await proposalImpact(w.founder, await getProposal(w.founder, (submitted.proposal as { id: string }).id));
-    expect(impact.sensitive_fields).toEqual(expect.arrayContaining(["statement", "sha256"]));
+    expect(impact.sensitive_fields).toEqual(expect.arrayContaining(["statement"]));
+    const planted = await plant(
+      { rule: "K3", name: "a planted checksum change", body: { target: { type: "build", id: "BLD-FX-01" }, set: { sha256: "2".repeat(64) } }, status: 403, sqlstate: "HQ403", message: /./ },
+      w.claude,
+    );
+    expect((await proposalImpact(w.founder, await getProposal(w.founder, planted))).sensitive_fields).toContain("sha256");
     expect(impact.sensitive_fields).not.toContain("label");
     expect(impact.target_acceptance).toBeNull();
   });

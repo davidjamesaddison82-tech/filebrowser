@@ -16,6 +16,7 @@ import {
   InvalidRecordNotice,
   isReportedAcceptance,
   KnownLink,
+  NotCountedChip,
   NotValidChip,
   Notice,
   PageHead,
@@ -250,7 +251,11 @@ function statementHeading(statement: unknown): string {
   return typeof label === "string" && ["reported", "design_intention", "source_recommendation", "founder_statement"].includes(label) ? "What the source says" : "Statement";
 }
 
-function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<AnyRecord>; rev: number | null }) {
+/**
+ * `createdThroughInbox`: the record's first version came through the proposal inbox (ROUND5 K3). A build
+ * created there may give its checksum, file name, size and artifact source: they are the submitter's.
+ */
+function Summary({ ds, envelope, rev, createdThroughInbox }: { ds: DatasetView; envelope: Envelope<AnyRecord>; rev: number | null; createdThroughInbox: boolean }) {
   const readable = isReadable(envelope);
   // L8: the lists conforming emptied on a record that fails validation; shown as not readable, never as nothing.
   const emptied = new Set(unreadableFields(ds, envelope));
@@ -484,13 +489,23 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
         <dl className="facts">
           <dt>Standing</dt>
           <dd>
-            <BuildStandingChip build={b} />
+            {readable ? (
+              <BuildStandingChip ds={ds} build={b} />
+            ) : (
+              // ROUND5 K6: on a build HQ cannot read, its standing counts for nothing; what is stored is said in plain words.
+              <>
+                <NotCountedChip />{" "}
+                <span className="small muted">
+                  stored as <ListedText field="build.standing" value={b.standing} />
+                </span>
+              </>
+            )}
           </dd>
           <dt>Module</dt>
           <dd>{b.module_id ? <RecordLink ds={ds} id={b.module_id} /> : <span className="muted">—</span>}</dd>
           <dt>File name</dt>
           <dd className="mono small break">{b.filename ?? "—"}</dd>
-          <dt>SHA-256 (as written in the source)</dt>
+          <dt>{createdThroughInbox ? "SHA-256 (as given by the submitter)" : "SHA-256 (as written in the source)"}</dt>
           <dd className="mono small break">{b.sha256 ?? "No hash on record"}</dd>
           <dt>Size</dt>
           <dd>{b.bytes ?? "—"}</dd>
@@ -520,9 +535,16 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
           {b.artifact_source_id ? (
             <>
               <dt>The build itself</dt>
-              <dd>
-                HQ holds a snapshot of this build as <RecordLink ds={ds} id={b.artifact_source_id} />
-              </dd>
+              {createdThroughInbox && !(readable && hqChecks(b.hq_checks).length) ? (
+                // ROUND5 K3: what the submitter names is not a snapshot HQ holds, unless HQ's build recorded a check of it.
+                <dd>
+                  The submitter names <RecordLink ds={ds} id={b.artifact_source_id} /> as this build. HQ has not checked that it is.
+                </dd>
+              ) : (
+                <dd>
+                  HQ holds a snapshot of this build as <RecordLink ds={ds} id={b.artifact_source_id} />
+                </dd>
+              )}
             </>
           ) : null}
           {hqChecks(b.hq_checks).length ? (
@@ -765,7 +787,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
 
       <div className="split">
         <div className="stack">
-          <Summary ds={ds} envelope={envelope} rev={rev} />
+          <Summary ds={ds} envelope={envelope} rev={rev} createdThroughInbox={history[0]?.origin === "proposal_acceptance"} />
           {type === "decision" || type === "build" ? <OtherMentions ds={ds} data={envelope.data} /> : null}
 
           <Card title="Source lineage" hint="Exactly which documents this record rests on" flush>

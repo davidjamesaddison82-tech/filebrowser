@@ -41,6 +41,22 @@ async function laneFor(handle: string, device: DeviceClaims | null): Promise<Lan
 
 const NO_MATCH = "That name and passphrase do not match.";
 
+/**
+ * ROUND5 K7: whether a refused sign-in names an existing principal. Such a refusal is never held back by
+ * the audit log's refusal limiter (src/lib/server/audit-limit.ts), so a flood of refusals for names that
+ * do not exist cannot hide guesses at a real account. The row is visible to the founder only. Looked up
+ * for every refusal that names someone, known or not, so both take the same path.
+ */
+async function namesPrincipal(handle: string): Promise<boolean> {
+  if (!handle) return false;
+  try {
+    return (await loginPrincipalId(handle)) !== null;
+  } catch {
+    // The database is unreachable: nothing will be written anyway.
+    return false;
+  }
+}
+
 export async function signIn(_previous: { error?: string } | undefined, formData: FormData): Promise<{ error?: string }> {
   const typed = String(formData.get("handle") ?? "").trim();
   const passphrase = String(formData.get("passphrase") ?? "");
@@ -49,6 +65,8 @@ export async function signIn(_previous: { error?: string } | undefined, formData
   // database or the passphrase check. The refusal is audited with the length only, never the value.
   const tooLong = tooLongSignInInput(typed, passphrase);
   if (tooLong) {
+    // No look-up here (G7), so this refusal may be held back by the refusal limiter even for a real
+    // account's name: it checked no passphrase, so it hides no guess (ROUND5 K7).
     await audit(null, {
       action: "session.sign_in",
       objectType: "principal",
@@ -83,6 +101,7 @@ export async function signIn(_previous: { error?: string } | undefined, formData
       objectId: handle,
       outcome: "denied",
       detail: { reason: "too_many_in_progress", lane: lane.device ? "device" : "anonymous", ...(address ? { client_address: address } : {}) },
+      unlimited: await namesPrincipal(handle),
     });
     return { error: "Too many sign-in attempts are in progress. Try again in a moment." };
   }
@@ -102,6 +121,7 @@ export async function signIn(_previous: { error?: string } | undefined, formData
         lane: lane.device ? "device" : "anonymous",
         ...(address ? { client_address: address } : {}),
       },
+      unlimited: await namesPrincipal(handle),
     });
     return { error: NO_MATCH };
   }

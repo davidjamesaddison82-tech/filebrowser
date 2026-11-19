@@ -85,13 +85,32 @@ remain, by design or because fixing them was out of scope:
   reaches the database, anonymous included, can record a refusal (outcome *denied* or *error*) that
   did not happen, under any lower-case dotted action of at most 80 characters, with a detail of up to
   8,192 bytes, as many times as they like. No new row can have an action longer than 80 characters.
+  Such a row can copy the shape of the application's own rows: a direct caller can write a row that
+  looks exactly like a summary of the refusal limiter (`detail.summary` true, any `not_written`), which
+  cannot be told apart from a real one when its request id is empty; and through the application's
+  login role, which the database trusts to state who the caller is, a refusal row can be put under any
+  principal's name, the founder's included.
 - **The bound on refusal rows is the application's, and per process.** Refusals of callers without a
   valid identity are written in full up to 120 a minute for each action and reason, then counted in
-  one summary row a minute (docs/SECURITY.md). Several server processes each keep their own count;
-  counts are lost if the process stops before the minute ends; and once a minute's 120 are written,
-  the row of a particular refused request may be missing when someone looks it up by its request id.
-  Refusals of signed-in callers are not bounded, and nor is a caller that writes through
-  `hq.log_refusal` directly.
+  one summary row a minute (docs/SECURITY.md). A refused sign-in whose name is an existing
+  principal's is never held back, so a flood of refusals for names that do not exist cannot hide
+  guesses at a real account; a summary lists the first 10 distinct names (object ids) and client
+  addresses it held back, and how many there were. What is still lost after a flood: the time and
+  request id of each refusal held back, and anything about a refused token. A refused MCP or REST
+  call records neither the token it carried nor a client address, so a summary of those says only how
+  many there were: an attempt with a stolen or guessed token can still be hidden among 120 refusals of
+  requests with no token. After 120 refused sign-ins in a minute, a refusal for an existing name is
+  still written while one for an unknown name is only counted, so the time an answer takes may then
+  differ by one database write. A sign-in refused for an over-long passphrase is not looked up and can
+  be held back for a real name too; it checked no passphrase. Several server processes each keep
+  their own count, and counts are lost if the process stops before the minute ends. Refusals of
+  signed-in callers are not bounded, and nor is a caller that writes through `hq.log_refusal`
+  directly.
+- **`TRACE` reaches the framework, not HQ.** A `TRACE` request to any address is answered 500 by
+  Next.js before HQ's code runs, with no request id, and each one writes a short stack trace to the
+  server log, so a client can grow the log at will by sending them. A method name Node's HTTP parser
+  does not know (or one not in capitals) is answered 400, and `CONNECT` is closed, both with no id.
+  HQ's own 405 with a request id covers every other method (docs/SECURITY.md).
 - **A caller that reaches the database directly chooses the request id it records.** The request id
   is the application server's; the database cannot know it. A caller who reaches the database as
   `authenticated` or `anon` (the application's login role, or an API layer such as Supabase's) passes
@@ -106,6 +125,17 @@ remain, by design or because fixing them was out of scope:
   is, remove it, or replace it with the submitter's own claim. Removing or replacing a claim a source
   reports is allowed (withdrawing a claim is not asserting one), so the founder has to notice it when
   reviewing the proposal; the review screen shows the stored value beside the proposed one.
+- **An imported claim kept identical can have the fields around it changed.** Apart from the records
+  that are frozen (docs/GOVERNANCE.md), a proposal that leaves an imported claim exactly as it was can
+  change the fields beside it: a defect's title, modules and build around a statement a source
+  reports, an open item's title, a commission's status and modules. The claim keeps its source's label
+  while what it is attached to changes. The review screen shows each change, and the record is then
+  marked as changed through the inbox, but nothing marks which fields beside the claim changed.
+- **The attribution of a requirement created through the inbox is the submitter's.** A created
+  requirement's `exact_wording` is checked to occur verbatim in its source, but its `attribution`
+  (for example “A founder ruling as recorded by the source” or “Quoted directly by the source”) is
+  whatever the submitter gave. Its page also says it entered through the inbox and is unreviewed by
+  the founder; it does not say that the attribution is the submitter's.
 - **A submitter's quotations prove only that the words are in the source.** A submitter's claim may
   quote any sentence of a source HQ holds, related or not. HQ verifies the words, labels the claim
   as the submitter's, says on the screen that it checked the words and not that they support the
@@ -194,22 +224,41 @@ remain, by design or because fixing them was out of scope:
     lifecycle entry towards a standing, test evidence for a requirement, an HQ check, a decision that
     resolves something, or a link that settles missing work (`src/lib/domain/derive.ts`, the list at
     its top). A defect HQ cannot read counts as open, and a requirement HQ cannot read as live and
-    outstanding. It is **flagged on every module it names**: on each module whose id occurs anywhere
-    in its stored data, standing on its own rather than as part of a longer id, the register, overview, brief, module page and API carry
-    `unreadable_records` and the words “N record(s) that name this module cannot be read in full; its
-    figures may be incomplete.”, and development health lists every such record under *Records HQ
-    cannot read*. A module whose own record fails validation reads *Not reliable* instead of figures.
+    outstanding. A link to it counts as a link to nothing: a module's loop that HQ cannot read gives
+    the module no loop, and a quotation from a source HQ cannot read backs no standing and no reported
+    acceptance (the statement is then listed as an unverified claim). In every list on the screens that
+    shows records with their status, such a record is shown as *Not counted — cannot be read*, without
+    its status chip or tick; in the API every reference to a record says whether HQ can read it
+    (`readable`, in the module brief's lists among others); and the positive counts beside a list (builds on record,
+    loops recovered, evidence checked by HQ's build) count only records HQ can read; the open-defect
+    and outstanding-requirement counts include it, as above. A recommendation HQ cannot read, or whose
+    rank is not a number, is listed last among the priorities. It is **flagged on every module it
+    names**: on each module whose id occurs anywhere in its stored data, in any letter case, standing on
+    its own rather than as part of a longer id, the register, overview, brief, module page and API carry
+    `unreadable_records` and the words “1 record that names this module cannot be read in full; its
+    figures may be incomplete.” (or “N records that name …”), and development health lists every such
+    record under *Records HQ cannot read*. On the screens a module whose own record fails validation
+    reads *Not reliable* instead of figures, its lifecycle states are shown as not counted, and its row
+    of the lifecycle matrix is marked *Not reliable*. In the API (`get_ecosystem_overview`,
+    `list_modules`) such a module still carries numbers in `open_defects`, `blockers`, `loops` and
+    `requirements` beside `reliable: false`: they are not to be read as counts.
     Search still finds such a record by its stored words. A missing field takes its default only
     when the default says nothing (an empty list or object, null, false, or a value such as `unknown`
     or `none`); any other default, a recommendation's `made_by` among them, reads “Not a valid
     value”. A check whose stored result is not valid is shown without a tick. **The marker cannot be
     stored:** the *Propose a change* form fills its fields from the record as stored, and a proposal
     containing “Not a valid value” is refused.
-  - What it does not do. A record that names a module only by its name or an alias, not its id, is
-    not flagged on that module; and only modules are flagged, not the other records it names. A
-    field the record does not declare at its top level is passed on as stored (an import keeps keys
-    it does not know, so an older application can read a newer pack): the screens do not show it, but
-    `get_record` returns it. A rule across the fields of an object (a lifecycle “yes” with no
+  - What it does not do. A record that names a module only by its name or an alias, not its id, or
+    by a mistyped id (`MOD-FX-GAMA`), is not flagged on that module; and only modules are flagged, not
+    the other records it names. A field the record does not declare at its top level is passed on as
+    stored (an import keeps keys it does not know, so an older application can read a newer pack): the
+    screens do not show it, but `get_record` returns it. A key that an object inside the record does
+    not declare (inside a claim or a lifecycle entry, say) is stored, but no screen shows it
+    (`get_record` gives it only in the record as stored). The text “Not a
+    valid value” is refused in a proposal only when it is exactly that text: a look-alike (“Not a valid
+    value.”, other letter case, a non-breaking space, a Cyrillic letter, a zero-width character) is
+    stored, so a valid record can carry text that reads like the marker; and an owner-level import can
+    store the marker text itself in a valid record, where it is shown as the record's text. A rule across the fields of an object (a lifecycle “yes” with no
     quotation, a claim labelled `reported` that quotes nothing) is not undone, but the derivations
     never count such a statement, and list a lifecycle one as an unverified claim. A record that
     passes its schema is taken as it is, whatever an import that skipped the quotation check put in

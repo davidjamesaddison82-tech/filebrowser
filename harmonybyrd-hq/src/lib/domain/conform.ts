@@ -365,12 +365,16 @@ function occursIn(text: string, id: string): boolean {
 
 /**
  * Every module id that occurs as a string anywhere in a stored value (H6b): in a text or an object key, at
- * any depth, whole or standing on its own inside a longer text ("MOD-A, MOD-B", "see MOD-A."). Stored values
- * are read as they are: this is what the record names, whatever kind its fields are.
+ * any depth, whole or standing on its own inside a longer text ("MOD-A, MOD-B", "see MOD-A."), in any case
+ * (ROUND5 K6). Stored values are read as they are: this is what the record names, whatever kind its fields
+ * are. A mistyped id ("MOD-FX-GAMA") or a name or alias names no module.
  */
 function modulesNamed(value: unknown, moduleIds: readonly string[], out: Set<string>): void {
+  // ROUND5 K6: ids are matched without regard to case ("mod-fx-gamma" names MOD-FX-GAMMA).
+  const lowered = moduleIds.map((id) => [id, id.toLowerCase()] as const);
   const text = (s: string) => {
-    for (const id of moduleIds) if (!out.has(id) && s.length >= id.length && occursIn(s, id)) out.add(id);
+    const low = s.toLowerCase();
+    for (const [id, lowId] of lowered) if (!out.has(id) && low.length >= lowId.length && occursIn(low, lowId)) out.add(id);
   };
   // Iterative, so a deeply nested stored value cannot exhaust the stack.
   const stack: unknown[] = [value];

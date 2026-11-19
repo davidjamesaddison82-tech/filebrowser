@@ -63,4 +63,4 @@ export function reportedAcceptanceEffect(payload: unknown, targetType: string | 
  * a proposal's to give.
  */
 export const SUBMITTER_CLAIM_SENTENCE =
-  "Whatever you propose is recorded as your own claim: label a statement submitter_claim (it may quote a source) or no_evidence, because only an import can say that a source reports something, and only an import or a founder decision can say a requirement is implemented and tested.";
+  "Whatever you propose is recorded as your own claim: label a statement submitter_claim (it may quote a source) or no_evidence, because only an import can say that a source reports something, and only an import marks a requirement as implemented and tested (the founder can record it as satisfied by a decision).";

@@ -32,6 +32,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const ACCEPTANCE_RULE = /acceptance is recorded only by a founder decision in HQ or by an import; a proposal cannot assert it/i;
 const FROZEN = /a build reported as accepted is changed only by an import or a founder decision; a proposal may only withdraw the reported acceptance/i;
+const BUILD_IDENTITY = /what identifies a build is set when it is recorded; record a new build instead/i;
 /** The database's and the application's words for a value outside a field's list (G1c). */
 const odd = (field: string, shown: string) => new RegExp(`field "${escape(field)}" holds ${escape(shown)}, which is not one of its allowed values`, "i");
 const notObject = (field: string) => new RegExp(`field "${escape(field)}" must be an object`, "i");
@@ -57,7 +58,7 @@ interface Body {
 }
 
 interface Case {
-  rule: "G1a" | "G1b" | "G1c";
+  rule: "G1a" | "G1b" | "G1c" | "K3";
   name: string;
   body: Body;
   status: 403 | 422;
@@ -282,14 +283,16 @@ const CASES: Case[] = [
     sqlstate: "HQ403",
     message: FROZEN,
   },
-  { rule: "G1a", name: "a reported build given a checksum", body: { target: { type: "build", id: "BLD-FX-02" }, set: { sha256: "2".repeat(64) } }, status: 403, sqlstate: "HQ403", message: FROZEN },
+  // ROUND5 K3: what identifies a build is now protected on every build, so these two are refused earlier,
+  // with the protected-field words, before the freeze of a reported build is reached.
+  { rule: "K3", name: "a reported build given a checksum", body: { target: { type: "build", id: "BLD-FX-02" }, set: { sha256: "2".repeat(64) } }, status: 403, sqlstate: "HQ403", message: BUILD_IDENTITY },
   {
-    rule: "G1a",
+    rule: "K3",
     name: "a reported build pointed at another source as its artifact",
     body: { target: { type: "build", id: "BLD-FX-02" }, set: { artifact_source_id: "SRC-F02" } },
     status: 403,
     sqlstate: "HQ403",
-    message: FROZEN,
+    message: BUILD_IDENTITY,
   },
 ];
 
@@ -380,7 +383,7 @@ describe("G1 — the acceptance rules hold on every path", () => {
           const before = await worldState();
           const err = await expectStatus(submitChangeProposal(who, await serviceInput(c)), c.status);
           expect(err.message).toMatch(c.message);
-          if (c.status === 403) expect(err.detail).toMatchObject({ rule: "acceptance_claim" });
+          if (c.status === 403 && c.rule !== "K3") expect(err.detail).toMatchObject({ rule: "acceptance_claim" });
           expect(await worldState()).toEqual(before);
         }
       });
@@ -416,7 +419,7 @@ describe("G1 — the acceptance rules hold on every path", () => {
 
   it("the application's own check refuses every G1a and G1b case with 403 acceptance_claim before the database is asked", async () => {
     const ds = (await getDataset(w.founder)).ds;
-    for (const c of CASES.filter((x) => x.rule !== "G1c")) {
+    for (const c of CASES.filter((x) => x.rule !== "G1c" && x.rule !== "K3")) {
       const type = (c.body.target?.type ?? c.body.create!.record_type) as never;
       const current = c.body.target ? (ds.get(type, c.body.target.id)!.data as unknown as Record<string, unknown>) : null;
       expect(acceptanceClaimProblem(type, (c.body.set ?? c.body.create!.record) as Record<string, unknown>, current), c.name).toMatchObject({
@@ -556,7 +559,8 @@ describe("G1d — accepting a proposal validates the whole resulting record", ()
       rationale: "Moves the target on.",
       base_rev: await head(),
       target: { type: "build", id: "BLD-FX-01", base_version: await baseVersion("build", "BLD-FX-01") },
-      set: { filename: "alpha-candidate-7.html" },
+      // A label: a build's file name can no longer be changed by proposal (ROUND5 K3).
+      set: { label: "alpha-candidate-7 (named)" },
     });
     await reviewProposal(w.founder, (moved.proposal as { id: string }).id, "accept");
     const before = await worldState();

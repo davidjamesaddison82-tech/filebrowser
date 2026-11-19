@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   admitAudit,
+  HELD_COUNTED,
+  HELD_SHOWN,
   MAX_KEYS,
   OVERFLOW_ACTION,
   PER_MINUTE,
@@ -53,7 +55,9 @@ describe("the bound on refusal rows of callers without a valid identity (H7)", (
     expect(summaries).toEqual([]);
 
     advance(60_000);
-    expect(summaries).toEqual([{ action: "mcp.connect", reason: "missing or invalid credential", notWritten: 380, minuteStart }]);
+    // (ROUND5 K7 added what the held-back refusals named; these named nothing.)
+    const none = { first: [], distinct: 0, atLeast: false };
+    expect(summaries).toEqual([{ action: "mcp.connect", reason: "missing or invalid credential", notWritten: 380, minuteStart, objectIds: none, clientAddresses: none }]);
     expect(summaryDetail(summaries[0])).toMatchObject({ summary: true, reason: "missing or invalid credential", not_written: 380 });
     // The minute's counter is gone once its summary is written: the next minute starts afresh.
     expect(limiter.trackedKeys).toBe(0);
@@ -140,5 +144,49 @@ describe("the bound on refusal rows of callers without a valid identity (H7)", (
     expect(refusalReason({ failures: 3 })).toBe("unspecified");
     expect(refusalReason(null)).toBe("unspecified");
     expect(refusalReason(["reason"])).toBe("unspecified");
+  });
+});
+
+describe("ROUND5 K7 — the limiter hides nothing aimed at a real account, and a summary says what it held back", () => {
+  it("a refusal marked unlimited (a sign-in naming an existing principal) is always written, also after a flood", () => {
+    const { limiter } = limiterWithClock();
+    for (let i = 0; i < 125; i += 1) admitAudit(limiter, ANON, { action: "session.sign_in", outcome: "denied", objectId: `nobody${i}`, detail: { reason: "no_match" } });
+    // The quota for this action and reason is used up: a refusal for an unknown name is now only counted...
+    expect(admitAudit(limiter, ANON, { action: "session.sign_in", outcome: "denied", objectId: "nobody-else", detail: { reason: "no_match" } })).toBe(false);
+    // ...but every one for a real account is written.
+    for (let i = 0; i < 4; i += 1) {
+      expect(admitAudit(limiter, ANON, { action: "session.sign_in", outcome: "denied", objectId: "founder", detail: { reason: "no_match" }, unlimited: true })).toBe(true);
+    }
+  });
+
+  it("a summary lists the first 10 distinct object ids and client addresses it held back, and how many there were", () => {
+    const { limiter, summaries, advance } = limiterWithClock();
+    for (let i = 0; i < 120; i += 1) limiter.admit("session.sign_in", "no_match", { objectId: `early${i}`, clientAddress: "10.0.0.1" });
+    for (let i = 0; i < 30; i += 1) limiter.admit("session.sign_in", "no_match", { objectId: `held${i % 15}`, clientAddress: `10.0.1.${i % 3}` });
+    advance(60_000);
+    expect(HELD_SHOWN).toBe(10);
+    expect(summaries[0]).toMatchObject({
+      notWritten: 30,
+      objectIds: { first: Array.from({ length: 10 }, (_, i) => `held${i}`), distinct: 15, atLeast: false },
+      clientAddresses: { first: ["10.0.1.0", "10.0.1.1", "10.0.1.2"], distinct: 3, atLeast: false },
+    });
+    expect(summaryDetail(summaries[0])).toMatchObject({
+      held_back_object_ids: { first: expect.arrayContaining(["held0", "held9"]), distinct: 15 },
+      held_back_client_addresses: { first: ["10.0.1.0", "10.0.1.1", "10.0.1.2"], distinct: 3 },
+    });
+    expect(summaryDetail(summaries[0]).note).toMatch(/named 15 distinct object id\(s\) and came from 3 recorded client address\(es\)/);
+  });
+
+  it("each held-back value is cut to 80 characters on whole characters; past the counted number the count says at least", () => {
+    const { limiter, summaries, advance } = limiterWithClock();
+    for (let i = 0; i < 120; i += 1) limiter.admit("mcp.connect", "x");
+    limiter.admit("mcp.connect", "x", { objectId: `${"a".repeat(79)}\u{1F600}tail` });
+    for (let i = 0; i < HELD_COUNTED + 5; i += 1) limiter.admit("mcp.connect", "x", { objectId: `id${i}` });
+    advance(60_000);
+    const held = summaries[0].objectIds;
+    expect(held.first[0]).toBe(`${"a".repeat(79)}\u{1F600}`);
+    expect(held.distinct).toBe(HELD_COUNTED);
+    expect(held.atLeast).toBe(true);
+    expect(summaryDetail(summaries[0])).toMatchObject({ held_back_object_ids: { distinct_is_at_least: true } });
   });
 });

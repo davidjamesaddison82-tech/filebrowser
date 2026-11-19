@@ -71,10 +71,13 @@ records that came in through the proposal inbox; their notes say “Reported thr
 - A stored value HQ does not recognise — a status that is not on its list, a list where text should
   be — is shown as *Not a valid value*, never as a status, and such a record's page says it does not
   pass validation. HQ counts nothing in such a record as proof: not an acceptance, a test, a check or
-  a link. A defect it cannot read counts as open. A module that such a record names carries a warning
-  under its heading — “N record(s) that name this module cannot be read in full; its figures
-  may be incomplete.” — with a link to each, and the module register and dashboard say so too. A
-  module whose own record fails validation reads *Not reliable* instead of figures.
+  a link. A defect it cannot read counts as open. In a list it is marked *Not counted — cannot be
+  read*, without its status, and the counts beside the list leave it out. A module that such a
+  record names carries a warning under its heading — “1 record that names this module cannot be read
+  in full; its figures may be incomplete.” (or “N records that name …”) — with a link to each, and the
+  module register and dashboard say so too. On the screens a module whose own record fails validation
+  reads *Not reliable* instead of figures, and its lifecycle shows nothing as counted. (An AI client
+  reading the API still gets that module's numbers, beside `reliable: false`; they are not counts.)
 - **History & lineage** (top right) shows every version of the record and the hash chain.
 
 Check it against what you know. Where HQ is wrong, do not edit — use **Propose a change** (step 7), or tell your developer to.
@@ -141,15 +144,20 @@ Anyone who may propose — a developer, or Claude or ChatGPT through the API —
 4. If the record changed after the proposal was written, HQ refuses to apply it and marks it stale.
 5. HQ re-checks the proposal as you accept it: every quotation must be in its source, it may not
    use HQ's own labels or give a source's labels to its own words, it may not claim an acceptance or
-   say a requirement is implemented and tested, it may not change a record HQ did not write, every
+   say a requirement is implemented and tested, it may not change evidence that a source reports or
+   HQ's build checked or a source HQ has read, nor a loop, pathway or tested requirement an import
+   labelled unless it withdraws that label, nor what identifies a build or a module's evidence level, every
    listed value must be on its list, it may set only fields the record has, and the whole record must
    still be valid as it would then stand. A proposal that fails is refused, not applied, and stays in
    the inbox: you can still reject it or ask for changes.
 
 Notice what the proposal form does not offer: a requirement's original wording, its standing,
 acceptance, the fields only HQ's build writes, and, for sources, what HQ recorded about the
-snapshot; for a requirement already implemented and tested, its linked evidence and builds. The card
-*What cannot be proposed* lists the locked fields for that record. Evidence that a source reports or
+snapshot; for a build, its checksum, size, file name and artifact source; for a module, its
+evidence level. The card *What cannot be proposed* lists the locked fields for that record, and says
+when a requirement recorded as implemented and tested, or a loop or pathway labelled from a source,
+can be changed only by a proposal that moves it to another state or relabels it as the submitter's
+claim. Evidence that a source reports or
 HQ's build checked, and a source HQ has read, have no form at all: a notice says that only an import
 changes them (for evidence: submit new evidence instead).
 

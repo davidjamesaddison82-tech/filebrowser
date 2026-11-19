@@ -1,6 +1,7 @@
 import { notFound as notFoundError } from "@/lib/server/errors";
 import { argsFromQuery, otherMethods, readJson, withApi } from "@/lib/server/http";
 import { findTool } from "@/lib/server/tools";
+import { cutText } from "@/lib/text";
 
 type Params = { params: Promise<{ name: string }> };
 
@@ -11,7 +12,7 @@ type Params = { params: Promise<{ name: string }> };
 const actionFor = (tool: ReturnType<typeof findTool>) => `tool.${tool?.name ?? "unknown"}`;
 
 /** The name as echoed in a "not found" message: only its start, since it is whatever the client sent. */
-const shown = (name: string) => name.slice(0, 80);
+const shown = (name: string) => cutText(name, 80);
 
 /** Read tools may be called with GET and query-string arguments. */
 export async function GET(request: Request, { params }: Params) {

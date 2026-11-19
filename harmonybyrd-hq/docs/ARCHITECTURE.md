@@ -71,11 +71,11 @@ assessed, founder accepted, integrated, released, validated with learners — ea
 `no`, `unknown` or `not applicable`, each with its own basis and quotation. The headline standing
 shown on the map is derived from them and can never read “accepted” because tests pass. A `yes` or
 `partial` counts towards the standing only if a source supports it (basis `reported`,
-`design_intention`, `source_recommendation` or `founder_statement`, with a citation) or its basis is
-`verified`; a reported founder acceptance must have the basis `reported` or `founder_statement`. A
+`design_intention`, `source_recommendation` or `founder_statement`, with a citation of a source
+record that passes validation) or its basis is `verified`; a reported founder acceptance must have the basis `reported` or `founder_statement`. A
 build's standing `accepted_reported` counts as a reported acceptance only when its statement is
-labelled `reported` or `founder_statement` and quotes a source; otherwise it is shown as “Acceptance
-claimed — no source quoted”. Neither kind of acceptance can be introduced by a proposal, and a build a
+labelled `reported` or `founder_statement` and quotes a source record that passes validation;
+otherwise it is shown as “Acceptance claimed — no source quoted”. Neither kind of acceptance can be introduced by a proposal, and a build a
 source reports as accepted can be changed by proposal only to withdraw the report (docs/GOVERNANCE.md). A
 submitter's claim never raises a standing; it is listed under *Unverified claims*. A module whose own
 record fails validation has the standing “Not reliable”, and nothing in it is counted. A founder
@@ -89,7 +89,7 @@ tests, builds and decisions) can be changed by accepted proposal. Its *standing*
 be changed only by a founder decision. A requirement is outstanding until it is recorded as
 implemented and tested **and** has linked evidence that a source reports or HQ's build checked and
 that passes validation. Only an import can record it as implemented and tested: a proposal can
-neither set that state nor change what a tested requirement links to.
+neither set that state nor change a tested requirement without moving it to another state.
 
 **Dates** (`doc_date`, `updated`, `source_date`, `date`) are `YYYY-MM-DD…` or null.
 
@@ -267,7 +267,7 @@ Every answer from every tool is an envelope:
 
 | Path | Contents |
 | --- | --- |
-| `supabase/migrations/0001…0009` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target; 0008: a build reported as accepted frozen for proposals except to withdraw the report, a module's reported acceptance compared as a whole entry, the database's own check of allowed values (`hq.field_enums`, `hq._check_field_enums`), and bounded audit action names; 0009: what a proposal may say (`hq._check_proposal_claims`: no source label the record does not already hold, no “implemented and tested”, only declared fields from `hq.record_fields`, never “Not a valid value”), evidence a source reports and sources HQ has read frozen for proposals, no clearing of an acceptance that is not there, `hq.log_access` limited to an exact list with tool names from `hq.tool_names`, and caller text cut in every refusal of the functions it replaces |
+| `supabase/migrations/0001…0010` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target; 0008: a build reported as accepted frozen for proposals except to withdraw the report, a module's reported acceptance compared as a whole entry, the database's own check of allowed values (`hq.field_enums`, `hq._check_field_enums`), and bounded audit action names; 0009: what a proposal may say (`hq._check_proposal_claims`: no source label the record does not already hold, no “implemented and tested”, only declared fields from `hq.record_fields`, never “Not a valid value”), evidence a source reports and sources HQ has read frozen for proposals, no clearing of an acceptance that is not there, `hq.log_access` limited to an exact list with tool names from `hq.tool_names`, and caller text cut in every refusal of the functions it replaces; 0010: a loop or pathway a source describes, and a requirement shown as implemented and tested, frozen for proposals unless the proposal relabels it or moves it to another state; what identifies a build and a module's evidence level protected on an update, and a created module given the lowest evidence level |
 | `src/lib/domain/` | Schemas, the `Dataset` snapshot and its conformed view (`conform.ts`), derivations, pack validation — no database, no network |
 | `src/lib/server/` | Database access, the store, services, tools, HTTP helpers, server actions |
 | `src/lib/auth/` | Passphrases, tokens, sessions, the device cookie (`device.ts`), the sign-in throttle and its lanes (`throttle.ts`), the length limits on sign-in input (`sign-in-input.ts`), the safe redirect after sign-in, the start-up environment check |

@@ -350,6 +350,39 @@ function readsBetter(withX: DatasetView, without: DatasetView, x: string): strin
     for (const r of bA.requirements) {
       if (r.outstanding && bB.requirements.find((q) => q.ref.id === r.ref.id)?.outstanding === false) say(`brief ${m.meta.id} requirement ${r.ref.id} no longer outstanding`);
     }
+    // ROUND5 K6: the brief's lists, as the module page counts them: only entries HQ can read, with a positive label.
+    const positiveLists = (b: derive.ModuleBrief) => ({
+      builds: b.builds.filter((e) => e.ref.readable).length,
+      checked_evidence: b.evidence.filter((e) => e.ref.readable && (e.verification === "hq_verified" || e.verification === "source_reported")).length,
+      loops: b.loops.filter((e) => e.readable).length,
+      pathways: b.pathways.filter((e) => e.readable).length,
+      closed_defects: b.defects.filter((e) => !e.open).length,
+    });
+    const lA = positiveLists(bA);
+    const lB = positiveLists(bB);
+    for (const key of Object.keys(lA) as (keyof typeof lA)[]) if (lB[key] > lA[key]) say(`brief ${m.meta.id} ${key} ${lA[key]} → ${lB[key]}`);
+    // The open count beside the defects list is never lower.
+    if (bB.defects.filter((d) => d.open).length < bA.defects.filter((d) => d.open).length) say(`brief ${m.meta.id} fewer open defects`);
+  }
+
+  // ROUND5 K6: the order of the priorities. X never comes before a recommendation HQ can read and rank, and
+  // no other recommendation moves up because X is there.
+  const pW = derive.developmentPriorities(withX).map((p) => p.envelope.meta.id);
+  const pO = derive.developmentPriorities(without).map((p) => p.envelope.meta.id);
+  const xAt = pW.indexOf(x);
+  if (xAt >= 0) {
+    for (const p of derive.developmentPriorities(withX).slice(xAt + 1)) if (p.readable && p.rank !== null) say(`priority ${x} sorts above ${p.envelope.meta.id}`);
+  }
+  const others = pW.filter((id) => id !== x);
+  if (others.join("|") !== pO.join("|")) say(`priorities reorder: ${pO.join(",")} → ${others.join(",")}`);
+
+  // ROUND5 K6: the lifecycle matrix row and the figures of X itself, when X is a module.
+  const row = derive.lifecycleMatrix(withX).find((r) => r.module_id === x);
+  const xEnvelope = withX.byId(x);
+  if (xEnvelope?.meta.type === "module") {
+    if (row?.reliable !== false) say(`lifecycle row ${x} not marked unreliable`);
+    if (derive.moduleBrief(withX, x)!.reliable !== false) say(`brief ${x} reads reliable`);
+    if (derive.ecosystemOverview(withX).modules.find((m) => m.id === x)!.reliable !== false) say(`overview ${x} reads reliable`);
   }
   return out;
 }
@@ -563,7 +596,9 @@ describe("ROUND4 H6d: a default never asserts", () => {
 
   it("L7: a recommendation that names its maker says so, and one HQ cannot read names nobody", () => {
     expect(recommendationMaker("HQ test fixture")).toBe("This is a recommendation by HQ test fixture.");
-    expect(recommendationMaker("Proposed through the inbox by claude")).toBe("This is a recommendation by Proposed through the inbox by claude.");
+    // ROUND5 K5 (Z21): the inbox stamp reads as a sentence, not as a maker's name.
+    expect(recommendationMaker("Proposed through the inbox by claude")).toBe("This recommendation was proposed through the inbox by claude.");
+    expect(recommendationMaker("Proposed through the inbox")).toBe("This recommendation was proposed through the inbox.");
     for (const odd of [NOT_VALID, "", null, undefined, 7]) expect(recommendationMaker(odd), String(odd)).toBe("This recommendation names no maker HQ can read.");
   });
 

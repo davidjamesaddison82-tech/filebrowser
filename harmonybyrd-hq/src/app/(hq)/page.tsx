@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { EcosystemMap } from "@/components/ecosystem-map";
-import { Card, Chip, Empty, IdTag, PageHead, RecordLink, Tile } from "@/components/ui";
-import { isReadable } from "@/lib/domain/conform";
-import { developmentHealth, ecosystemOverview, missingWork } from "@/lib/domain/derive";
+import { Card, Chip, Empty, IdTag, NotCountedChip, PageHead, RecordLink, Tile } from "@/components/ui";
+import { isReadable, UNREADABLE_LIST } from "@/lib/domain/conform";
+import { developmentHealth, developmentPriorities, ecosystemOverview, missingWork } from "@/lib/domain/derive";
 import { loadPage, type SearchParams } from "@/lib/server/page";
 import { listChanges } from "@/lib/server/store";
 import { humanise, isoDateTime, plural } from "@/lib/ui/format";
@@ -23,7 +23,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
   const shownRev = ds.revision.rev;
   const changes = (await listChanges(principal, ctx.pinned ? ctx.head - shownRev + 6 : 6)).filter((c) => c.rev <= shownRev).slice(0, 6);
   const layout = layoutMap(overview);
-  const recommendations = [...ds.recommendations].sort((a, b) => a.data.rank - b.data.rank);
+  // ROUND5 K6: derive's order: by rank, and last every recommendation whose rank is not a number or whose
+  // record HQ cannot read.
+  const recommendations = developmentPriorities(ds).map((p) => ({ ...p, meta: p.envelope.meta, data: ds.get("recommendation", p.envelope.meta.id)!.data }));
   // ROUND4 H6a: a record HQ cannot read in full counts for nothing here either.
   const withBuild = new Set(ds.builds.filter(isReadable).map((b) => b.data.module_id).filter(Boolean));
   // "Read" means HQ holds a text snapshot it drew records from. Repositories that were inspected but
@@ -146,12 +148,14 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
                 <li key={r.meta.id}>
                   <div className="row" style={{ gap: 8 }}>
                     <Chip tone="accent" glyph="➜">
-                      Recommendation {r.data.rank}
+                      {r.readable && r.rank !== null ? `Recommendation ${r.rank}` : "Recommendation"}
                     </Chip>
                     <Link className="li-title" href={withRev(`/records/recommendation/${r.meta.id}`, rev)}>
                       {r.data.title}
                     </Link>
+                    {r.readable ? null : <NotCountedChip />}
                   </div>
+                  {r.unreadable_fields?.blocked_by ? <div className="li-note">Blocked by: {UNREADABLE_LIST}.</div> : null}
                   <div className="li-note">{r.data.rationale}</div>
                   {r.data.prerequisite_ids.length || r.data.blocked_by.length ? (
                     <div className="li-note">

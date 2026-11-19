@@ -197,7 +197,8 @@ describe("D6 / db-8 — withdraw_proposal checks the caller", () => {
   });
 
   it("a principal whose role was lowered to reader cannot withdraw a proposal it made before (HQ403)", async () => {
-    const id = await propose(w.developer, "FR-FX-001", "Role check.");
+    // FR-FX-004: FR-FX-001 is implemented and tested, which a proposal can no longer change (ROUND5 K2).
+    const id = await propose(w.developer, "FR-FX-004", "Role check.");
     const client = await admin();
     try {
       await client.query("update hq.principals set app_role = 'reader' where handle = 'developer'");

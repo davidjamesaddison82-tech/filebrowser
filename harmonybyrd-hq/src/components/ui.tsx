@@ -2,7 +2,7 @@ import Link from "@/components/pin-link";
 import type { ReactNode } from "react";
 import { type DatasetView, UNREADABLE_LIST } from "@/lib/domain/conform";
 import type { Envelope } from "@/lib/domain/dataset";
-import { BUILD_ACCEPTANCE_LABEL, buildAcceptanceIsSourced, describeRef } from "@/lib/domain/derive";
+import { BUILD_ACCEPTANCE_LABEL, buildAcceptanceIsSourced, describeRef, readableSources } from "@/lib/domain/derive";
 import { type BuildRecord, type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL, type RecordType } from "@/lib/domain/schemas";
 import { EPISTEMIC_TONE, fieldLabel, isListedValue, type ListedField, NOT_VALID, pathwayBasisDisplay, statusLabel, statusTone, storedValueText, type Tone } from "@/lib/ui/format";
 import { claim as asClaim, citations as asCitations, isEpistemic, isObject } from "@/lib/ui/guards";
@@ -77,6 +77,19 @@ export function ListedText({ field, value }: { field: ListedField; value: unknow
   return <>{fieldLabel(field, value)}</>;
 }
 
+/**
+ * ROUND5 K6: what a list shows, in place of a record's status, label or tick, for a record that fails
+ * validation (or a link to one that is missing). No count beside the list counts it.
+ */
+export const NOT_COUNTED = "Not counted — cannot be read";
+export function NotCountedChip() {
+  return (
+    <Chip tone="bad" glyph="!" title="This record is stored in a form that does not pass validation (or is not there), so HQ counts nothing in it. Its page shows it as stored.">
+      {NOT_COUNTED}
+    </Chip>
+  );
+}
+
 /** A stored value outside its field's list. */
 export function NotValidChip({ value }: { value: unknown }) {
   return (
@@ -91,8 +104,10 @@ export function NotValidChip({ value }: { value: unknown }) {
  * statement quotes a source that reports it; otherwise it is a bare claim and says so, wherever a
  * build's standing is shown.
  */
-export function BuildStandingChip({ build }: { build: { standing?: unknown; statement?: unknown } }) {
-  if (build.standing === "accepted_reported" && !buildAcceptanceIsSourced(build as BuildRecord)) {
+export function BuildStandingChip({ ds, build, readable = true }: { ds: DatasetView; build: { standing?: unknown; statement?: unknown }; readable?: boolean }) {
+  // ROUND5 K6: a build HQ cannot read shows no standing at all, and a quotation counts only from a source HQ can read.
+  if (!readable) return <NotCountedChip />;
+  if (build.standing === "accepted_reported" && !buildAcceptanceIsSourced(build as BuildRecord, readableSources(ds))) {
     return (
       <Chip tone="warn" title="This build is marked as accepted, but its statement quotes no source that reports it">
         {BUILD_ACCEPTANCE_LABEL.build_acceptance_claimed}

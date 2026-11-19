@@ -121,27 +121,59 @@ async function passwordSignsIn(appUrl: string): Promise<boolean> {
 const roleExists = async (client: pg.Client, role: string) => ((await client.query("select 1 from pg_roles where rolname = $1", [role])).rowCount ?? 0) > 0;
 
 /**
- * Roles belong to the whole server, so the role may belong to another HQ installation on it (Y8). An
- * existing role keeps its password unless HQ_ALLOW_ROLE_PASSWORD_CHANGE=1. Returns whether the
- * password is to be changed.
+ * ROUND5 K8: what an existing role must not be. The application's login role owns nothing and holds no
+ * privilege of its own (docs/SECURITY.md): a superuser, or a role that bypasses row-level security, can
+ * create roles or databases, inherits the privileges of the roles granted to it, or cannot log in at all,
+ * is not one HQ runs as. Returns the attributes it has that it must not, in the words of CREATE ROLE.
  */
-async function checkExistingAppRole(client: pg.Client, appUrl: string): Promise<boolean> {
+async function forbiddenRoleAttributes(client: pg.Client, role: string): Promise<string[]> {
+  const row = (
+    await client.query<{ rolsuper: boolean; rolbypassrls: boolean; rolcreaterole: boolean; rolcreatedb: boolean; rolinherit: boolean; rolcanlogin: boolean }>(
+      "select rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolinherit, rolcanlogin from pg_roles where rolname = $1",
+      [role],
+    )
+  ).rows[0];
+  if (!row) return [];
+  return [
+    ...(row.rolsuper ? ["SUPERUSER"] : []),
+    ...(row.rolbypassrls ? ["BYPASSRLS"] : []),
+    ...(row.rolcreaterole ? ["CREATEROLE"] : []),
+    ...(row.rolcreatedb ? ["CREATEDB"] : []),
+    ...(row.rolinherit ? ["INHERIT"] : []),
+    ...(!row.rolcanlogin ? ["NOLOGIN"] : []),
+  ];
+}
+
+/**
+ * Roles belong to the whole server, so the role may belong to another HQ installation on it (Y8). An
+ * existing role keeps its password and its attributes unless HQ_ALLOW_ROLE_PASSWORD_CHANGE=1. First
+ * (ROUND5 K8), an existing role with an attribute HQ's application role must not have is refused, naming
+ * it; then one whose password differs. Returns what is to be changed: the password, the attributes, both
+ * or neither.
+ */
+async function checkExistingAppRole(client: pg.Client, appUrl: string): Promise<{ password: boolean; attributes: boolean }> {
   const { role } = appLogin(appUrl);
-  if (!(await roleExists(client, role))) return false;
-  if (await passwordSignsIn(appUrl)) return false;
-  if (process.env.HQ_ALLOW_ROLE_PASSWORD_CHANGE === "1") return true;
+  if (!(await roleExists(client, role))) return { password: false, attributes: false };
+  const allowed = process.env.HQ_ALLOW_ROLE_PASSWORD_CHANGE === "1";
+  const attributes = await forbiddenRoleAttributes(client, role);
+  if (attributes.length > 0 && !allowed) {
+    throw new Error(
+      `role ${role} already exists on this server and is ${attributes.join(", ")}. HQ's application role must not be a superuser, bypass row-level security, ` +
+        "create roles or databases, or inherit privileges, and it must be able to log in. It may belong to another installation: use a different role name in " +
+        "DATABASE_URL, or set HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 to have migration set it to LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB.",
+    );
+  }
+  if (await passwordSignsIn(appUrl)) return { password: false, attributes: attributes.length > 0 };
+  if (allowed) return { password: true, attributes: true };
   throw new Error(
     `role ${role} already exists on this server with a different password. It may belong to another HQ installation: ` +
       "use a different role name in DATABASE_URL, or set HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 to change its password.",
   );
 }
 
-/**
- * The web application signs in as a NOINHERIT login role that can only assume the API roles. A role
- * that does not exist is created. One that exists is left as it is, apart from the grants, when the
- * password in DATABASE_URL signs in as it; otherwise it is changed only with
- * HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 (checkExistingAppRole stops migration before anything is applied).
- */
+/** The attributes HQ's application login role has (ROUND5 K8): the opposite of each one forbiddenRoleAttributes names. */
+const APP_ROLE_ATTRIBUTES = "login noinherit nosuperuser nobypassrls nocreaterole nocreatedb";
+
 async function ensureAppLoginRole(client: pg.Client, appUrl: string, log: (l: string) => void) {
   const { role, password } = appLogin(appUrl);
   const literal = (await client.query<{ q: string }>("select quote_literal($1) as q", [password])).rows[0].q;
@@ -152,11 +184,17 @@ async function ensureAppLoginRole(client: pg.Client, appUrl: string, log: (l: st
   for (let attempt = 1; ; attempt += 1) {
     try {
       if (!(await roleExists(client, role))) {
-        await client.query(`create role ${role} login noinherit password ${literal}`);
+        await client.query(`create role ${role} ${APP_ROLE_ATTRIBUTES} password ${literal}`);
         log(`created application login role ${role}`);
-      } else if (await checkExistingAppRole(client, appUrl)) {
-        await client.query(`alter role ${role} login noinherit password ${literal}`);
-        log(`changed the password of application login role ${role} (HQ_ALLOW_ROLE_PASSWORD_CHANGE=1)`);
+      } else {
+        const change = await checkExistingAppRole(client, appUrl);
+        if (change.password) {
+          await client.query(`alter role ${role} ${APP_ROLE_ATTRIBUTES} password ${literal}`);
+          log(`changed the password and attributes of application login role ${role} (HQ_ALLOW_ROLE_PASSWORD_CHANGE=1)`);
+        } else if (change.attributes) {
+          await client.query(`alter role ${role} ${APP_ROLE_ATTRIBUTES}`);
+          log(`changed the attributes of application login role ${role} (HQ_ALLOW_ROLE_PASSWORD_CHANGE=1)`);
+        }
       }
       await client.query(`grant anon, authenticated, hq_auth to ${role}`);
       await client.query(`grant connect on database "${dbName}" to ${role}`);

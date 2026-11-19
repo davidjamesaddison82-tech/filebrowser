@@ -7,6 +7,7 @@
  * and SECURITY DEFINER functions govern access whether HQ runs on plain PostgreSQL or Supabase.
  */
 import pg from "pg";
+import { cutText, wellFormedJson } from "@/lib/text";
 import { admitAudit, RefusalLimiter, summaryDetail } from "./audit-limit";
 import { fromDatabaseError, unavailable } from "./errors";
 
@@ -92,15 +93,19 @@ export function asAuthRole<T>(fn: (q: Queryer) => Promise<T>): Promise<T> {
 /** hq.log_refusal refuses a detail over 8192 bytes; stay well under it so a refusal is never lost. */
 const AUDIT_DETAIL_MAX_BYTES = 6000;
 
-/** The detail as JSON text, or a short preview of it when it is too large to store whole. */
+/**
+ * The detail as JSON text, or a short preview of it when it is too large to store whole. Every string in
+ * it, keys included, is made well formed (ROUND5 K8): jsonb refuses a lone surrogate, and the row would
+ * otherwise be lost.
+ */
 export function auditDetailJson(detail: unknown): string | null {
   if (detail === undefined || detail === null) return null;
-  const text = JSON.stringify(detail);
+  const text = wellFormedJson(detail);
   if (text === undefined) return null;
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes <= AUDIT_DETAIL_MAX_BYTES) return text;
-  // 1500 characters are at most 6000 bytes in UTF-8, so the preview always fits.
-  return JSON.stringify({ truncated: true, original_bytes: bytes, preview: text.slice(0, 1500) });
+  // 1500 characters (code points) are at most 6000 bytes in UTF-8, so the preview always fits.
+  return wellFormedJson({ truncated: true, original_bytes: bytes, preview: cutText(text, 1500) }) ?? null;
 }
 
 /**
@@ -130,7 +135,8 @@ function refusalLimiter(): RefusalLimiter {
  * client sent for its own correlation (clientRequestId), which the database stores apart.
  *
  * Refusals of callers without a valid identity (claims null) are bounded per process: past 120 a
- * minute for one action and reason they are counted and summed up in one row (refusalLimiter).
+ * minute for one action and reason they are counted and summed up in one row (refusalLimiter), except a
+ * refusal marked `unlimited` (a refused sign-in whose name is an existing principal's, ROUND5 K7).
  */
 export async function audit(
   claims: DbClaims | null,
@@ -142,6 +148,11 @@ export async function audit(
     detail?: unknown;
     requestId?: string | null;
     clientRequestId?: string | null;
+    /**
+     * ROUND5 K7: never held back by the refusal limiter, though the caller has no valid identity. Set for a
+     * refused sign-in whose name is an existing principal's.
+     */
+    unlimited?: boolean;
   },
 ): Promise<void> {
   if (!admitAudit(refusalLimiter(), claims, event)) return;

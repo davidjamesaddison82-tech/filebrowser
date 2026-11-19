@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, IdTag, KnownLink, PageHead, Pager, StatusChip } from "@/components/ui";
+import { Card, Chip, Empty, IdTag, KnownLink, NotCountedChip, PageHead, Pager, StatusChip } from "@/components/ui";
+import { isReadable } from "@/lib/domain/conform";
 import { filterRequirements, isOutstanding } from "@/lib/domain/derive";
 import { IMPLEMENTATION_STATES, REQUIREMENT_CATEGORIES, REQUIREMENT_DISPOSITIONS } from "@/lib/domain/schemas";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -147,10 +148,10 @@ export default async function RequirementsPage({ searchParams }: { searchParams:
                         {r.data.module_ids.length ? r.data.module_ids.map((m) => ds.moduleName(m)).join(", ") : <span className="muted">none</span>}
                       </td>
                       <td>
-                        <StatusChip value={r.data.disposition} field="requirement.disposition" />
+                        {isReadable(r) ? <StatusChip value={r.data.disposition} field="requirement.disposition" /> : <NotCountedChip />}
                       </td>
                       <td>
-                        <StatusChip value={r.data.implementation_state} field="requirement.implementation_state" />
+                        {isReadable(r) ? <StatusChip value={r.data.implementation_state} field="requirement.implementation_state" /> : null}
                         {isOutstanding(r.data, ds) ? (
                           <div style={{ marginTop: 4 }}>
                             <Chip tone="warn">Outstanding</Chip>

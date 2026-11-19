@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { DecisionForm } from "@/components/gov-forms";
-import { Card, Chip, Empty, Fold, IdTag, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import { Card, Chip, Empty, Fold, IdTag, NotCountedChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 
-import type { DatasetView } from "@/lib/domain/conform";
+import { type DatasetView, isReadable } from "@/lib/domain/conform";
 import { isFounderSession } from "@/lib/auth/principal";
 import { developmentHealth, recordTitle } from "@/lib/domain/derive";
 import { RECORD_TYPE_LABEL } from "@/lib/domain/schemas";
@@ -202,7 +202,7 @@ export default async function DecisionsPage({ searchParams }: { searchParams: Se
                       <IdTag id={d.meta.id} />
                     </div>
                     <div className="li-note">
-                      {isoDateTime(d.data.decided_at)} · by {d.data.decided_by} <StatusChip value={d.data.status} field="decision.status" />
+                      {isoDateTime(d.data.decided_at)} · by {d.data.decided_by} {isReadable(d) ? <StatusChip value={d.data.status} field="decision.status" /> : <NotCountedChip />}
                     </div>
                   </li>
                 ))}

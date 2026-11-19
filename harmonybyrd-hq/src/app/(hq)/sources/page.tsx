@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Empty, Fold, IdTag, ListedChip, ListedText, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import { Card, Empty, Fold, IdTag, ListedChip, ListedText, NotCountedChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import { isReadable } from "@/lib/domain/conform";
 import type { Dataset } from "@/lib/domain/dataset";
 import { incomingRefs } from "@/lib/domain/derive";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -259,7 +260,7 @@ export default async function SourcesPage({ searchParams }: { searchParams: Sear
                         </td>
                         <td className="nowrap">{isoDate(s.data.doc_date ?? s.data.updated)}</td>
                         <td>
-                          <StatusChip value={s.data.access} field="source.access" />
+                          {isReadable(s) ? <StatusChip value={s.data.access} field="source.access" /> : <NotCountedChip />}
                         </td>
                         <td className="small">
                           <ListedText field="source.authority" value={s.data.authority} />
@@ -316,7 +317,7 @@ export default async function SourcesPage({ searchParams }: { searchParams: Sear
                           </td>
                           <td className="small">{l.importance ? humanise(l.importance) : <span className="muted">Not stated</span>}</td>
                           <td>
-                            <StatusChip value={s.data.access} field="source.access" />
+                            {isReadable(s) ? <StatusChip value={s.data.access} field="source.access" /> : <NotCountedChip />}
                           </td>
                           <td className="small">
                           <ListedText field="source.authority" value={s.data.authority} />

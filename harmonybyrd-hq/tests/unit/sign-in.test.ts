@@ -4,7 +4,7 @@ import { MAX_HANDLE_LENGTH, MAX_PASSPHRASE_LENGTH, tooLongSignInInput } from "@/
 import { baseDelayFromEnv, delayFor, SignInThrottle, signInThrottle } from "@/lib/auth/throttle";
 
 // The sign-in action is run here with its outside world replaced, so the test can see what it touches.
-const touched = vi.hoisted(() => ({ cookies: 0, headers: 0, lookups: 0, passphraseChecks: 0, audits: [] as Record<string, unknown>[] }));
+const touched = vi.hoisted(() => ({ cookies: 0, headers: 0, lookups: 0, passphraseChecks: 0, audits: [] as Record<string, unknown>[], knownId: null as string | null }));
 vi.mock("next/headers", () => ({
   cookies: async () => {
     touched.cookies += 1;
@@ -28,7 +28,7 @@ vi.mock("@/lib/auth/authenticate", () => ({
   authenticateSessionToken: async () => null,
   loginPrincipalId: async () => {
     touched.lookups += 1;
-    return null;
+    return touched.knownId;
   },
 }));
 vi.mock("@/lib/server/db", () => ({
@@ -245,5 +245,29 @@ describe("the next parameter has a maximum length (G7 class, round 3)", () => {
     expect(safeNext(ok)).toBe(ok);
     expect(safeNext(`/${"a".repeat(2048)}`)).toBe("/");
     expect(safeNext(`/${"a".repeat(1_000_000)}`)).toBe("/");
+  });
+});
+
+describe("ROUND5 K7 — a refused sign-in that names a real account is never held back by the refusal limiter", () => {
+  const form = (handle: string, passphrase: string) => {
+    const fd = new FormData();
+    fd.append("handle", handle);
+    fd.append("passphrase", passphrase);
+    fd.append("next", "/");
+    return fd;
+  };
+  beforeEach(() => {
+    Object.assign(touched, { cookies: 0, headers: 0, lookups: 0, passphraseChecks: 0, audits: [], knownId: null });
+    globalThis.__hqSignInThrottle = new SignInThrottle({ sleep: async () => undefined });
+  });
+
+  it("a wrong passphrase for an existing name is audited as unlimited; for a name nobody has, it is not", async () => {
+    const { signIn } = await import("@/app/sign-in/actions");
+    touched.knownId = "00000000-0000-0000-0000-00000000f00d";
+    await signIn(undefined, form("founder", "wrong"));
+    expect(touched.audits.at(-1)).toMatchObject({ action: "session.sign_in", objectId: "founder", detail: { reason: "no_match" }, unlimited: true });
+    touched.knownId = null;
+    await signIn(undefined, form("nobody7", "wrong"));
+    expect(touched.audits.at(-1)).toMatchObject({ action: "session.sign_in", objectId: "nobody7", detail: { reason: "no_match" }, unlimited: false });
   });
 });

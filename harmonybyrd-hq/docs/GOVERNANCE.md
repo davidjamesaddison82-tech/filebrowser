@@ -76,6 +76,16 @@ basis `submitter_claim` and is shown as the submitter's claim. A submitter's cla
 module's standing and is never counted as an acceptance; the screens show it as the submitter's
 claim.
 
+**A loop or pathway a source describes is changed only by an import.** A loop whose `standing`, or a
+pathway whose `basis`, is one of those source labels (or one of HQ's own, `verified` or
+`hq_recommendation`) is frozen for proposals: any change is refused (403, rule `source_label`,
+`detail.field` `standing` or `basis`): “a loop or pathway a source describes is changed only by an
+import; a proposal may relabel it as the submitter's claim and then change it”. A proposal that sets
+the label to `submitter_claim` (a loop also `no_evidence`) may change the other fields in the same
+proposal; the imported claims inside the record (its objective, say) must still be left exactly as
+they are or be replaced as above. The loop's page then says it is the submitter's own account and
+that nothing says it has been built, and the loop explorer lists it under its new label.
+
 **Quotations are still verified.** Every object anywhere in a proposal that has both a `source_id`
 and a `quote` must quote that source verbatim: at least twelve characters once spacing is
 normalised, found in the text snapshot HQ stored when it imported the source (`hq.source_texts`).
@@ -105,13 +115,18 @@ is exactly “Not a valid value” is refused (422, rule `not_a_valid_value`). T
 form fills its fields from the record as stored, so it never offers that text.
 
 **“Implemented and tested” is not a proposal's to say.** A proposal cannot set a requirement's
-`implementation_state` to `implemented_tested` unless it already is, and cannot change the
-`linked_evidence_ids` or `linked_build_ids` of a requirement that is (403, rule `tested_claim`). A
-proposal can still say `implemented_unverified` and link evidence; the requirement then stays
-outstanding. Only an import sets `implemented_tested`, and the refusal says so: “record the tests
-as evidence; only an import marks a requirement as implemented and tested (the founder can record it
-as satisfied by a decision)”. A founder decision sets no implementation state; it can set the
-requirement's standing, for example to *satisfied*, which takes it off the outstanding list.
+`implementation_state` to `implemented_tested` unless it already is (403, rule `tested_claim`,
+`detail.field` `implementation_state`). The refusal says why: “record the tests as evidence; only an
+import marks a requirement as implemented and tested (the founder can record it as satisfied by a
+decision)”. A requirement that is `implemented_tested` is frozen for proposals: any change — its
+title, modules, linked code, evidence or builds — is refused (403, rule `tested_claim`,
+`detail.field` naming the first field of the proposal in the order PostgreSQL keeps a JSON object's
+keys: shorter names first): “a requirement shown as implemented and tested is changed only by an
+import; a proposal may move it to another implementation state and then change it”. A proposal that
+moves it to another valid state (`implemented_unverified`, say) may change its other fields too; the
+requirement is then outstanding again. A proposal can always say `implemented_unverified` and link
+evidence; the requirement stays outstanding. A founder decision sets no implementation state; it can
+set the requirement's standing, for example to *satisfied*, which takes it off the outstanding list.
 
 **Fields a proposal cannot set on any record:**
 
@@ -132,8 +147,11 @@ module `addenda_from_clusters`, `commission_entry`, `lifecycle_other_reports`; d
 `other_mentions`; build `possibly_same_as`, `code_ref`; evidence `search_results`; requirement
 `linked_tests`; source `doc_kind`, `content_kind`, `importance`, `identifiers`, `other_names`.
 
-**Records HQ did not write are not rewritten by proposal.** Two kinds of record are frozen for
-proposals: any change is refused (403, rule `frozen_record`).
+**What an import says a record is, a proposal does not rewrite.** A record that carries a positive
+status from an import is frozen for proposals unless the proposal withdraws that status: a build a
+source reports as accepted (below), a loop or pathway a source describes (above), and a requirement
+shown as implemented and tested (above). Two kinds of record are frozen with no way out by proposal:
+any change is refused (403, rule `frozen_record`).
 
 - Evidence whose `verification` is `source_reported` or `hq_verified`: “evidence that a source
   reports or HQ's build checked is changed only by an import; submit new evidence instead”.
@@ -149,6 +167,22 @@ A source that is only named can still be changed, apart from what it says about 
 `named_not_accessible`, access `not_accessible`, authority `referenced_only`, with no checksum or
 snapshot). A change to an unverified evidence submission keeps it unverified and attributes it to
 whoever proposed the change.
+
+On every build, what identifies it — `sha256`, `bytes`, `filename`, `artifact_source_id` — is
+protected on an update (403, `detail.protected_fields`): “what identifies a build is set when it is
+recorded; record a new build instead”. A build created through the inbox may give them; its page
+then labels the checksum “as given by the submitter”, and says that the submitter names the artifact
+source and HQ has not checked it, rather than that HQ holds a snapshot of the build. On every module,
+`evidence_level` is protected on an update (403): “a module's evidence level says what the sources
+HQ read hold about it, and only an import sets it”. A module created through the inbox must carry the
+lowest level, `commission_list_only` (403 otherwise, `detail.field` `evidence_level`), and its page
+says that no source HQ could read describes it and that it was created through the inbox.
+
+Everything else in an imported record can still be changed by proposal: a defect's title, status,
+modules and build; an open item's title and kind; a commission's status and modules; a build's
+label, module and statement (keeping the rules above); a module's summary, capabilities and other
+claims; a requirement that is not shown as tested. The founder sees each change beside the stored
+value when reviewing it, and the record is then marked as changed through the inbox.
 
 **A proposal can never assert acceptance, or reshape one a source reports.** A verbatim quotation
 proves that words are in a source, not that they report an acceptance, so a citation is not enough.
@@ -232,9 +266,12 @@ answered as stale (409) by the application where the database would name another
 | --- | --- | --- |
 | A protected or build-only field, an HQ-only label, a forbidden evidence type, a source a proposal may not create, a decision record | 403 | `forbidden` (`detail.protected_fields` lists the fields, where there are any; for an HQ-only label, `detail.field` and `detail.label`) |
 | A record HQ did not write: evidence a source reports or HQ's build checked, a source HQ has read | 403 | `forbidden` (`detail.rule` is `frozen_record`) |
+| What identifies a build (`sha256`, `bytes`, `filename`, `artifact_source_id`) or a module's `evidence_level`, on an update | 403 | `forbidden` (`detail.protected_fields`) |
+| A created module whose `evidence_level` is not `commission_list_only` | 403 | `forbidden` (`detail.rule` is `protected`; `detail.field` is `evidence_level`) |
 | A claim of acceptance: a build standing `accepted_reported`, any change to a build reported as accepted that does not withdraw it, a positive module `lifecycle.founder_accepted` that is not identical to the current one, or a `founder_accepted` field | 403 | `forbidden` (`detail.rule` is `acceptance_claim`; `detail.field` names the field: `standing` for a build) |
-| “Implemented and tested” set by proposal, or the links of a tested requirement changed | 403 | `forbidden` (`detail.rule` is `tested_claim`; `detail.field` is `implementation_state`, `linked_evidence_ids` or `linked_build_ids`) |
+| “Implemented and tested” set by proposal, or any change to a tested requirement that leaves it tested | 403 | `forbidden` (`detail.rule` is `tested_claim`; `detail.field` is `implementation_state`, or the first field the proposal sets) |
 | A source label the record does not already hold at that place | 403 | `forbidden` (`detail.rule` is `source_label`; `detail.field` is the place, such as `statement`, `lifecycle.prototyped`, `capabilities[2]` or `standing`, in at most 80 characters) |
+| Any change to a loop or pathway a source describes that does not relabel it `submitter_claim` or `no_evidence` | 403 | `forbidden` (`detail.rule` is `source_label`; `detail.field` is `standing` or `basis`) |
 | A quotation or wording that cannot be verified, a malformed citation | 422 | `invalid_request` (`detail.unverified_quotations` lists the quotations that failed, at most 50; a malformed citation has no detail) |
 | A value outside its field's list | 422 | `invalid_request` (`detail.field`; `detail.rule` is `allowed_values`) |
 | A field the record type does not declare | 422 | `invalid_request` (`detail.rule` is `unknown_field`; `detail.field` names the key, in at most 60 characters) |
@@ -287,8 +324,8 @@ one linked evidence record exists that a source reports or HQ's build checked an
 validation (or the founder has given it a closed standing such as *satisfied*). A requirement whose
 own record fails validation is always outstanding. A requirement whose implementation state claims
 tests but has no linked evidence record is listed under *Review items*. A proposal cannot make a
-requirement implemented and tested, nor change what a tested one links to (see “What a proposal may
-assert”).
+requirement implemented and tested, nor change one that is without moving it to another state (see
+“What a proposal may assert”).
 
 ## Founder decisions
 
@@ -343,8 +380,9 @@ in the defect, evidence and open-item lists: “Entered through the proposal inb
 id, for a record's first version, and “Last changed through the proposal inbox” for a later one. Such
 records are counted under *Unverified claims*, and their notes say “Reported through the inbox”,
 unless the founder has accepted them in HQ. What a proposal adds to a record is its submitter's
-claim; only the imported claims it left exactly as they were keep their source's label (see “What a
-proposal may assert”). The screens label a submitter's claim *Submitter's claim*, head a build's statement
+claim. An imported claim it left exactly as it was keeps its source's label, and the fields around it
+may have changed (see “What a proposal may assert” for what is frozen); the review screen showed
+each change, and the record carries this mark. The screens label a submitter's claim *Submitter's claim*, head a build's statement
 with that label “What the submitter says” (never “What the source says”), and mark its quotations
 as quoted by the submitter: HQ checked that the words are in the source, not that they support the
 statement.

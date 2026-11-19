@@ -16,6 +16,7 @@ import {
   dependencies,
   describeRef,
   developmentHealth,
+  developmentPriorities,
   ecosystemOverview,
   filterRequirements,
   isOutstanding,
@@ -36,15 +37,18 @@ import {
   type AnyRecord,
   BUILD_STANDINGS,
   CREATABLE_TYPES,
+  EVIDENCE_LEVELS,
   EVIDENCE_TYPES,
   fieldEnumProblem,
   isRecordType,
   PROTECTED_FIELDS,
+  type RecommendationRecord,
   RECORD_FIELDS,
   RECORD_TYPES,
   type RecordType,
   safeParseRecord,
 } from "@/lib/domain/schemas";
+import { cutText } from "@/lib/text";
 import { audit, readAs, writeAs } from "./db";
 import { conflict, forbidden, HqError, invalid, notFound } from "./errors";
 import { type DatasetContext, getDataset, type IntegrityWarning, listChanges, recordHistory, recordVersion } from "./store";
@@ -159,7 +163,8 @@ function envelope<T>(principal: Principal, ctx: DatasetContext, data: T, sourceI
  * characters (80 unless said otherwise), so a 1 MB id or argument name never comes back 1 MB long.
  */
 export function cut(value: unknown, max = 80): string {
-  return String(value).slice(0, max);
+  // ROUND5 K8: on whole characters, and well formed (a lone surrogate becomes U+FFFD).
+  return cutText(value, max);
 }
 
 /** H7: a list a client's input made, as a refusal echoes it: each item cut, at most 10, and how many more. */
@@ -203,19 +208,23 @@ export async function getEcosystemOverview(principal: Principal, options: Servic
       sources_not_accessible: missing.sources_not_accessible,
       not_in_recent_sources: missing.not_in_recent_sources,
     },
-    priorities: ctx.ds.recommendations
-      .map((r) => r.data)
-      .sort((a, b) => a.rank - b.rank)
-      .map((r) => ({
+    // ROUND5 K6: by rank, and last every recommendation whose rank is not a number or whose record fails
+    // validation; each says whether HQ can read it, and which of its lists it cannot read.
+    priorities: developmentPriorities(ctx.ds).map(({ envelope: e, rank, readable, unreadable_fields }) => {
+      const r = e.data as unknown as RecommendationRecord;
+      return {
         id: r.id,
-        rank: r.rank,
+        rank,
         title: r.title,
         status: r.status,
-        note: "Recommendation only. Not approved work.",
+        note: readable ? "Recommendation only. Not approved work." : "Recommendation only. Not approved work. HQ cannot read this record in full, so it is listed last and counts for nothing.",
+        readable,
+        ...(unreadable_fields ? { unreadable_fields } : {}),
         module_ids: r.module_ids,
         prerequisite_ids: r.prerequisite_ids,
         blocked_by: r.blocked_by,
-      })),
+      };
+    }),
     integrity_warnings: ctx.warnings,
   };
   return envelope(principal, ctx, data, null, "Per-record sources are returned by get_module_brief and get_source_lineage.");
@@ -490,7 +499,8 @@ export async function searchRecords(principal: Principal, query: string, types: 
   const invalid = new Set(ctx.warnings.map((w) => `${w.type}:${w.id}`));
   // Each hit says whether its record passes validation (G11a); the answer's `integrity` lists those that do not.
   const hits = all.slice(0, SEARCH_LIMIT).map((hit) => ({ ...hit, valid: !invalid.has(`${hit.type}:${hit.id}`) }));
-  return envelope(principal, ctx, { query, total: all.length, returned: hits.length, truncated: all.length > hits.length, hits }, null);
+  // ROUND5 K8: the query is echoed cut to 80 characters, so a 1 MB query does not come back 1 MB long.
+  return envelope(principal, ctx, { query: cut(query), total: all.length, returned: hits.length, truncated: all.length > hits.length, hits }, null);
 }
 
 export async function getReviewItems(principal: Principal, options: ServiceOptions = {}) {
@@ -631,6 +641,38 @@ export function buildOnlyFieldsFor(type: RecordType): readonly string[] {
 
 /** What an existing source says about the snapshot HQ read (mirrors hq.source_integrity_fields()). */
 export const SOURCE_INTEGRITY_FIELDS: readonly string[] = ["sha256", "bytes", "text_snapshot", "access", "kind", "authority", "retrieved_at", "parts", "version", "location"];
+/** ROUND5 K3: what identifies a build; an update proposal cannot change it (mirrors hq._validate_payload). */
+export const BUILD_IDENTITY_FIELDS: readonly string[] = ["sha256", "bytes", "filename", "artifact_source_id"];
+/** ROUND5 K3: why a build's identity cannot be changed by proposal. The same words as the database's HQ403. */
+export const BUILD_IDENTITY_RULE = "what identifies a build is set when it is recorded; record a new build instead";
+/** ROUND5 K4: why a module's evidence level cannot be changed by proposal. The same words as the database's HQ403. */
+export const EVIDENCE_LEVEL_RULE = "a module's evidence level says what the sources HQ read hold about it, and only an import sets it";
+/** ROUND5 K4: the level a module created through the inbox carries: the lowest in the schema's list. */
+export const INBOX_MODULE_EVIDENCE_LEVEL: (typeof EVIDENCE_LEVELS)[number] = EVIDENCE_LEVELS[EVIDENCE_LEVELS.length - 1];
+
+/**
+ * The fields an update proposal may not set on a record of this type (mirrors the protected-field checks of
+ * hq._validate_payload): protected everywhere, written only by HQ's build, a source's snapshot facts, what
+ * identifies a build (K3) and a module's evidence level (K4). The propose form locks the same fields.
+ */
+export function updateProtectedFieldsFor(type: RecordType): readonly string[] {
+  return [
+    ...PROPOSAL_PROTECTED_FIELDS,
+    ...buildOnlyFieldsFor(type),
+    ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : []),
+    ...(type === "build" ? BUILD_IDENTITY_FIELDS : []),
+    ...(type === "module" ? ["evidence_level"] : []),
+  ];
+}
+
+/** ROUND5 K4 (mirrors hq._validate_payload, after the allowed values): a created module carries the lowest evidence level. */
+export function createdModuleLevelProblem(type: RecordType, record: Json): HqError | null {
+  if (type !== "module" || record.evidence_level === INBOX_MODULE_EVIDENCE_LEVEL) return null;
+  return forbidden(
+    `Field "evidence_level": a module created through the inbox is one no source HQ read describes: give evidence_level "${INBOX_MODULE_EVIDENCE_LEVEL}"; only an import sets a higher level.`,
+    { field: "evidence_level", rule: "protected" },
+  );
+}
 /** Evidence types recorded only by the founder or by HQ's build. */
 const HQ_EVIDENCE_TYPES: readonly string[] = ["founder_acceptance", "hq_check"];
 /** ROUND4 H2: evidence of these verifications is changed only by an import (mirrors hq._validate_against_target). */
@@ -826,6 +868,14 @@ export const FROZEN_EVIDENCE_RULE = "evidence that a source reports or HQ's buil
 export const FROZEN_SOURCE_RULE = "a source HQ has read is changed only by an import; a proposal can change a source that is only named";
 /** H3: why a proposal cannot say a requirement is implemented and tested. */
 export const TESTED_CLAIM_RULE = "record the tests as evidence; only an import marks a requirement as implemented and tested (the founder can record it as satisfied by a decision)";
+/** ROUND5 K2: why a requirement shown as implemented and tested cannot be changed by proposal. */
+export const TESTED_FROZEN_RULE =
+  "a requirement shown as implemented and tested is changed only by an import; a proposal may move it to another implementation state and then change it";
+/** ROUND5 K1: why a loop or pathway a source describes cannot be changed by proposal. */
+export const SOURCE_DESCRIBED_RULE =
+  "a loop or pathway a source describes is changed only by an import; a proposal may relabel it as the submitter's claim and then change it";
+/** ROUND5 K1: the labels that freeze a loop's standing or a pathway's basis (mirrors v_frozen_labels in hq._check_proposal_claims). */
+const FROZEN_LOOP_LABELS: readonly string[] = [...SOURCE_LABELS_IMPORT_ONLY, ...HQ_ONLY_LABELS];
 /** H1: why a proposal cannot give a label that says a source reports something. */
 export const SOURCE_LABEL_RULE =
   "a proposal's claim is the submitter's own: label it submitter_claim (it may carry quotations). Labels that say a source reports something are set only by an import";
@@ -905,8 +955,11 @@ const containsMarker = (value: unknown): boolean =>
  * target's data as stored for an update and null for a create.
  *   - any string value "Not a valid value" (422): the marker of an unreadable stored value is never written back;
  *   - a top-level key the record type does not declare (422, named, at most 60 characters);
- *   - a requirement made "implemented_tested" that was not, or the links of one that is (403, rule tested_claim);
- *   - a source label the target does not hold, as a whole object, at the same path (403, rule source_label).
+ *   - a requirement made "implemented_tested" that was not, or (ROUND5 K2) any change to one that is and
+ *     stays so, naming the first field in PostgreSQL's key order (403, rule tested_claim);
+ *   - a source label the target does not hold, as a whole object, at the same path (403, rule source_label);
+ *   - (ROUND5 K1) any change to a loop or pathway whose standing or basis is a source label or one of HQ's
+ *     own, unless the record it leaves labels it submitter_claim or no_evidence (403, rule source_label).
  */
 export function inboxClaimProblem(type: RecordType, doc: Json, current: Json | null): HqError | null {
   if (containsMarker(doc)) {
@@ -926,16 +979,26 @@ export function inboxClaimProblem(type: RecordType, doc: Json, current: Json | n
     if (tested(after.implementation_state) && !wasTested) {
       return forbidden(`Field "implementation_state": ${sentence(TESTED_CLAIM_RULE)}`, { field: "implementation_state", rule: "tested_claim" });
     }
-    if (wasTested) {
-      for (const key of ["linked_evidence_ids", "linked_build_ids"]) {
-        if (Object.hasOwn(doc, key) && !sameJson(doc[key], current![key])) {
-          return forbidden(`Field "${key}": ${sentence(TESTED_CLAIM_RULE)}`, { field: key, rule: "tested_claim" });
-        }
-      }
+    // ROUND5 K2: a requirement shown as implemented and tested is frozen unless the proposal moves it away
+    // (to another valid state: the allowed-values check answers first). Names the first field, in
+    // PostgreSQL's key order, as the database does.
+    if (wasTested && tested(after.implementation_state)) {
+      const key = cut(pgKeys(doc)[0] ?? "implementation_state");
+      return forbidden(`Field "${key}": ${sentence(TESTED_FROZEN_RULE)}`, { field: key, rule: "tested_claim" });
     }
   }
   const path = sourceLabelPath(after, current ?? undefined, null, type === "loop" ? ["epistemic", "basis", "standing"] : ["epistemic", "basis"]);
   if (path) return forbidden(`Field "${cut(path)}": ${sentence(SOURCE_LABEL_RULE)}`, { field: cut(path), rule: "source_label" });
+  // ROUND5 K1: a loop or pathway a source describes (or HQ labelled) is frozen unless the proposal relabels
+  // it as the submitter's claim or as no evidence.
+  if (current && (type === "loop" || type === "pathway")) {
+    const key = type === "loop" ? "standing" : "basis";
+    const label = current[key];
+    const relabelled = after[key] === "submitter_claim" || after[key] === "no_evidence";
+    if (typeof label === "string" && FROZEN_LOOP_LABELS.includes(label) && !relabelled) {
+      return forbidden(`Field "${key}": ${sentence(SOURCE_DESCRIBED_RULE)}`, { field: key, rule: "source_label" });
+    }
+  }
   return null;
 }
 
@@ -1013,15 +1076,22 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
     if (type === "decision") {
       await refuse(principal, target, forbidden("Decision records are written only by a founder decision; they cannot be changed by proposal."));
     }
-    const protectedHere = [...PROPOSAL_PROTECTED_FIELDS, ...buildOnlyFieldsFor(type), ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : [])];
+    const protectedHere = updateProtectedFieldsFor(type);
     const blocked = Object.keys(body.set).filter((key) => protectedHere.includes(key));
     if (blocked.length > 0) {
+      // ROUND5 K3, K4: what identifies a build and a module's evidence level are said in their own words.
+      const own = [
+        ...(type === "build" && blocked.some((key) => BUILD_IDENTITY_FIELDS.includes(key)) ? [sentence(BUILD_IDENTITY_RULE)] : []),
+        ...(type === "module" && blocked.includes("evidence_level") ? [sentence(EVIDENCE_LEVEL_RULE)] : []),
+      ];
       await refuse(
         principal,
         target,
         forbidden(
           `Protected fields cannot be changed by a proposal: ${blocked.join(", ")}. ` +
-            "Original wording and provenance never change; dispositions and acceptance change only by founder decision; HQ's own checks, attribution and source snapshots are written only by HQ.",
+            (own.length
+              ? own.join(" ")
+              : "Original wording and provenance never change; dispositions and acceptance change only by founder decision; HQ's own checks, attribution and source snapshots are written only by HQ."),
           { protected_fields: blocked },
         ),
       );
@@ -1116,6 +1186,8 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
   await checkAssertions(principal, type, create.record, true, target);
   const values = fieldEnumRefusal(type, create.record, null);
   if (values) await refuse(principal, target, values);
+  const level = createdModuleLevelProblem(type, create.record);
+  if (level) await refuse(principal, target, level);
   const claim = acceptanceClaimProblem(type, create.record, null);
   if (claim) await refuse(principal, target, claim);
   const says = inboxClaimProblem(type, create.record, null);
@@ -1430,7 +1502,7 @@ async function acceptanceRuleRefusal(principal: Principal, id: string): Promise<
     const type = proposal.target_type;
     const doc = payload.set;
     if (!type || !proposal.target_id || !isRecordType(type) || type === "decision" || !isObject(doc) || Object.keys(doc).length === 0) return null;
-    const protectedHere = [...PROPOSAL_PROTECTED_FIELDS, ...buildOnlyFieldsFor(type), ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : [])];
+    const protectedHere = updateProtectedFieldsFor(type);
     if (Object.keys(doc).some((key) => protectedHere.includes(key))) return null;
     if (proposal.kind === "defect_report" || proposal.kind === "test_evidence") return null;
     if (type === "evidence" && typeof doc.type === "string" && HQ_EVIDENCE_TYPES.includes(doc.type)) return null;
@@ -1456,7 +1528,7 @@ async function acceptanceRuleRefusal(principal: Principal, id: string): Promise<
     if (type === "evidence" && typeof record.type === "string" && HQ_EVIDENCE_TYPES.includes(record.type)) return null;
     if (await assertionProblem(principal, type, record, true)) return null;
     if (type === "requirement" && (typeof record.exact_wording !== "string" || typeof record.source_id !== "string")) return null;
-    return fieldEnumRefusal(type, record, null) ?? acceptanceClaimProblem(type, record, null) ?? inboxClaimProblem(type, record, null);
+    return fieldEnumRefusal(type, record, null) ?? createdModuleLevelProblem(type, record) ?? acceptanceClaimProblem(type, record, null) ?? inboxClaimProblem(type, record, null);
   }
   return null;
 }

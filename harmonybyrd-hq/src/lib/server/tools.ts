@@ -8,6 +8,7 @@
  * interactive session.
  */
 import { z } from "zod";
+import { cutText, wellFormed } from "@/lib/text";
 import type { Principal } from "@/lib/auth/principal";
 import { RECORD_TYPES } from "@/lib/domain/schemas";
 import { invalid } from "./errors";
@@ -41,7 +42,9 @@ const LIST_MAX = 10;
 
 /** Client text as echoed in an error: its first 80 characters, marked when cut. */
 export function echoed(text: string): string {
-  return text.length > ECHO_MAX ? `${text.slice(0, ECHO_MAX)}…` : text;
+  // ROUND5 K8: cut on whole characters, and well formed.
+  const cut = cutText(text, ECHO_MAX);
+  return cut.length < wellFormed(text).length ? `${cut}…` : cut;
 }
 
 /** A path of argument names (which the client chose) as echoed in an error. */
@@ -76,7 +79,7 @@ function define<S extends z.ZodObject>(tool: {
         const problems = parsed.error.issues.flatMap((issue) =>
           issue.code === "unrecognized_keys"
             ? issue.keys.map((key) => `${pathOf([...issue.path, key])}: not an argument of ${tool.name}`)
-            : [`${issue.path.length > 0 ? pathOf(issue.path) : "(arguments)"}: ${issue.message.slice(0, 200)}`],
+            : [`${issue.path.length > 0 ? pathOf(issue.path) : "(arguments)"}: ${cutText(issue.message, 200)}`],
         );
         throw invalid(
           unknown.length > 0

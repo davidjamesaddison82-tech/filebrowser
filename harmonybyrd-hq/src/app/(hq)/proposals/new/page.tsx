@@ -7,7 +7,7 @@ import { canPropose } from "@/lib/auth/principal";
 import { recordTitle } from "@/lib/domain/derive";
 import { isRecordType, RECORD_FIELDS, RECORD_TYPE_LABEL, type RecordType, STRUCTURED_FIELDS } from "@/lib/domain/schemas";
 import { loadPage, param, type SearchParams } from "@/lib/server/page";
-import { buildOnlyFieldsFor, frozenRecordProblem, PROPOSAL_PROTECTED_FIELDS, SOURCE_INTEGRITY_FIELDS } from "@/lib/server/services";
+import { frozenRecordProblem, updateProtectedFieldsFor } from "@/lib/server/services";
 import { recordHref } from "@/lib/ui/links";
 import { SUBMITTER_CLAIM_SENTENCE } from "@/lib/ui/proposal-review";
 
@@ -15,13 +15,16 @@ export const metadata: Metadata = { title: "New proposal" };
 
 /** What an existing source says about the snapshot HQ read cannot be changed by proposal (mirrors the database). */
 
-/** Fields a proposal may not set on this type: protected everywhere, written only by HQ's build, or a source's integrity facts. */
+/**
+ * Fields a proposal may not set on this type: protected everywhere, written only by HQ's build, a source's
+ * integrity facts, what identifies a build, a module's evidence level (the same list the service checks).
+ */
 function lockedFields(type: RecordType): Set<string> {
-  return new Set([...PROPOSAL_PROTECTED_FIELDS, ...buildOnlyFieldsFor(type), ...(type === "source" ? SOURCE_INTEGRITY_FIELDS : [])]);
+  return new Set(updateProtectedFieldsFor(type));
 }
 
-/** H3: on a requirement already implemented and tested, a proposal cannot change these links. */
-const TESTED_LINKS = ["linked_evidence_ids", "linked_build_ids"];
+/** ROUND5 K1: a loop's standing or a pathway's basis that freezes it unless the proposal relabels it. */
+const FROZEN_LABELS = ["reported", "design_intention", "source_recommendation", "founder_statement", "commission_example", "verified", "hq_recommendation"];
 
 
 /**
@@ -32,7 +35,6 @@ const TESTED_LINKS = ["linked_evidence_ids", "linked_build_ids"];
  */
 function proposableFields(type: RecordType, data: Record<string, unknown>): { fields: string[]; kinds: Record<string, "text" | "json"> } {
   const locked = lockedFields(type);
-  if (type === "requirement" && data.implementation_state === "implemented_tested") TESTED_LINKS.forEach((f) => locked.add(f));
   const structured = new Set(STRUCTURED_FIELDS[type]);
   const fields = RECORD_FIELDS[type].filter((k) => !locked.has(k)).sort();
   const kinds: Record<string, "text" | "json"> = {};
@@ -141,9 +143,16 @@ export default async function NewProposalPage({ searchParams }: { searchParams: 
                   An imported statement can be left as it is, removed, or replaced by your own claim.
                 </li>
                 {type === "requirement" && data.implementation_state === "implemented_tested" ? (
-                  <li>
-                    <strong>This requirement is recorded as implemented and tested</strong>, so its linked evidence and builds cannot be changed by
-                    proposal.
+                  <li data-testid="frozen-tested">
+                    <strong>This requirement is recorded as implemented and tested</strong>, so a proposal can change it only by moving it to another
+                    implementation state; then its other fields may change too.
+                  </li>
+                ) : null}
+                {(type === "loop" || type === "pathway") && FROZEN_LABELS.includes(String(data[type === "loop" ? "standing" : "basis"])) ? (
+                  <li data-testid="frozen-label">
+                    <strong>This {type === "loop" ? "loop" : "pathway"} is labelled from a source</strong>, so a proposal can change it only by setting its{" "}
+                    {type === "loop" ? "standing" : "basis"} to {type === "loop" ? "submitter_claim or no_evidence" : "submitter_claim"}; then its other fields
+                    may change too.
                   </li>
                 ) : null}
                 {reported ? (
