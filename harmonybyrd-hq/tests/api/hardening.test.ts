@@ -245,7 +245,7 @@ describe("tools refuse arguments they do not take; inbox answers are envelopes (
   });
 });
 
-describe("request ids (api-8, D5)", () => {
+describe("request ids (api-8, D5, F6)", () => {
   it("a malformed X-Request-Id is replaced by a server id, in the answer and in the audit log", async () => {
     for (const forged of ["forged id with spaces", "x".repeat(80)]) {
       for (const token of [w.tokens.claude, undefined]) {
@@ -260,9 +260,48 @@ describe("request ids (api-8, D5)", () => {
     }
   });
 
-  it("a well-formed client id is kept for correlation", async () => {
-    const res = await api("/api/v1/whoami", { token: w.tokens.claude, headers: { "x-request-id": "client-run-42.a" } });
-    expect(res.headers.get("x-request-id")).toBe("client-run-42.a");
+  // Changed in the second round (F6): the client's well-formed id used to become the request id, so one
+  // client could give its request another request's id in the audit log (the api-8 reproduction).
+  it("a well-formed client id is never the request id: it is echoed apart and kept as the client's id", async () => {
+    const first = await api("/api/v1/whoami", { token: w.tokens.claude, headers: { "x-request-id": "client-run-42.a" } });
+    expect(first.status).toBe(200);
+    const serverId = first.headers.get("x-request-id")!;
+    expect(serverId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.headers.get("x-client-request-id")).toBe("client-run-42.a");
+    expect(await auditRequestIds()).toContain(serverId);
+    expect(await auditRequestIds()).not.toContain("client-run-42.a");
+
+    // Another client, and an anonymous caller, send the first request's server id: neither gets it.
+    for (const token of [w.tokens.chatgpt, undefined]) {
+      const replay = await api<ErrorBody>("/api/v1/whoami", { token, headers: { "x-request-id": serverId } });
+      const id = replay.headers.get("x-request-id")!;
+      expect(id).not.toBe(serverId);
+      expect(id).toMatch(/^[0-9a-f-]{36}$/);
+      expect(replay.headers.get("x-client-request-id")).toBe(serverId);
+      if (token === undefined) {
+        expect(replay.status).toBe(401);
+        expect(replay.body.error.request_id).toBe(id);
+      }
+    }
+    const client = await admin();
+    try {
+      const rows = await client.query<{ principal_handle: string | null; outcome: string; detail: Record<string, unknown> | null }>(
+        "select principal_handle, outcome, detail from hq.audit_log where request_id = $1 order by id",
+        [serverId],
+      );
+      expect(rows.rows.map((r) => [r.principal_handle, r.outcome])).toEqual([["claude", "allowed"]]);
+      // The allowed row keeps the id the client sent too, apart from the request id.
+      expect(rows.rows[0].detail).toEqual({ client_request_id: "client-run-42.a" });
+      // The refusal keeps the id the client sent, apart from the request id.
+      const denied = await client.query<{ request_id: string; detail: Record<string, unknown> }>(
+        "select request_id, detail from hq.audit_log where principal_id is null and detail ->> 'client_request_id' = $1",
+        [serverId],
+      );
+      expect(denied.rows).toHaveLength(1);
+      expect(denied.rows[0].request_id).not.toBe(serverId);
+    } finally {
+      await client.end();
+    }
   });
 });
 

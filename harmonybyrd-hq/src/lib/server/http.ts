@@ -6,13 +6,29 @@ import { claimsFor, type Principal } from "@/lib/auth/principal";
 import { audit } from "./db";
 import { forbidden, fromDatabaseError, HqError, payloadTooLarge, unauthenticated } from "./errors";
 
-/** A client's X-Request-Id is kept only in this form (the same rule hq.log_refusal applies). */
-const REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
+/** A client's X-Request-Id is kept, as a correlation id only, in this form (the rule hq.log_refusal applies). */
+const CLIENT_REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
-/** The request id for a request: the client's correlation id if it is well formed, otherwise a new one. */
-export function requestIdFor(request: Request): string {
+/**
+ * The request id for a request: always one the server generates, so no client can give its request
+ * the id of another request in the audit log (api-8, F6). A client's own id is kept apart, see below.
+ */
+export function requestIdFor(_request: Request): string {
+  return randomUUID();
+}
+
+/**
+ * A client's X-Request-Id, if well formed, or null. It is never the request id: it is echoed back in
+ * X-Client-Request-Id and kept in audit rows as detail.client_request_id, for correlation only.
+ */
+export function clientRequestIdFor(request: Request): string | null {
   const offered = request.headers.get("x-request-id");
-  return offered && REQUEST_ID.test(offered) ? offered : randomUUID();
+  return offered && CLIENT_REQUEST_ID.test(offered) ? offered : null;
+}
+
+/** The response headers that carry a request's ids. */
+function idHeaders(requestId: string, clientRequestId: string | null = null): Record<string, string> {
+  return { "x-request-id": requestId, ...(clientRequestId ? { "x-client-request-id": clientRequestId } : {}) };
 }
 
 export function json(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}): Response {
@@ -22,9 +38,9 @@ export function json(body: unknown, init: { status?: number; headers?: Record<st
   });
 }
 
-export function errorResponse(error: unknown, requestId: string): Response {
+export function errorResponse(error: unknown, requestId: string, clientRequestId: string | null = null): Response {
   const e = error instanceof HqError ? error : fromDatabaseError(error);
-  const headers: Record<string, string> = { "x-request-id": requestId };
+  const headers: Record<string, string> = idHeaders(requestId, clientRequestId);
   if (e.status === 401) headers["www-authenticate"] = 'Bearer realm="harmonybyrd-hq"';
   return json({ error: { code: e.code, message: e.message, ...(e.detail !== undefined ? { detail: e.detail } : {}), request_id: requestId } }, { status: e.status, headers });
 }
@@ -60,13 +76,22 @@ export function requireScope(principal: Principal, scope: "read" | "propose"): v
   }
 }
 
-/** Wrap a route handler: authenticate, run, translate errors, and never leak internals. */
+/**
+ * Wrap a route handler: authenticate, run, translate errors, and never leak internals.
+ *
+ * A successful call is written to the audit log as allowed, under `action`, with the server's request
+ * id. The two founder routes set `allowedRecordedByDatabase`: a founder act is recorded as allowed only
+ * by the database function that performs it (hq.review_proposal, hq.record_founder_decision), and
+ * hq.log_access refuses those action names from anyone, so nothing is logged for them here. A refusal
+ * (401 or 403) is logged under `action` for every route.
+ */
 export async function withApi(
   request: Request,
-  options: { action: string; scope?: "read" | "propose"; mutating?: boolean },
+  options: { action: string; scope?: "read" | "propose"; mutating?: boolean; allowedRecordedByDatabase?: boolean },
   handler: (ctx: ApiContext) => Promise<unknown>,
 ): Promise<Response> {
   const requestId = requestIdFor(request);
+  const clientRequestId = clientRequestIdFor(request);
   let principal: Principal | null = null;
   try {
     principal = await principalFromRequest(request);
@@ -74,8 +99,10 @@ export async function withApi(
     if (options.mutating) assertSameOrigin(request);
     if (options.scope) requireScope(principal, options.scope);
     const result = await handler({ principal, requestId });
-    await audit(claimsFor(principal), { action: options.action, outcome: "allowed", requestId });
-    return json(result, { headers: { "x-request-id": requestId } });
+    if (!options.allowedRecordedByDatabase) {
+      await audit(claimsFor(principal), { action: options.action, outcome: "allowed", requestId, clientRequestId });
+    }
+    return json(result, { headers: idHeaders(requestId, clientRequestId) });
   } catch (error) {
     const e = error instanceof HqError ? error : fromDatabaseError(error);
     if (e.status === 401 || e.status === 403) {
@@ -83,10 +110,10 @@ export async function withApi(
         action: options.action,
         outcome: "denied",
         requestId,
-        detail: { code: e.code, message: e.message },
+        detail: { code: e.code, message: e.message, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) },
       });
     }
-    return errorResponse(e, requestId);
+    return errorResponse(e, requestId, clientRequestId);
   }
 }
 

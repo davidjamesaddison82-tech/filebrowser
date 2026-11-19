@@ -16,6 +16,7 @@ import {
   Notice,
   PageHead,
   RecordLink,
+  BuildStandingChip,
   StatusChip,
 } from "@/components/ui";
 import type { Dataset, Envelope } from "@/lib/domain/dataset";
@@ -415,7 +416,7 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
         <dl className="facts">
           <dt>Standing</dt>
           <dd>
-            <StatusChip value={b.standing} />
+            <BuildStandingChip build={b} />
           </dd>
           <dt>Module</dt>
           <dd>{b.module_id ? <RecordLink ds={ds} id={b.module_id} /> : <span className="muted">—</span>}</dd>
@@ -801,7 +802,17 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
           {acceptance ? (
             <Card title="Acceptance status">
               <div className="stack-sm">
-                <Chip tone={acceptance.recorded_in_hq?.state === "accepted" ? "ok" : acceptance.recorded_in_hq?.state === "rejected" ? "bad" : "outline"}>
+                <Chip
+                  tone={
+                    acceptance.recorded_in_hq?.state === "accepted"
+                      ? "ok"
+                      : acceptance.recorded_in_hq?.state === "rejected"
+                        ? "bad"
+                        : acceptance.headline === "build_acceptance_claimed"
+                          ? "warn"
+                          : "outline"
+                  }
+                >
                   {acceptance.label}
                 </Chip>
                 {acceptance.recorded_in_hq ? (

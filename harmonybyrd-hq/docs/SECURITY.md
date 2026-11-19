@@ -2,7 +2,8 @@
 
 This describes what the build does and what was tested. It is not an external security review; none
 has been done. An adversarial review by reviewers who had not written the code found 71 defects,
-which were then fixed; see docs/REVIEW-FINDINGS.md.
+which were then fixed. Every original attack was re-run against the fixes, and a second round fixed
+what was only partly closed; see docs/REVIEW-FINDINGS.md, and docs/KNOWN-GAPS.md for what remains.
 
 ## Boundaries the commission set, and how the build kept them
 
@@ -38,8 +39,15 @@ owner-only table keyed by the transaction, not in a setting a session can change
 opens a revision and does not seal it cannot commit. A sealed revision never gains a version, so a
 pinned read of an earlier revision cannot change.
 
-**`service_role`** can read the schema and nothing more: it cannot write any table, call HQ's
-internal functions or run an import. Imports run on the owner connection.
+**`service_role`** can read the schema and nothing more: it cannot write any table or run an import.
+It can execute only the read helpers (`records_at`, `dataset_hash`, `head_rev`, `head_seal`,
+`verify_chain`, `principal_directory`, `jwt_claims`, `current_principal_id`, `current_principal`,
+`current_app_role`, `current_principal_kind`). Every other function in schema `hq` — the founder
+functions, the proposal functions, the audit wrappers and the sign-in look-ups — refuses it with
+“permission denied”, even when it forges the founder's claims. Migration 0007 revokes this from the
+catalogue, so no function is missed, and turns off PostgreSQL's default grant of EXECUTE to PUBLIC
+for functions created later: a later migration must grant each new function to the roles that need it.
+Imports run on the owner connection.
 
 **What the owner can still do.** The database owner, or a PostgreSQL superuser, can bypass every
 rule: disable triggers, edit or delete rows, and rewrite seals. HQ cannot prevent that; it can only
@@ -56,14 +64,42 @@ history, seals and chain together; that is detected only by comparing the latest
 **Authentication.**
 - Passphrases: scrypt with a per-user salt; comparison in constant time. A wrong passphrase gets the
   same message whether or not the name exists: “That name and passphrase do not match.”
-- **Sign-in delay, not lock-out.** Attempts are counted per name only (lower-cased), not per address:
-  without a proxy HQ trusts, the `X-Forwarded-For` header is whatever the client sends, so keying on
-  it let a guesser rotate it freely and let anyone share — and lock — the founder's count. Attempts
-  for one name are handled one at a time. After five consecutive failures each further attempt first
-  waits 0.5 s, doubling each time up to 8 s, and is then checked normally, so the right passphrase
-  always signs in. A success clears the count; a count expires after 15 minutes. Unknown names are
-  delayed the same way. Up to 10,000 names are tracked, in the server's memory. `X-Forwarded-For` is
-  read only when `HQ_TRUST_PROXY=1`, and then only into the audit log.
+- **Sign-in delay, not lock-out.** Attempts are counted per *lane*, never per address: without a
+  proxy HQ trusts, the `X-Forwarded-For` header is whatever the client sends, so keying on it would
+  let a guesser rotate it freely. There are two kinds of lane:
+  - the **anonymous lane** of a name (lower-cased), for a browser that has not signed in as that
+    person before;
+  - a **device lane** (name and device id), for a browser that carries a valid device cookie for the
+    person of that name (below). Wrong attempts from elsewhere never touch it.
+- **No queue.** Attempts are not handled one behind another. Each attempt waits on its own, then is
+  checked: no wait for the first five consecutive failures of its lane, then 0.5 s, doubling up to
+  8 s. The wait is set by the lane's failure count when the attempt starts. A failure is counted when
+  it is known; a success clears the lane; a count expires after 15 minutes without attempts.
+- **Bounded work.** At most 4 attempts are in progress per name in the anonymous lanes, and 12 in all
+  anonymous lanes together; at most 2 per device lane, and 4 over all the device lanes of one name.
+  The device lanes have no limit shared between names: a device lane exists only for a valid device
+  cookie of that person, so the work is bounded by the number of people times four, and one account
+  holder cannot use up another's places. An attempt over a limit is refused at once, without checking
+  the passphrase: “Too many sign-in attempts are in progress. Try again in a moment.” The refusal is
+  logged. Unknown names take the anonymous lane
+  exactly like known ones (the name is looked up only when a valid device cookie is present), so
+  neither the wait nor a refusal shows which names exist. Up to 10,000 lanes are tracked, in the
+  server's memory. `X-Forwarded-For` is read only when `HQ_TRUST_PROXY=1`, and then only into the
+  audit log.
+- **The device cookie** (`hq_device`) means “this browser has signed in as this person before”. It is
+  set only after a successful sign-in: HS256-signed with `HQ_JWT_SECRET`, holding HQ's issuer, the
+  type `device`, the person's id and a random 128-bit device id; 180 days; `HttpOnly`,
+  `SameSite=Lax`, and `Secure` exactly when the session cookie is. A browser that already holds one
+  for the same person keeps its device id. It is **not** a session and grants nothing: only the sign-in
+  action reads it, to choose the lane. A request that carries only a device cookie is unauthenticated,
+  for a page, a REST call and the MCP endpoint. A session token is never accepted as a device cookie,
+  and a device cookie never as a session. A device cookie for another person, or a forged, expired or
+  malformed one, gets the anonymous lane. Signing out leaves it in place; changing `HQ_JWT_SECRET`
+  ends it. Someone who copies it gets that browser's lane, with that lane's waits, and nothing more.
+- **The honest limit.** While someone keeps sending wrong passphrases, a browser that has never signed
+  in can be refused, for that name or, once the anonymous limit of 12 is full, for every name. A
+  browser that has signed in as that person before is not slowed by the flood, unless the device
+  lanes are full too (see docs/KNOWN-GAPS.md).
 - After sign-in, HQ redirects only to a path on HQ itself. A `next` value with a control character,
   whitespace or a backslash, one that starts with `//`, or one that resolves to another site, sends
   the person to the dashboard instead.
@@ -97,8 +133,24 @@ the caller, the action and the outcome. The log is append-only and readable only
   function cannot log itself: raising the error rolls back that function's own writes. A caller that
   goes round the application (for example straight to the database) therefore leaves no record of
   being refused.
-- A client's `X-Request-Id` is used only if it is 1–64 characters of letters, digits, `.`, `_` and
-  `-`; otherwise HQ makes its own. A detail larger than 6,000 bytes is shortened to a preview.
+- **The request id is always the server's.** Every REST request (except `GET /api/v1/health`, which has none) and every MCP request gets an id HQ generates; it
+  is returned in `x-request-id` and stored as the audit row's `request_id`, so no client can give its
+  request the id of another request in the log. A client's own `X-Request-Id`, if it is 1–64
+  characters of letters, digits, `.`, `_` and `-`, is echoed back by the REST endpoints in
+  `x-client-request-id` and kept as `detail.client_request_id` on the audit row they write for the
+  call (allowed, or a 401 or 403 answer), for correlation only; otherwise it is dropped. The database
+  checks the same pattern again before storing it. The MCP endpoint does not read it.
+- `hq.log_access` records only the actions the application logs as allowed: `api.*`, `mcp.*`,
+  `tool.*`, `tools.list`, `integrations.read`, `proposal.read`, `session.sign_in`,
+  `session.sign_out` and `session.end_all`. Anything else is refused (HQ422) and nothing is written.
+  A founder act (`proposal.review`, `decision.record`, issuing or revoking a token) is recorded as
+  allowed only by the database function that performs it, so no caller can write such a row without
+  doing the act. The two REST routes for founder acts therefore log nothing as allowed themselves.
+  Founder acts (`proposal.review`, `decision.record`, `credential.*`) and `proposal.submit` and
+  `proposal.withdraw` are recorded as allowed only by the database functions that perform them.
+- A detail larger than 6,000 bytes is shortened to a preview by the application. The database also
+  refuses any new audit row whose detail is over 16,384 bytes (rows written before migration 0007 are
+  not re-checked).
 
 **Secrets.** `npm run setup` creates `.env.local`, or fills in the generated values if an existing
 one still has the placeholders, and makes both `.env.local` and `.hq-local-credentials.json`
@@ -142,9 +194,11 @@ founder acts directly in the database (refused); proposals setting protected fie
 original fields, an HQ acceptance, an evidence record's verification, HQ's own checks, attribution,
 source integrity fields and build-only fields — and proposals carrying invented quotations or HQ's
 own labels (refused, through the application and directly in the database); `service_role` writing
-history or forging a founder act (refused); direct `UPDATE`/`DELETE`/`TRUNCATE` on the record history,
+history, forging a founder act or calling any function but the read helpers (refused); a proposal
+asserting an acceptance (refused, through the application and directly in the database); direct `UPDATE`/`DELETE`/`TRUNCATE` on the record history,
 the proposal history and the audit log, even as the database owner (refused); tampering with stored versions and seals (reported by
-`verify_chain`); API roles writing the audit log (refused); a founder being given a token (refused);
+`verify_chain`); API roles writing the audit log, and a founder act recorded through `hq.log_access` (refused);
+a flood of wrong sign-in attempts against the founder's name while the founder's browser signs in; a founder being given a token (refused);
 an AI client being made founder (refused); a revoked or expired token, and a forged, expired or
 ended session (refused); a cross-origin state-changing request (refused); an oversized body (413); a
 read tool attempting to write (impossible: read-only transaction). docs/TESTING.md names the files.
@@ -156,9 +210,9 @@ Results: docs/TEST-RESULTS.md.
 - No OAuth: tokens are static bearer tokens. This is adequate for a local prototype and for clients
   that accept a custom header; it is not what the ChatGPT application supports (docs/CONNECTING-AI-CLIENTS.md).
 - No rate limiting on API tokens (only the sign-in delay), no IP allow-listing, no multi-factor sign-in.
-- Anyone who can reach the sign-in page can slow sign-in for a known name, the founder's included,
-  by sending wrong passphrases: each queued attempt waits up to 8 seconds. They cannot stop the right
-  passphrase from working.
+- Anyone who can reach the sign-in page can, while they keep sending wrong passphrases, have sign-in
+  refused for browsers that have never signed in. A browser that has signed in before keeps its own
+  lane, limited per person and not shared between people (docs/KNOWN-GAPS.md).
 - The sign-in delay is held in the server's memory: it resets on restart and is per process.
 - No Content-Security-Policy header yet.
 - The database owner or a superuser can bypass every rule; only a seal kept outside HQ shows it.

@@ -1677,8 +1677,12 @@ h4,
 .crumbs > span {
   overflow-wrap: anywhere;
 }
+/* A chip keeps to one line while it fits, and wraps inside its own box when it reaches the width of its
+   container, so a long label never runs past a phone screen (F10). */
 .chip {
   max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Founder rejected in HQ (D12): shown in the map as clearly as an acceptance. */

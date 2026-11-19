@@ -407,7 +407,8 @@ test("a long unbroken name and family wrap: no screen scrolls sideways", async (
     for (const path of ["/modules/MOD-FX-DELTA", "/records/module/MOD-FX-DELTA", "/modules"]) {
       await page.goto(path);
       const m = await page.evaluate(() => ({
-        sideways: document.documentElement.scrollWidth - window.innerWidth,
+        // Against the layout viewport, not innerWidth, which a browser can widen to fit overflow (F10).
+        sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
         h1: document.querySelector("main h1")!.getBoundingClientRect().right,
         crumbs: document.querySelector("main .crumbs")?.getBoundingClientRect().right ?? 0,
         vw: window.innerWidth,

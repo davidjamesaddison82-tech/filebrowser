@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, IdTag, InboxOriginChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import { BuildStandingChip, Card, Chip, Empty, IdTag, InboxOriginChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
 import { resolvedByHqDecisions } from "@/lib/domain/derive";
 import { type Page, loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -275,7 +275,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                         </td>
                         <td className="small">{b.data.module_id ? ds.moduleName(b.data.module_id) : "—"}</td>
                         <td>
-                          <StatusChip value={b.data.standing} />
+                          <BuildStandingChip build={b.data} />
                           {b.data.hq_acceptance?.state === "accepted" ? (
                             <div style={{ marginTop: 4 }}>
                               <Chip tone="ok">Accepted in HQ</Chip>

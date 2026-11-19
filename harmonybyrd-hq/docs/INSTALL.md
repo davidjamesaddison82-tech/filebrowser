@@ -134,11 +134,11 @@ by `_` and lower-case letters, digits or underscores (for example `hq_test_ci`),
 | `HQ_GITHUB_TOKEN`, `HQ_GITHUB_REPOSITORIES` | optional | Read-only GitHub adapter; look-ups only for the listed repositories (`owner/name`, comma-separated). Empty = “not configured” |
 | `HQ_GOOGLE_DRIVE_ACCESS_TOKEN` | optional | Read-only Drive adapter. Empty = “not configured” |
 | `HQ_GOOGLE_DRIVE_FILE_IDS` | optional | Comma-separated Drive file ids that look-ups may read. Any other id is “not configured”; with an empty list the adapter reports itself not configured |
-| `HQ_TRUST_PROXY=1` | optional | Set only behind a reverse proxy you control that sets `X-Forwarded-For`. The address is then recorded in the audit log for failed sign-ins. It never changes the sign-in delay, which is per name |
+| `HQ_TRUST_PROXY=1` | optional | Set only behind a reverse proxy you control that sets `X-Forwarded-For`. The address is then recorded in the audit log for failed sign-ins. It never changes the sign-in delay, which is per name (or per name and device cookie) |
 | `HQ_MAX_BODY_BYTES` | optional | Largest JSON request body on the REST and MCP endpoints, in bytes. Default 1,048,576 |
 | `HQ_GITHUB_API`, `HQ_GOOGLE_DRIVE_API` | tests only | Replace the GitHub and Drive API addresses (the tests point them at a local fake) |
 | `HQ_SIGNIN_BASE_DELAY_MS` | tests only | Shorter first sign-in delay than the default 500 ms. Ignored in a production build unless `HQ_INSECURE_COOKIES=1` |
-| `HQ_INSECURE_COOKIES=1` | tests only | Allows the session cookie over plain HTTP in a production build |
+| `HQ_INSECURE_COOKIES=1` | tests only | Allows the session and device cookies over plain HTTP in a production build |
 
 ## Operating notes
 
@@ -162,12 +162,18 @@ exists only in a signed-in session.
 
 **Sessions** last twelve hours. Signing out ends every session of that person, in every browser;
 so does setting a new passphrase. Changing `HQ_JWT_SECRET` signs everyone out. API tokens are not
-affected: revoke them on *AI & API access*.
+affected: revoke them on *AI & API access*. A successful sign-in also leaves a device cookie
+(`hq_device`, 180 days) that lets that browser sign in while someone floods the sign-in page with
+wrong passphrases; it authenticates nothing, and signing out does not remove it (docs/SECURITY.md).
 
 **Supabase.** The schema follows Supabase conventions (roles `anon`, `authenticated`, `service_role`;
 claims in `request.jwt.claims`; row-level security), and the migrations sit in `supabase/migrations`.
 It has only been run on plain PostgreSQL. Running it on a Supabase project is untested — see
-docs/KNOWN-GAPS.md. Note that `service_role` can only read the `hq` schema: imports must use the owner connection.
+docs/KNOWN-GAPS.md. Note that `service_role` can only read the `hq` schema and execute its read
+helpers: imports must use the owner connection. The migrations change nothing outside the `hq`
+schema and HQ's own roles; in particular they do not change the database's default privileges. A later
+migration that adds a function to `hq` must revoke EXECUTE from `PUBLIC` itself (PostgreSQL grants it
+by default); `tests/db/service-role.test.ts` reads the catalogue and fails if one does not.
 
 **Do not** expose a local installation to the internet. It has had no external security review,
 and no deployment is authorised by the commission.

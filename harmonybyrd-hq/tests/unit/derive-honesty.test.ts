@@ -34,6 +34,7 @@ function dataset(change: (find: (id: string) => Data, add: (type: PackRecord["ty
   return datasetFrom(records, meta);
 }
 const lifecycle = (module: Data) => module.lifecycle as Record<string, Data>;
+const find = (ds: ReturnType<typeof dataset>, id: string) => ds.byId(id)!.data as unknown as Data;
 const ids = (items: { id: string }[]) => items.map((i) => i.id).sort();
 
 describe("a lifecycle flag counts only when a source supports it (honesty-2, evidence-7)", () => {
@@ -121,15 +122,130 @@ describe("only a real acceptance instrument silences 'acceptance claimed without
     });
   }
 
-  it("control: an issued decision about the build's module, or that names the build, is an instrument", () => {
+  // F2 (evidence-5): this was the old rule's control; under F2 none of these is an instrument.
+  it("an issued decision about the build's module, or that names the build in any other way, is not an instrument (F2)", () => {
     const aboutModule = dataset((find) => {
       (find("FD-FX-01").module_ids as string[]).push("MOD-FX-BETA");
     });
-    expect(keys(aboutModule)).not.toContain("acc:BLD-FX-02");
+    expect(keys(aboutModule)).toContain("acc:BLD-FX-02");
     const namesBuild = dataset((find) => {
       find("FD-FX-01").effects = [{ type: "note", record_id: "BLD-FX-02" }];
     });
-    expect(keys(namesBuild)).not.toContain("acc:BLD-FX-02");
+    expect(keys(namesBuild)).toContain("acc:BLD-FX-02");
+  });
+
+  it("a link the build itself carries (decision_ids, as a proposal can set) is not an instrument (F2)", () => {
+    const ds = dataset((find) => {
+      find("BLD-FX-02").decision_ids = ["FD-FX-01"];
+      find("BLD-FX-02").linked_decision_ids = ["FD-FX-01"];
+    });
+    expect(keys(ds)).toContain("acc:BLD-FX-02");
+  });
+
+  it("a decision a source reports is not an instrument, even with a set_acceptance effect on the build (F2)", () => {
+    const ds = dataset((find) => {
+      find("FD-FX-01").effects = [{ type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state: "accepted" }];
+    });
+    expect(find(ds, "FD-FX-01").recorded_in).toBe("source");
+    expect(keys(ds)).toContain("acc:BLD-FX-02");
+  });
+
+  const hqDecision = (effect: Data, status = "issued"): Data => ({
+    id: "FD-HQ-0001",
+    code: null,
+    title: "Accept beta build 2",
+    status,
+    recorded_in: "hq",
+    date: "2031-05-01",
+    statement: { text: "Accept beta build 2", epistemic: "verified", citations: [] },
+    exact_text: "I accept beta build 2.",
+    module_ids: [],
+    requirement_ids: [],
+    commission_code: null,
+    resolves: [],
+    effects: [effect],
+    decided_by: "founder",
+    decided_at: "2031-05-01T10:00:00Z",
+    citations: [],
+  });
+
+  it("an HQ decision whose set_acceptance does not accept this build is not an instrument (F2)", () => {
+    for (const effect of [
+      { type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state: "rejected" },
+      { type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state: "none" },
+      { type: "set_acceptance", record_type: "build", record_id: "BLD-FX-01", state: "accepted" },
+      { type: "set_acceptance", record_type: "module", record_id: "MOD-FX-BETA", state: "accepted" },
+    ]) {
+      expect(keys(dataset((_, add) => add("decision", hqDecision(effect)))), JSON.stringify(effect)).toContain("acc:BLD-FX-02");
+    }
+    const notIssued = hqDecision({ type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state: "accepted" }, "pending");
+    expect(keys(dataset((_, add) => add("decision", notIssued)))).toContain("acc:BLD-FX-02");
+  });
+
+  it("control: an issued HQ decision with a set_acceptance that accepts this build is an instrument (F2)", () => {
+    const ds = dataset((_, add) => add("decision", hqDecision({ type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state: "accepted" })));
+    expect(keys(ds)).not.toContain("acc:BLD-FX-02");
+  });
+
+  it("the review item says what HQ lacks (F2)", () => {
+    const item = reviewItems(dataset(() => undefined)).find((i) => i.key === "acc:BLD-FX-02")!;
+    expect(item.detail).toBe(
+      "A source states this build was accepted, but HQ holds no founder-acceptance evidence for it and no founder decision recorded in HQ accepts it.",
+    );
+  });
+});
+
+describe("a build marked as accepted counts as reported only when its statement quotes a source (F1)", () => {
+  const claimedBuild = (statement: Data): Data => ({
+    id: "BLD-HQ-0001",
+    label: "Inbox build",
+    module_id: "MOD-FX-GAMMA",
+    filename: null,
+    sha256: null,
+    bytes: null,
+    standing: "accepted_reported",
+    statement,
+    artifact_source_id: null,
+    hq_checks: [],
+    citations: [],
+  });
+
+  for (const [name, statement] of [
+    ["a submitter's claim with no citation", { text: "Accepted by the founder.", epistemic: "submitter_claim", citations: [] }],
+    ["a design intention, even with a citation", { text: "Accepted.", epistemic: "design_intention", citations: [CITE_F01] }],
+    ["a report with no citation (stored before the rule)", { text: "Accepted.", epistemic: "reported", citations: [] }],
+  ] as const) {
+    it(`${name} is shown as "Acceptance claimed — no source quoted" and listed as an unverified claim`, () => {
+      const ds = dataset((_, add) => add("build", claimedBuild(statement as Data)));
+      const status = acceptanceStatus(ds, "build", "BLD-HQ-0001")!;
+      expect(status.headline).toBe("build_acceptance_claimed");
+      expect(status.label).toBe("Acceptance claimed — no source quoted");
+      expect(status.reported_in_sources).toBeNull();
+      expect(status.caution).toMatch(/quotes no source/);
+      const health = developmentHealth(ds);
+      expect(ids(health.acceptance_reported_only)).toEqual(["BLD-FX-02", "MOD-FX-BETA"]);
+      expect(health.unverified_claims.find((c) => c.id === "BLD-HQ-0001")?.note).toMatch(/Acceptance claimed — no source quoted/);
+      const review = reviewItems(ds).find((i) => i.key === "acc:BLD-HQ-0001")!;
+      expect(review.title).toMatch(/claimed as accepted, with no source quoted/);
+    });
+  }
+
+  it("the update path: the fixture's candidate build re-marked as accepted, keeping its 'not accepted' quotation, is not a reported acceptance", () => {
+    const ds = dataset((find) => {
+      find("BLD-FX-01").standing = "accepted_reported";
+      find("BLD-FX-01").statement = { text: "Accepted.", epistemic: "submitter_claim", citations: [] };
+    });
+    expect(acceptanceStatus(ds, "build", "BLD-FX-01")!.headline).toBe("build_acceptance_claimed");
+    expect(ids(developmentHealth(ds).acceptance_reported_only)).not.toContain("BLD-FX-01");
+  });
+
+  it("controls: a cited report or founder statement is a reported acceptance", () => {
+    for (const epistemic of ["reported", "founder_statement"]) {
+      const ds = dataset((_, add) => add("build", claimedBuild({ text: "Accepted.", epistemic, citations: [CITE_F01] })));
+      expect(acceptanceStatus(ds, "build", "BLD-HQ-0001")!.headline, epistemic).toBe("build_accepted_reported");
+      expect(ids(developmentHealth(ds).acceptance_reported_only), epistemic).toContain("BLD-HQ-0001");
+    }
+    expect(acceptanceStatus(dataset(() => undefined), "build", "BLD-FX-02")!.label).toBe("Acceptance reported in a source — not recorded in HQ");
   });
 });
 

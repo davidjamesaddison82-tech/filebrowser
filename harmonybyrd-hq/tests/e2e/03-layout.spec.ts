@@ -5,7 +5,8 @@ import { DETAIL_SCREENS, expect, SCREENS, signIn, test } from "./support";
  * Acceptance check 11: responsive laptop layouts without overlays covering content, plus a useful phone view.
  *
  * For every screen and size the test measures, in the real browser:
- *   - the page does not scroll sideways;
+ *   - the page does not scroll sideways (scroll width against the layout viewport, and against the
+ *     configured window width: a phone browser widens its viewport to fit overflowing content, F10);
  *   - the heading is on screen and nothing is drawn on top of it;
  *   - nothing is drawn over the content, at the top of the page and scrolled to its end: no fixed,
  *     sticky or absolutely positioned element covers any text (whatever its size) or a large part of
@@ -31,6 +32,7 @@ for (const size of LAPTOPS) {
         await page.goto(path);
         const m = await measureLayout(page);
         expect(m.sidewaysScroll, `${path}: sideways scroll in pixels`).toBeLessThanOrEqual(1);
+        expect(m.scrollWidth, `${path}: page width against the ${size.width} px window`).toBeLessThanOrEqual(size.width + 1);
         expect(m.headingTop, `${path}: heading present`).not.toBeNull();
         expect(m.headingTop!, `${path}: heading is within the first screen`).toBeLessThan(size.height * 0.6);
         expect(m.headingUncovered, `${path}: nothing is drawn over the heading`).toBe(true);
@@ -55,6 +57,9 @@ test.describe("phone 390x844", () => {
       await page.goto(path);
       const m = await measureLayout(page);
       expect(m.sidewaysScroll, `${path}: sideways scroll in pixels`).toBeLessThanOrEqual(1);
+      // A mobile browser widens its layout to fit content that overflows, so the page is also held to
+      // the configured screen width (F10).
+      expect(m.scrollWidth, `${path}: page width against the ${PHONE.width} px screen`).toBeLessThanOrEqual(PHONE.width + 1);
       expect(m.headingUncovered, `${path}: nothing is drawn over the heading`).toBe(true);
       const { top, end } = await coveringsTopAndEnd(page);
       expect(top.coverings, `${path}: nothing covers the content`).toEqual([]);

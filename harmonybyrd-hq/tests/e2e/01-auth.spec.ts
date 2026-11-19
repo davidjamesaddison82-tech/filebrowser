@@ -49,8 +49,10 @@ test.describe("signing in", () => {
     await expect(page).toHaveURL(/\/sign-in/);
   });
 
-  // D8: a growing delay per name instead of a lock-out. The test server uses a 200 ms base delay
+  // D8, F5: a growing delay per name instead of a lock-out. The test server uses a 200 ms base delay
   // (HQ_SIGNIN_BASE_DELAY_MS, honoured only on a test server); production waits 500 ms, doubling to 8 s.
+  // Each attempt waits on its own (attempts no longer queue); one after another, as here, the waits are
+  // the same as before. Parallel floods and the caps are tested over HTTP in tests/api/sign-in.test.ts.
   test("wrong passphrases slow that name down, but never lock out the right passphrase", async ({ page }) => {
     await page.goto("/sign-in");
     const alert = page.getByRole("alert").filter({ hasText: /./ });
@@ -89,6 +91,38 @@ test.describe("signing in", () => {
     await signInThroughForm(page, "reader");
     expect(Date.now() - started).toBeLessThan(5000);
     await expect(page.getByText("Reader · signed in")).toBeVisible();
+  });
+
+  // F5: changed in the second round. A browser that has signed in before carries a device cookie and has
+  // a lane of its own, so wrong attempts from another browser do not slow it down; signing out keeps it.
+  test("a browser that signed in before is not slowed by wrong attempts from elsewhere, and keeps its device cookie after sign-out", async ({ page, browser }) => {
+    await signInThroughForm(page, "developer");
+    const names = async () => (await page.context().cookies()).map((c) => c.name).sort();
+    expect(await names()).toEqual(["hq_device", "hq_session"]);
+    const device = (await page.context().cookies()).find((c) => c.name === "hq_device")!;
+    expect(device.httpOnly).toBe(true);
+    expect(device.sameSite).toBe("Lax");
+    await Promise.all([page.waitForURL(/\/sign-in/), page.getByRole("button", { name: "Sign out" }).click()]);
+    // Signed out: the session cookie is gone, the device cookie stays, and it opens nothing.
+    expect(await names()).toEqual(["hq_device"]);
+    await page.goto("/decisions");
+    await expect(page).toHaveURL(/\/sign-in/);
+
+    const elsewhere = await browser.newContext();
+    try {
+      const other = await elsewhere.newPage();
+      await other.goto("/sign-in");
+      for (let attempt = 1; attempt <= 8; attempt += 1) await timedAttempt(other, "developer", `wrong-elsewhere-${attempt}`);
+      // That browser's next attempt waits 1.6 s (eight failures in the name's lane) ...
+      expect(await timedAttempt(other, "developer", "wrong-elsewhere-9")).toBeGreaterThanOrEqual(1500);
+      // ... while the browser that signed in before signs in without waiting.
+      const started = Date.now();
+      await signInThroughForm(page, "developer");
+      expect(Date.now() - started).toBeLessThan(1500);
+      await expect(page.getByText("Developer · signed in")).toBeVisible();
+    } finally {
+      await elsewhere.close();
+    }
   });
 
   for (const next of ["/%09/evil.example/", "/.%2F%2Fevil.example", "/%5Cevil.example", "/%0a/evil.example/"]) {

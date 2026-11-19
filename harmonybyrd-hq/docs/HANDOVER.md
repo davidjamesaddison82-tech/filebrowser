@@ -50,7 +50,7 @@ public, and the founder's documents were not authorised for publication, so ever
 | --- | --- | --- |
 | 1 | Runnable local application | this folder; `npm run setup && npm run dev` ([INSTALL.md](INSTALL.md)) |
 | 2 | Source code | `src/`, `scripts/`, `tests/` |
-| 3 | Database schema and migrations | `supabase/migrations/0001_foundation.sql` … `0006_write_path_audit_sessions.sql` |
+| 3 | Database schema and migrations | `supabase/migrations/0001_foundation.sql` … `0007_review_followups.sql` |
 | 4 | Installation and operating documentation | [INSTALL.md](INSTALL.md), [../README.md](../README.md) |
 | 5 | Source inventory | In the application under *Sources*; `SOURCE-INVENTORY.md` in the private package |
 | 6 | Module and learning-loop explorers | In the application: *Modules*, *Learning loops* |
@@ -96,7 +96,7 @@ builder, on the commit each names. Nobody else has re-run them, and a passing ru
    bypass that: `hq.verify_chain()` then shows deleted or rewritten versions through the revision
    seals and the seal chain, and only a copy of the latest seal kept outside the database
    (`hq.head_seal()`, shown on *Review items*) shows a rewrite of history and seals together.
-2. The rules that matter are in **`supabase/migrations/0002`–`0006`**, not in the screens. Read
+2. The rules that matter are in **`supabase/migrations/0002`–`0007`**, not in the screens. Read
    [GOVERNANCE.md](GOVERNANCE.md) and the database tests before changing them. Each function a later
    migration replaced carries a header listing its rules and the migration that added each.
 3. `src/lib/domain/derive.ts` is where every figure on every screen comes from. The screens, the

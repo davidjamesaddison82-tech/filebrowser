@@ -116,6 +116,8 @@ describe("session tokens carry only what HQ itself issues (tests-10, api-5)", ()
     process.env.HQ_JWT_SECRET = SECRET;
     const payload = decodeJwt(await signSession(base.id, 7));
     expect(payload.exp! - payload.iat!).toBe(SESSION_HOURS * 3600);
+    // Pinned to the documented lifetime, twelve hours, not just to the constant (F12, tests-10).
+    expect(payload.exp! - payload.iat!).toBe(43_200);
     expect(payload).toMatchObject({ iss: "harmonybyrd-hq", amr: "session", role: "authenticated", sv: 7, sub: base.id });
   });
 

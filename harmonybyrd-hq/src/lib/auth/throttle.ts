@@ -1,30 +1,56 @@
 /**
- * Sign-in throttle: a growing delay per name, never a lock-out.
+ * Sign-in throttle: a growing delay per lane, a bound on the work in progress, never a lock-out.
  *
- * Keyed on the name alone (lower-cased). The client's address is not part of the key: without a
- * proxy HQ trusts, X-Forwarded-For is whatever the client chose to send, so keying on it would let a
- * guesser rotate it for unlimited attempts, and let anyone share (and lock) the founder's bucket.
+ * Lanes. Every attempt belongs to one lane, and the delay and the failure count are the lane's:
+ *   - the anonymous lane of a name (lower-cased), for a browser that has not signed in as that name before;
+ *   - a device lane, name + device id, for a browser carrying a valid device cookie (device.ts) for the
+ *     principal of that name. Wrong attempts from elsewhere never touch it, so a flood against a known
+ *     name does not slow down a browser that person has signed in from before.
+ * The client's address is not part of any key: without a proxy HQ trusts, X-Forwarded-For is whatever
+ * the client chose to send, so keying on it would let a guesser rotate it for unlimited attempts.
  *
- * Attempts for one name are processed one at a time. After FREE_FAILURES consecutive failures, each
- * further attempt first waits min(MAX_DELAY, base * 2^(failures - FREE_FAILURES)) ms, then is checked
- * normally: the right passphrase still signs in, so someone guessing can slow the founder down but
- * cannot keep them out. A success clears the count; a count expires after WINDOW_MS without
- * attempts. Unknown names are throttled the same way, so the delay says nothing about which names
- * exist. At most MAX_NAMES names are tracked; the least recently used is forgotten first.
+ * Attempts do not queue behind one another (a queue let N open wrong attempts hold the right passphrase
+ * for N × 8 s). Each attempt waits on its own, min(MAX_DELAY, base × 2^(failures − FREE_FAILURES)) ms
+ * from its lane's failure count when it starts, then is checked. Failures are counted when they are
+ * known; a success clears the lane; a count expires after WINDOW_MS without attempts.
+ *
+ * Bounded work. At most ANONYMOUS_PER_LANE attempts are in progress per name (ANONYMOUS_TOTAL in all),
+ * and DEVICE_PER_LANE per device (DEVICE_PER_NAME over all the devices of one name). An attempt past a
+ * cap is refused at once, without a passphrase check. Unknown names take the anonymous lane exactly like
+ * known ones, so neither the delay nor a refusal says which names exist. At most MAX_LANES lanes are
+ * tracked; the least recently used is forgotten first.
+ *
+ * The device lanes have no cap shared between names, on purpose. A device lane exists only for a valid
+ * device cookie of that name's principal, so the work is bounded by principals × DEVICE_PER_NAME. A cap
+ * shared by everyone would let any account holder, with device cookies of their own, fill it and have
+ * every other person's returning browser refused.
  */
 
 export const FREE_FAILURES = 5;
 export const MAX_DELAY_MS = 8000;
 export const DEFAULT_BASE_DELAY_MS = 500;
 export const WINDOW_MS = 15 * 60_000;
-export const MAX_NAMES = 10_000;
+export const MAX_LANES = 10_000;
+
+export const ANONYMOUS_PER_LANE = 4;
+export const ANONYMOUS_TOTAL = 12;
+export const DEVICE_PER_LANE = 2;
+export const DEVICE_PER_NAME = 4;
 
 export type AttemptOutcome = "success" | "failure" | "error";
+
+/** Which lane an attempt runs in: the name's anonymous lane, or the lane of one device for that name. */
+export interface Lane {
+  name: string;
+  /** The device id from a valid device cookie for the principal of `name`; absent for the anonymous lane. */
+  device?: string | null;
+}
 
 export interface ThrottleOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   windowMs?: number;
+  /** How many lanes are tracked at most. */
   maxNames?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -33,9 +59,11 @@ export interface ThrottleOptions {
 interface Entry {
   failures: number;
   last: number;
-  /** The tail of this name's queue: the next attempt starts when it settles. */
-  tail: Promise<unknown>;
+  /** Attempts of this lane that have started and not yet finished. */
+  inProgress: number;
 }
+
+export type ThrottleResult<T> = { busy: false; value: T; waitedMs: number } | { busy: true };
 
 /** The wait before an attempt, given the consecutive failures already recorded. */
 export function delayFor(failures: number, baseDelayMs = DEFAULT_BASE_DELAY_MS, maxDelayMs = MAX_DELAY_MS): number {
@@ -43,66 +71,111 @@ export function delayFor(failures: number, baseDelayMs = DEFAULT_BASE_DELAY_MS, 
   return Math.min(maxDelayMs, baseDelayMs * 2 ** (failures - FREE_FAILURES));
 }
 
+/** The map key of a lane. The separator cannot occur in a device id (base64url), so keys cannot collide. */
+function laneKey(lane: Lane): string {
+  const name = lane.name.toLowerCase();
+  return lane.device ? `d:${lane.device}:${name}` : `a:${name}`;
+}
+
+function asLane(lane: Lane | string): Lane {
+  return typeof lane === "string" ? { name: lane } : lane;
+}
+
 export class SignInThrottle {
   private readonly entries = new Map<string, Entry>();
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
   private readonly windowMs: number;
-  private readonly maxNames: number;
+  private readonly maxLanes: number;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private anonymousInProgress = 0;
+  private deviceInProgress = 0;
+  /** Device attempts in progress per lower-cased name, over all of that name's devices. */
+  private readonly deviceByName = new Map<string, number>();
 
   constructor(options: ThrottleOptions = {}) {
     this.baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
     this.maxDelayMs = options.maxDelayMs ?? MAX_DELAY_MS;
     this.windowMs = options.windowMs ?? WINDOW_MS;
-    this.maxNames = options.maxNames ?? MAX_NAMES;
+    this.maxLanes = options.maxNames ?? MAX_LANES;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
-  /** Names currently tracked (for tests and diagnostics). */
+  /** Lanes currently tracked (for tests and diagnostics). */
   get size(): number {
     return this.entries.size;
   }
 
-  /** Consecutive failures recorded for a name (0 once expired). */
-  failures(name: string): number {
-    const entry = this.entries.get(name.toLowerCase());
+  /** Attempts in progress, anonymous and device (for tests and diagnostics). */
+  get inProgress(): { anonymous: number; device: number } {
+    return { anonymous: this.anonymousInProgress, device: this.deviceInProgress };
+  }
+
+  /** Consecutive failures recorded for a lane (0 once expired). A string is the name's anonymous lane. */
+  failures(lane: Lane | string): number {
+    const entry = this.entries.get(laneKey(asLane(lane)));
     if (!entry || this.now() - entry.last > this.windowMs) return 0;
     return entry.failures;
   }
 
   /**
-   * Run one sign-in attempt for `name`, after the attempts already queued for it and after the
-   * delay its failure count calls for. An "error" outcome (e.g. the database is down) is not a failure.
+   * Run one sign-in attempt in `lane`: refused at once ({ busy: true }) when that lane already has its
+   * maximum in progress, or (anonymous) all anonymous lanes together do, or (device) all the devices of
+   * that name together do; otherwise after the delay the lane's failure count calls for. An "error"
+   * outcome (e.g. the database is down) is not a failure.
    */
-  async run<T>(name: string, attempt: () => Promise<{ outcome: AttemptOutcome; value: T }>): Promise<{ value: T; waitedMs: number }> {
-    const key = name.toLowerCase();
+  async run<T>(laneOrName: Lane | string, attempt: () => Promise<{ outcome: AttemptOutcome; value: T }>): Promise<ThrottleResult<T>> {
+    const lane = asLane(laneOrName);
+    const device = !!lane.device;
+    const name = lane.name.toLowerCase();
+    const perLane = device ? DEVICE_PER_LANE : ANONYMOUS_PER_LANE;
+    const key = laneKey(lane);
+    const current = this.entries.get(key);
+    if ((current?.inProgress ?? 0) >= perLane) return { busy: true };
+    if (device ? (this.deviceByName.get(name) ?? 0) >= DEVICE_PER_NAME : this.anonymousInProgress >= ANONYMOUS_TOTAL) return { busy: true };
+
     const entry = this.touch(key);
-    const turn = entry.tail.then(async () => {
+    entry.inProgress += 1;
+    this.adjust(device, name, 1);
+    try {
       if (this.now() - entry.last > this.windowMs) entry.failures = 0;
+      entry.last = this.now();
       const wait = delayFor(entry.failures, this.baseDelayMs, this.maxDelayMs);
       if (wait > 0) await this.sleep(wait);
       const result = await attempt();
       entry.last = this.now();
       if (result.outcome === "success") entry.failures = 0;
       else if (result.outcome === "failure") entry.failures += 1;
-      return { value: result.value, waitedMs: wait };
-    });
-    // The queue continues whether this attempt succeeded or threw.
-    entry.tail = turn.catch(() => undefined);
-    return turn;
+      return { busy: false, value: result.value, waitedMs: wait };
+    } finally {
+      entry.inProgress -= 1;
+      this.adjust(device, name, -1);
+    }
   }
 
-  /** The entry for a name, created if needed and moved to the most-recent end; evicts the oldest. */
+  private adjust(device: boolean, name: string, by: number): void {
+    if (!device) {
+      this.anonymousInProgress += by;
+      return;
+    }
+    this.deviceInProgress += by;
+    const next = (this.deviceByName.get(name) ?? 0) + by;
+    if (next > 0) this.deviceByName.set(name, next);
+    else this.deviceByName.delete(name);
+  }
+
+  /** The entry for a lane, created if needed and moved to the most-recent end; evicts the oldest. */
   private touch(key: string): Entry {
     const now = this.now();
     let entry = this.entries.get(key);
     if (entry) this.entries.delete(key);
-    else entry = { failures: 0, last: now, tail: Promise.resolve() };
+    else entry = { failures: 0, last: now, inProgress: 0 };
     this.entries.set(key, entry);
-    while (this.entries.size > this.maxNames) {
+    while (this.entries.size > this.maxLanes) {
+      // An evicted lane's attempts still finish against their own entry, and the totals (all
+      // anonymous attempts; all device attempts of one name) still bound how many run at once.
       const oldest = this.entries.keys().next().value as string;
       this.entries.delete(oldest);
     }

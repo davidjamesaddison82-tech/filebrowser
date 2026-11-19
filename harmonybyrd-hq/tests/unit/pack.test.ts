@@ -80,6 +80,39 @@ describe("evidence packs cannot carry manufactured records", () => {
   });
 });
 
+describe("a build reported as accepted must quote its source (F1)", () => {
+  const accepted = (statement: Record<string, unknown>) => {
+    const build = raw("build", "BLD-FX-01");
+    build.data.standing = "accepted_reported";
+    build.data.statement = statement;
+    return build;
+  };
+  const all = (records: { type: string; data: unknown }[]) =>
+    validateRecords(records, texts(), { knownIds: new Set(fixturePack().records.map((r) => r.id)) });
+
+  it('refuses standing "accepted_reported" whose statement has no citation', () => {
+    for (const epistemic of ["submitter_claim", "no_evidence", "verified"]) {
+      const result = all([accepted({ text: "Accepted.", epistemic, citations: [] })]);
+      const problems = result.problems.filter((p) => p.severity === "error");
+      expect(problems, epistemic).toHaveLength(1);
+      expect(problems[0]).toMatchObject({ type: "build", id: "BLD-FX-01" });
+      expect(problems[0].message).toMatch(/standing "accepted_reported" needs a statement that quotes the source/);
+      expect(result.valid.map((r) => r.id), epistemic).not.toContain("BLD-FX-01");
+    }
+  });
+
+  it("warns when the quoting statement is not labelled as a report", () => {
+    const quote = "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only.";
+    const result = all([accepted({ text: "Accepted.", epistemic: "design_intention", citations: [{ source_id: "SRC-F01", locator: null, quote }] })]);
+    expect(result.problems.filter((p) => p.severity === "error")).toEqual([]);
+    expect(result.problems.filter((p) => p.severity === "warning").map((p) => p.message).join(" ")).toMatch(/labelled "design_intention"/);
+  });
+
+  it("control: the fixture's reported acceptance (reported, with a citation) is valid", () => {
+    expect(all([raw("build", "BLD-FX-02")]).problems).toEqual([]);
+  });
+});
+
 describe("record schemas enforce epistemic discipline", () => {
   it("a reported claim must cite a source", () => {
     const build = raw("build", "BLD-FX-01");

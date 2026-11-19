@@ -16,7 +16,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { collectCitations, outgoingRefs } from "./dataset";
 import { normaliseForQuote, quoteProblem, wordingProblem } from "./quote";
-import { type AnyRecord, RECORD_TYPES, type RecordType, safeParseRecord } from "./schemas";
+import { type AnyRecord, type BuildRecord, RECORD_TYPES, type RecordType, safeParseRecord } from "./schemas";
 
 export { MIN_QUOTE_CHARS, MIN_WORDING_NON_SPACE_CHARS, normaliseForQuote, quoteProblem, wordingProblem } from "./quote";
 
@@ -134,6 +134,22 @@ export function validateRecords(
     if (type === "decision" && (parsed.data as { recorded_in?: string }).recorded_in === "hq") {
       problems.push({ severity: "error", type, id, message: "a decision recorded in HQ cannot be supplied by a pack" });
       continue;
+    }
+    // F1: a build reported as accepted must quote the source that reports it.
+    if (type === "build" && (parsed.data as BuildRecord).standing === "accepted_reported") {
+      const statement = (parsed.data as BuildRecord).statement;
+      if (statement.citations.length === 0) {
+        problems.push({ severity: "error", type, id, message: 'standing "accepted_reported" needs a statement that quotes the source reporting the acceptance; it has no citation' });
+        continue;
+      }
+      if (statement.epistemic !== "reported" && statement.epistemic !== "founder_statement") {
+        problems.push({
+          severity: "warning",
+          type,
+          id,
+          message: `standing "accepted_reported" with a statement labelled "${statement.epistemic}": HQ shows it as an acceptance claimed with no source quoted (use "reported" or "founder_statement")`,
+        });
+      }
     }
 
     let recordOk = true;

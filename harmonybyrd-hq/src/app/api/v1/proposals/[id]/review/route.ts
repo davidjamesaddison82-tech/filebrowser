@@ -10,7 +10,7 @@ type Params = { params: Promise<{ id: string }> };
  */
 export async function POST(request: Request, { params }: Params) {
   const { id } = await params;
-  return withApi(request, { action: "proposal.review", mutating: true }, async ({ principal }) => {
+  return withApi(request, { action: "proposal.review", mutating: true, allowedRecordedByDatabase: true }, async ({ principal }) => {
     const body = await readJson(request);
     const decision = String(body.decision ?? "");
     if (!["accept", "reject", "needs_changes"].includes(decision)) throw invalid('decision must be "accept", "reject" or "needs_changes".');

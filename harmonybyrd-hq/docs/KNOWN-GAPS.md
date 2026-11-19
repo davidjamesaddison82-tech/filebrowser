@@ -81,19 +81,46 @@ remain, by design or because fixing them was out of scope:
 - **Quotation length is counted differently** for characters outside the Basic Multilingual Plane
   (for example emoji): the database counts each as one character, the application as two. A
   quotation near the twelve-character minimum that contains them can pass one check and fail the other.
-- **Sign-in can be slowed**, not blocked: wrong attempts for a known name queue up and each waits up
-  to 8 seconds. If the database is unreachable at sign-out, only that browser's cookie is removed;
-  copies stay valid until they expire (twelve hours).
+- **A flood of wrong passphrases can hold out a browser that has never signed in.** Sign-in attempts
+  no longer queue, and the work is bounded: at most 4 attempts in progress per name and 12 in all from
+  browsers without a device cookie; extras are refused at once. So while someone keeps sending wrong
+  passphrases, a browser that has never signed in can be refused, for that name or, once the 12 are
+  taken, for any name. A browser that has signed in as that person before has its own lane and is not
+  slowed by the flood. The device lanes are limited per person (2 attempts in progress per browser, 4
+  over all of one person's browsers) and have no limit shared between people, so another account
+  holder cannot fill them. What remains: someone who has copied the device cookies of two of a
+  person's own browsers (they are `HttpOnly`, so that takes access to those browsers) could keep that
+  person's four places taken. The throttle is held in the server's memory: it resets on restart and is
+  per process.
+- **Sign-out with the database unreachable.** Only that browser's cookie is removed; copies stay valid
+  until they expire (twelve hours).
 - **Anyone who may propose can test whether a phrase occurs in a source** (that is what the
   quotation check answers). Readers cannot.
-- **A client's well-formed `X-Request-Id`** is kept, so a client can reuse another request's id in
-  the audit log. The principal recorded is still correct.
+- **A client's own request id is kept only on the rows the REST layer writes.** The request id in
+  the audit log is always the server's. A client's well-formed `X-Request-Id` is echoed in
+  `x-client-request-id` and kept as `detail.client_request_id` on the row the REST endpoints write for
+  an allowed call or for a 401 or 403 answer. The rows the database functions write themselves (a
+  submitted proposal, a founder review or decision) and a proposal refusal the service records do not
+  carry it, and those rows have no request id at all. The MCP endpoint ignores the header.
+- **Packs and “checked by HQ's build”.** A pack's `hq_verified` evidence and `verified` claims are
+  taken as whoever built the pack recorded them. The import re-verifies quotations against the source
+  snapshots; it does not re-run those checks.
+- **The layout detector's remaining blind spots.** The covering check that looks at what is drawn at
+  each point (check 4 in `tests/e2e/layout-measure.ts`) samples a 40-pixel grid over the visible part
+  of the main content, at the top of the page and scrolled to its end only; a covering in the middle of
+  a long page, or one smaller than the grid, is found only if it is a fixed, sticky or absolute
+  element (checks 1–3). It skips points within 1.5 pixels of a line's edge (the browser's hit test
+  rounds there; this rule has no self-test), text the browser does not draw or clips, text in form
+  controls, a sticky table cell over its own table, and an element shifted over text of an element
+  that contains it.
 - **`verify_chain` called with no identity** sees no rows and so reports nothing. The application
   always calls it as a signed-in principal.
 - **The automated suites exercise the tighter pack rules on the synthetic fixture only** (minimum
   quotation length, ISO dates, typed build-only fields, reserved ids, the reported founder-acceptance
   basis). The real pack was checked against them separately by the builder: it verifies with no
-  errors and imports under the new migrations (see the private findings report). A stored record
+  errors and imports under the new migrations (see the private findings report). That includes the
+  rule added in the second round — a build reported as accepted must quote its source — which the
+  builder ran on the real pack with `npm run pack:verify`: no errors and no warnings. A stored record
   that fails the schema still loads, with an integrity warning.
 
 ## Quality of the evidence pack
@@ -110,5 +137,5 @@ remain, by design or because fixing them was out of scope:
 
 ## Environment notes
 
-- The build container restarted once during the work; the local database and servers were restarted and the work continued from files on disk.
+- The build container restarted more than once during the work (three times); the local database and servers were restarted and the work continued from files on disk.
 - Dependencies are pinned in `package-lock.json`. The build used Node 22.23, PostgreSQL 16.15, Chromium via Playwright 1.63.

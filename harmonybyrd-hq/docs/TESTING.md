@@ -42,7 +42,7 @@ use no network: the GitHub and Drive adapters are tested with injected failures.
 | 8 | Prevention of AI-generated founder acceptance | `tests/db/founder-authority.test.ts`; `tests/db/founder-gate.test.ts`; `tests/db/proposal-evidence-rules.test.ts`; `tests/db/acceptance-binding.test.ts`; `tests/api/rest.test.ts`, `mcp.test.ts` (no approval tool exists); browser: token “cannot decide” |
 | 9 | Source lineage and immutable historical records | `tests/db/immutability.test.ts`; `tests/db/chain-verification.test.ts`; `tests/unit/derive.test.ts` (lineage); `tests/unit/pack.test.ts` |
 | 10 | Browser navigation and functional controls | `tests/e2e/01-auth`, `02-navigation`, `05-governance` |
-| 11 | Responsive laptop layouts without overlays covering content | `tests/e2e/03-layout.spec.ts` — measured in the browser at 1366×768, 1280×720, 1440×900 and 390×844 |
+| 11 | Responsive laptop layouts without overlays covering content | `tests/e2e/03-layout.spec.ts` — measured in the browser at 1366×768, 1280×720, 1440×900 and 390×844; the detector itself is tested in `tests/e2e/03b-layout-detector.spec.ts` (see “Layout measurement”) |
 | 12 | Safe handling of unavailable external services | `tests/unit/integrations.test.ts`; `tests/db/determinism.test.ts` (database down); `tests/api/rest.test.ts` (integrations) |
 | 13 | Deterministic repeatability of critical acceptance tests | `tests/db/determinism.test.ts`; `npm run test:repeat` → [REPEATABILITY.md](REPEATABILITY.md) |
 
@@ -60,19 +60,41 @@ attempt is refused *and* nothing changed. Examples:
   authority, a build-only field, or evidence of a type only the founder or HQ's build records — each
   tried through the application as an AI client and as a developer, directly in the database, and at
   the founder's acceptance (`tests/db/proposal-evidence-rules.test.ts`);
-- a proposal changes a record the founder accepted or rejected (`tests/db/acceptance-binding.test.ts`);
+- a proposal asserts an acceptance — a build re-marked `accepted_reported`, with and without a real
+  quotation; a created build with that standing; a module whose whole lifecycle is replaced, or whose
+  lifecycle gives only `founder_accepted`, or whose reported acceptance is restated with a different
+  note or raised from no to yes; a created module that reports founder acceptance; a top-level
+  `founder_accepted` field, also spelt as a dotted path — each tried through the application, directly
+  in the database and at the founder's acceptance, and re-checked at acceptance against the record as
+  it stands then (`tests/db/proposal-evidence-rules.test.ts`, “F1 — a proposal cannot introduce a
+  claim of acceptance”);
+- a proposal changes a record the founder accepted or rejected, and the refusal names a rejection as
+  a rejection (`tests/db/acceptance-binding.test.ts`);
 - `service_role`, with the old write-context setting forged, writes history or a founder act (`tests/db/write-path.test.ts`);
+- `service_role`, with the founder's claims forged, calls the founder, proposal, audit and sign-in
+  look-up functions: each is “permission denied” and nothing changes; only the read helpers are
+  executable, and a function created later is not executable by PUBLIC (`tests/db/service-role.test.ts`);
 - `UPDATE`, `DELETE` and `TRUNCATE` against the record history, the proposal history and the audit log;
 - stored versions, seals and the seal chain are tampered with (`tests/db/chain-verification.test.ts`);
-- an API role writes the audit log directly (`tests/db/audit-log.test.ts`);
+- an API role writes the audit log directly; a founder act, or any action outside the application's
+  families, is recorded through `hq.log_access`; an audit detail over 16,384 bytes (`tests/db/audit-log.test.ts`);
 - withdraw and accept race each other (`tests/db/proposal-states.test.ts`);
-- a pack containing a quotation that is not in its source, or one made only of spaces; a pack carrying an HQ acceptance; a pack using an id HQ reserves;
+- a pack containing a quotation that is not in its source, or one made only of spaces; a pack carrying an HQ acceptance; a pack using an id HQ reserves; a pack build with the standing `accepted_reported` and no citation (`tests/unit/pack.test.ts`);
 - a proposal written against a superseded version;
 - a revoked, expired, malformed or unknown token; a forged session cookie, an expired one, one without
   HQ's issuer or epoch, and one from before a sign-out or passphrase change (`tests/api/rest.test.ts`,
   `tests/api/sessions.test.ts`); a cross-origin request;
 - a founder being issued a token; an AI client being made founder;
 - repeated wrong passphrases (slowed, never locked out), and a redirect to another site after sign-in;
+- 20 wrong passphrases held open for the founder's name while the founder's browser, which signed in
+  before, signs in; no answer waits past one maximum delay + 3 s (`tests/api/sign-in.test.ts`); wrong
+  attempts from another browser while a browser that signed in before signs in without waiting
+  (`tests/e2e/01-auth.spec.ts`); attempts past the limits on work in progress (`tests/unit/throttle.test.ts`);
+- a device cookie used on its own for a page, a REST call and the MCP endpoint; a device cookie for
+  another person, forged, expired or malformed; a device cookie offered as a session and a session
+  token offered as a device cookie (`tests/api/sign-in.test.ts`, `tests/unit/session.test.ts`);
+- a client's own `X-Request-Id`, replayed as another caller's: it never becomes the request id
+  (`tests/api/hardening.test.ts`, `tests/unit/http.test.ts`);
 - an oversized body, a bad MCP batch element, an argument a tool does not take, a live look-up by an
   API token (`tests/api/hardening.test.ts`).
 
@@ -149,6 +171,47 @@ The stage that strengthened the tests themselves changed these, each to somethin
 - `tests/db/pinned-revision.test.ts`: the cache is cleared between the two clients' reads, so the
   second answer comes from the database.
 
+## Expectations changed in the second round
+
+After the re-verification (docs/PROGRESS-REGISTER.md), these expectations changed because the
+behaviour changed on purpose:
+
+- `tests/unit/sign-in.test.ts`: the test that one name's attempts are handled one at a time became
+  “does not queue one name's attempts: parallel guesses each wait on their own, at most four at once”.
+- `tests/unit/http.test.ts` and `tests/api/hardening.test.ts` (“request ids (api-8, D5, F6)”): a
+  well-formed client id is no longer kept as the request id; it is echoed apart and kept as the
+  client's correlation id.
+- `tests/db/acceptance-binding.test.ts`: the rejection test now also asserts that the refusal says
+  “rejection”.
+- `tests/db/proposal-states.test.ts`: `service_role` calling `hq.proposal_status` is now “permission
+  denied”, not an empty answer.
+- `tests/e2e/05-governance.spec.ts`: the long-name test measures sideways scroll against the layout
+  viewport (below).
+- `tests/unit/secrets.test.ts`: the session lifetime is asserted as exactly 43,200 seconds, not only
+  as the constant that sets it.
+
+## Layout measurement
+
+`tests/e2e/layout-measure.ts` measures each screen in the browser.
+
+- **Sideways scroll** is the document's scroll width minus the width of the layout viewport
+  (`document.documentElement.clientWidth`). It used to be measured against `window.innerWidth`, which
+  a phone browser widens to fit content that overflows, so on the phone it always read 0. Every
+  screen, laptop and phone, is also held to a scroll width no more than one pixel over the configured
+  window width. `tests/e2e/03b-layout-detector.spec.ts` checks this on a phone (390×844, touch): a
+  clean page passes, and a label that does not wrap and is wider than the screen is reported.
+- **Coverings** are found four ways: every fixed, sticky or absolute element is tested against all
+  text on the page; such an element over more than 12% of the window over the content is a covering
+  even with no text under it; a grid of points over the visible content must show the content; and,
+  on a 40-pixel grid over the content, the element drawn where a line of text lies must be that
+  text's own element (or one inside or around it whose pseudo-element does not cover the point). The
+  last check finds a block shifted over earlier text with `position: relative` or a transform, and a
+  fixed overlay drawn by a pseudo-element such as `body::before` or `main::after`. Each kind has a
+  test in `03b-layout-detector.spec.ts` that first shows the overlay hides text and then that the
+  detector names it; a clean control with decorative pseudo-elements, a raised badge, a transform
+  that moves nothing and a closed quotation must report nothing. What it still cannot see is listed
+  in docs/KNOWN-GAPS.md.
+
 ## Mutation check of the database tests
 
 The review showed that several protections could be deleted without any test failing. To make that
@@ -161,7 +224,11 @@ silently do nothing; an unmutated control run must pass in full.
 The list covers the founder gate, each rule of the record-sealing trigger, the append-only
 triggers, the inbox rules (role, scope, stale version, protected and build-only fields, HQ-only
 labels, quotation checks, evidence and source rules), acceptance binding, the write context, the
-proposal state machine, the audit wrappers, chain verification and session ending. The result of
+proposal state machine, the audit wrappers, chain verification and session ending. Migration 0007's
+rules have mutations too: each part of the refusal of acceptance claims and each place
+`submit_proposal` and `review_proposal` call it, a grant of a founder function back to
+`service_role`, `hq.log_access` accepting any dotted action, and dropping the audit detail size limit
+(the `mf1…`, `mf3…` and `mf4…` entries in `tests/mutation/gen.py`). The result of
 the last full run is in [tests/mutation/RESULTS.txt](../tests/mutation/RESULTS.txt), which the
 command writes. It uses its own database (`HQ_MUTATION_DATABASE`, default `hq_test_mutation`).
 
@@ -192,7 +259,9 @@ the same build process, not an assessment by an independent person.
   the automated suites do not otherwise run against it. (The screens were also checked by hand and by
   screenshot with the real pack loaded.)
 - The tighter pack rules against the real evidence pack, by the automated suites (the builder checked
-  it separately; see docs/KNOWN-GAPS.md).
+  it separately, including the second round's rule for builds reported as accepted; see
+  docs/KNOWN-GAPS.md).
+- The sign-in throttle across more than one server process, or after a restart (it is in memory).
 - How a screen renders a malformed stored value, in a browser: the schemas now refuse such values on
   every write path, and the type guards the screens use are covered by unit tests only.
 - Independent re-execution. Every run recorded here was made by the builder.

@@ -233,11 +233,32 @@ export function moduleStanding(module: ModuleRecord): ModuleStanding {
   return { headline, label: STANDING_LABEL[headline], flags, claimed_only, caution };
 }
 
+/** Labels for a build's acceptance as HQ shows it (F1). */
+export const BUILD_ACCEPTANCE_LABEL = {
+  build_accepted_reported: "Acceptance reported in a source — not recorded in HQ",
+  build_acceptance_claimed: "Acceptance claimed — no source quoted",
+} as const;
+
+/** Statement labels under which a source can report a founder acceptance. */
+const ACCEPTANCE_REPORT_LABELS: readonly string[] = FOUNDER_ACCEPTED_BASES;
+
+/**
+ * Is a build's standing "accepted_reported" backed by a source (F1)? Only when its statement is
+ * labelled "reported" or "founder_statement" and quotes at least one source. Otherwise the standing is
+ * a bare claim: it is shown as "Acceptance claimed — no source quoted" and listed under unverified
+ * claims, never as a reported acceptance.
+ */
+export function buildAcceptanceIsSourced(build: BuildRecord): boolean {
+  if (build.standing !== "accepted_reported") return false;
+  const statement = build.statement as { epistemic?: string; citations?: unknown } | undefined;
+  return ACCEPTANCE_REPORT_LABELS.includes(statement?.epistemic ?? "") && Array.isArray(statement?.citations) && statement.citations.length > 0;
+}
+
 export interface AcceptanceStatus {
   ref: RecordRef;
   title: string;
   /** One of the mutually exclusive headline states. */
-  headline: StandingHeadline | "build_candidate" | "build_accepted_reported" | "build_development" | "not_applicable";
+  headline: StandingHeadline | "build_candidate" | "build_accepted_reported" | "build_acceptance_claimed" | "build_development" | "not_applicable";
   label: string;
   recorded_in_hq: null | { state: string; decision_id: string; decided_by: string; decided_at: string; scope_note?: string | null };
   reported_in_sources: { state: string; note: string; citations: Citation[] } | null;
@@ -286,37 +307,46 @@ export function acceptanceStatus(ds: Dataset, type: RecordType, id: string): Acc
         reported_in_sources: { state: build.standing, note: build.statement.text, citations: build.statement.citations },
         tests: [],
         caution:
-          build.standing === "accepted_reported"
+          buildAcceptanceIsSourced(build)
             ? `A source reports this build as accepted, but founder decision ${hq.decision_id} rejected it in HQ.`
             : `Founder decision ${hq.decision_id} rejected this build in HQ.`,
       };
     }
+    const sourced = buildAcceptanceIsSourced(build);
+    const claimed = build.standing === "accepted_reported" && !sourced;
     const headline = accepted
       ? "accepted_in_hq"
-      : build.standing === "accepted_reported"
+      : sourced
         ? "build_accepted_reported"
-        : build.standing === "candidate_not_accepted"
-          ? "build_candidate"
-          : "build_development";
+        : claimed
+          ? "build_acceptance_claimed"
+          : build.standing === "candidate_not_accepted"
+            ? "build_candidate"
+            : "build_development";
     const label = accepted
       ? STANDING_LABEL.accepted_in_hq
-      : build.standing === "accepted_reported"
-        ? "Acceptance reported in a source — not recorded in HQ"
-        : build.standing === "candidate_not_accepted"
-          ? "Candidate — not accepted"
-          : `Build standing: ${build.standing.replaceAll("_", " ")}`;
+      : sourced
+        ? BUILD_ACCEPTANCE_LABEL.build_accepted_reported
+        : claimed
+          ? BUILD_ACCEPTANCE_LABEL.build_acceptance_claimed
+          : build.standing === "candidate_not_accepted"
+            ? "Candidate — not accepted"
+            : `Build standing: ${build.standing.replaceAll("_", " ")}`;
     return {
       ...base,
       headline,
       label,
-      reported_in_sources: { state: build.standing, note: build.statement.text, citations: build.statement.citations },
+      // A claimed acceptance with no source quoted is not something a source reports.
+      reported_in_sources: claimed ? null : { state: build.standing, note: build.statement.text, citations: build.statement.citations },
       tests: [],
       caution: withCleared(
-        build.standing === "accepted_reported" && !accepted
+        sourced && !accepted
           ? "The acceptance is as reported by the source, within the scope the source states."
-          : build.standing === "candidate_not_accepted"
-            ? "A candidate is not an accepted build, however many tests it passes."
-            : null,
+          : claimed && !accepted
+            ? "This build is marked as accepted, but its statement quotes no source that reports it. It is counted as an unverified claim."
+            : build.standing === "candidate_not_accepted"
+              ? "A candidate is not an accepted build, however many tests it passes."
+              : null,
       ),
     };
   }
@@ -505,7 +535,7 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
   const acceptance_reported_only: HealthItem[] = [];
   for (const b of ds.builds) {
     const decided = acceptanceOf(b.data)?.state === "accepted" || acceptanceOf(b.data)?.state === "rejected";
-    if (b.data.standing === "accepted_reported" && !decided) {
+    if (buildAcceptanceIsSourced(b.data) && !decided) {
       acceptance_reported_only.push(item(b, b.data.statement.text));
     }
   }
@@ -545,6 +575,14 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
     claimed.add(key);
     unverified_claims.push(item(envelope, note));
   };
+  // F1: a build marked as accepted whose statement quotes no source is a claim, not a report.
+  // Listed first, so this is the note it carries.
+  for (const b of ds.builds) {
+    const state = acceptanceOf(b.data)?.state;
+    if (b.data.standing === "accepted_reported" && !buildAcceptanceIsSourced(b.data) && state !== "accepted" && state !== "rejected") {
+      addClaim(b, `${BUILD_ACCEPTANCE_LABEL.build_acceptance_claimed}.`);
+    }
+  }
   for (const e of ds.evidence) {
     if (e.data.verification === "agent_submitted_unverified" || e.data.verification === "submitted_unverified") {
       addClaim(e, "Submitted through the proposal inbox; not independently verified.");
@@ -866,12 +904,14 @@ export function reviewItems(ds: Dataset): ReviewItem[] {
     const state = acceptanceOf(b.data)?.state;
     if (b.data.standing !== "accepted_reported" || state === "accepted" || state === "rejected") continue;
     if (!hasAcceptanceInstrument(ds, b)) {
+      const sourced = buildAcceptanceIsSourced(b.data);
       items.push({
         key: `acc:${b.meta.id}`,
         kind: "missing_acceptance_evidence",
-        title: `${recordTitle("build", b.data)} is reported as accepted`,
-        detail:
-          "A source states this build was accepted, but no founder acceptance instrument or issued decision is on record in HQ for it.",
+        title: sourced ? `${recordTitle("build", b.data)} is reported as accepted` : `${recordTitle("build", b.data)} is claimed as accepted, with no source quoted`,
+        detail: sourced
+          ? "A source states this build was accepted, but HQ holds no founder-acceptance evidence for it and no founder decision recorded in HQ accepts it."
+          : "This build is marked as accepted with no source quoted, and HQ holds no founder-acceptance evidence for it and no founder decision recorded in HQ accepts it.",
         refs: [ref(b.meta.id)],
       });
     }
@@ -977,10 +1017,14 @@ export function reviewItems(ds: Dataset): ReviewItem[] {
 }
 
 /**
- * What counts as an acceptance instrument for a build that a source reports as accepted:
- * founder-acceptance evidence that a source reports or HQ's build checked (never an unverified
- * submission), or an issued decision that is about this build or its module. A decision that
- * merely cites the same document is not one.
+ * What counts as an acceptance instrument for a build marked as accepted (F2). Only:
+ *   (a) evidence of type founder_acceptance that a source reports or HQ's build checked, whose
+ *       build_id is this build; or
+ *   (b) a decision recorded in HQ and issued, with a set_acceptance effect that accepts this build
+ *       (what hq_acceptance records).
+ * Nothing else counts: not a decision that merely lists the build's module, not a decision a source
+ * reports (those carry no reference to a build), and never a link the build itself carries
+ * (decision_ids and the like), because a proposal can set those.
  */
 export function hasAcceptanceInstrument(ds: Dataset, b: Envelope<BuildRecord>): boolean {
   const evidence = ds.evidence.some(
@@ -990,13 +1034,14 @@ export function hasAcceptanceInstrument(ds: Dataset, b: Envelope<BuildRecord>): 
       (e.data.verification === "source_reported" || e.data.verification === "hq_verified"),
   );
   if (evidence) return true;
-  const buildRefs = new Set(outgoingRefs("build", b.data));
-  return ds.decisions.some((d) => {
-    if (d.data.status !== "issued") return false;
-    if (b.data.module_id && d.data.module_ids.includes(b.data.module_id)) return true;
-    if (buildRefs.has(d.meta.id) || outgoingRefs("decision", d.data).includes(b.meta.id)) return true;
-    return d.data.effects.some((effect) => effect.record_id === b.meta.id);
-  });
+  return ds.decisions.some(
+    (d) =>
+      d.data.recorded_in === "hq" &&
+      d.data.status === "issued" &&
+      d.data.effects.some(
+        (effect) => effect.type === "set_acceptance" && effect.record_type === "build" && effect.record_id === b.meta.id && effect.state === "accepted",
+      ),
+  );
 }
 
 function normaliseWording(text: string): string {

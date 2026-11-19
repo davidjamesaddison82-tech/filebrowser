@@ -13,9 +13,10 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { claimsFor, type Principal } from "@/lib/auth/principal";
 import { normaliseForQuote } from "@/lib/domain/pack";
 import { BUILD_ONLY_FIELDS, PROTECTED_FIELDS } from "@/lib/domain/schemas";
-import { getProposal, getRecord, proposalImpact, recordTestEvidence, reviewProposal, submitChangeProposal } from "@/lib/server/services";
+import { acceptanceClaimProblem, getProposal, getRecord, proposalImpact, recordTestEvidence, reviewProposal, submitChangeProposal } from "@/lib/server/services";
 import { getDataset } from "@/lib/server/store";
 import { admin, asAppRole, expectStatus, freshWorld, type TestWorld, worldState } from "../helpers/db";
+import { fixtureRecords } from "../helpers/fixture";
 
 let w: TestWorld;
 
@@ -38,6 +39,18 @@ interface Case {
 }
 
 const invented = "This sentence was invented by the client and is in no source.";
+
+// F1: real sentences from the fixture's stored source text. Each is a verbatim quotation, so the
+// quotation check passes; the refusal comes from the acceptance rule alone.
+const BETA_ACCEPTED = { source_id: "SRC-F01", locator: null, quote: "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only." };
+const ALPHA_NOT_ACCEPTED = { source_id: "SRC-F01", locator: null, quote: "Alpha candidate 7 is a candidate and has not been accepted." };
+const fixtureData = (id: string) => structuredClone(fixtureRecords().find((r) => r.id === id)!.data) as unknown as Record<string, unknown>;
+/** Gamma's whole lifecycle as imported, with founder_accepted replaced. */
+const gammaLifecycleWith = (founderAccepted: Record<string, unknown>) => ({
+  ...(fixtureData("MOD-FX-GAMMA").lifecycle as Record<string, unknown>),
+  founder_accepted: founderAccepted,
+});
+const ACCEPTANCE_RULE = /acceptance is recorded only by a founder decision in HQ or by an import; a proposal cannot assert it/i;
 
 const CASES: Case[] = [
   // D1a — quotations verified against the stored source text
@@ -321,6 +334,138 @@ const CASES: Case[] = [
     status: 403,
     sqlstate: "HQ403",
     message: /protected.*linked_tests|linked_tests.*protected/i,
+  },
+  // F1 — a proposal can never introduce a claim of acceptance, cited or not
+  {
+    rule: "F1",
+    name: 'a build re-marked "accepted_reported" with no statement change (the re-verified attack)',
+    body: { target: { type: "build", id: "BLD-FX-01" }, set: { standing: "accepted_reported" } },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: 'a build re-marked "accepted_reported" whose new statement quotes a real sentence that reports an acceptance',
+    body: {
+      target: { type: "build", id: "BLD-FX-01" },
+      set: { standing: "accepted_reported", statement: { text: "Accepted by the founder.", epistemic: "reported", citations: [BETA_ACCEPTED] } },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: 'a created build with standing "accepted_reported" and no citation',
+    body: {
+      create: {
+        record_type: "build",
+        record: { label: "Gamma build 1", module_id: "MOD-FX-GAMMA", standing: "accepted_reported", statement: { text: "Accepted.", epistemic: "submitter_claim", citations: [] } },
+      },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: 'a created build with standing "accepted_reported" quoting a real sentence',
+    body: {
+      create: {
+        record_type: "build",
+        record: { label: "Gamma build 2", module_id: "MOD-FX-GAMMA", standing: "accepted_reported", statement: { text: "Accepted.", epistemic: "reported", citations: [BETA_ACCEPTED] } },
+      },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a module whose whole lifecycle is replaced, with founder_accepted yes, reported, quoting a real sentence (the re-verified attack)",
+    body: {
+      target: { type: "module", id: "MOD-FX-GAMMA" },
+      set: { lifecycle: gammaLifecycleWith({ state: "yes", basis: "reported", note: "Accepted", citations: [BETA_ACCEPTED] }) },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a module lifecycle that gives only founder_accepted (partial, founder_statement, real sentence)",
+    body: {
+      target: { type: "module", id: "MOD-FX-GAMMA" },
+      set: { lifecycle: { founder_accepted: { state: "partial", basis: "founder_statement", note: "Desktop only", citations: [BETA_ACCEPTED] } } },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a module whose reported partial acceptance is restated with a different note",
+    body: {
+      target: { type: "module", id: "MOD-FX-BETA" },
+      set: { lifecycle: { ...(fixtureData("MOD-FX-BETA").lifecycle as Record<string, unknown>), founder_accepted: { state: "partial", basis: "reported", note: "All browsers", citations: [BETA_ACCEPTED] } } },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a module whose founder_accepted is raised from no to yes, keeping its own quotation",
+    body: {
+      target: { type: "module", id: "MOD-FX-ALPHA" },
+      set: { lifecycle: { ...(fixtureData("MOD-FX-ALPHA").lifecycle as Record<string, unknown>), founder_accepted: { state: "yes", basis: "reported", note: "Candidate only", citations: [ALPHA_NOT_ACCEPTED] } } },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a created module whose lifecycle reports founder acceptance",
+    body: {
+      create: {
+        record_type: "module",
+        record: { name: "Epsilon", lifecycle: gammaLifecycleWith({ state: "yes", basis: "reported", note: "", citations: [BETA_ACCEPTED] }) },
+      },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a top-level founder_accepted field on a defect",
+    body: { target: { type: "defect", id: "DEF-FX-01" }, set: { founder_accepted: { state: "yes", basis: "submitter_claim", citations: [] } } },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: 'a top-level field spelt "lifecycle.founder_accepted" on a module',
+    body: { target: { type: "module", id: "MOD-FX-DELTA" }, set: { "lifecycle.founder_accepted": { state: "yes", basis: "submitter_claim", citations: [] } } },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
+  },
+  {
+    rule: "F1",
+    name: "a created open item carrying a top-level founder_accepted",
+    body: {
+      create: {
+        record_type: "open_item",
+        record: { kind: "risk", title: "Accepted", statement: { text: "Accepted.", epistemic: "submitter_claim", citations: [] }, founder_accepted: true },
+      },
+    },
+    status: 403,
+    sqlstate: "HQ403",
+    message: ACCEPTANCE_RULE,
   },
 ];
 
@@ -632,5 +777,91 @@ describe("D1d — the founder's review shows what the proposal touches", () => {
     expect(impact.sensitive_fields).toEqual(expect.arrayContaining(["statement", "sha256"]));
     expect(impact.sensitive_fields).not.toContain("label");
     expect(impact.target_acceptance).toBeNull();
+  });
+});
+
+describe("F1 — a proposal cannot introduce a claim of acceptance: what still goes through, and the re-check at acceptance", () => {
+  const submitAs = async (who: Principal, target: { type: string; id: string }, set: Record<string, unknown>, title = "F1 probe") =>
+    (
+      (await submitChangeProposal(who, {
+        title,
+        rationale: "F1 regression probe.",
+        base_rev: (await getDataset(w.founder)).head,
+        target: { ...target, base_version: await baseVersion(target.type, target.id) },
+        set,
+      })).proposal as { id: string }
+    ).id;
+  const data = async (type: "build" | "module", id: string) => (await getDataset(w.founder)).ds.get(type, id)!.data as unknown as Record<string, unknown>;
+
+  it("the application refuses every F1 case itself, with 403 forbidden, before the database is asked", async () => {
+    const ds = (await getDataset(w.founder)).ds;
+    for (const c of CASES.filter((x) => x.rule === "F1")) {
+      const type = (c.body.target?.type ?? c.body.create!.record_type) as never;
+      const current = c.body.target ? (ds.get(type, c.body.target.id)!.data as unknown as Record<string, unknown>) : null;
+      const problem = acceptanceClaimProblem(type, (c.body.set ?? c.body.create!.record) as Record<string, unknown>, current);
+      expect(problem, c.name).toMatchObject({ status: 403, code: "forbidden", message: expect.stringMatching(ACCEPTANCE_RULE) });
+    }
+  });
+
+  it("control: a build already reported as accepted can still be renamed, and restating its standing is allowed", async () => {
+    const id = await submitAs(w.claude, { type: "build", id: "BLD-FX-02" }, { label: "beta-build-2 (desktop)", standing: "accepted_reported" });
+    await reviewProposal(w.founder, id, "accept");
+    expect(await data("build", "BLD-FX-02")).toMatchObject({ label: "beta-build-2 (desktop)", standing: "accepted_reported" });
+  });
+
+  it("control: a module's lifecycle can change elsewhere while its reported acceptance stays identical", async () => {
+    const lifecycle = structuredClone((await data("module", "MOD-FX-BETA")).lifecycle) as Record<string, Record<string, unknown>>;
+    lifecycle.documented = { state: "yes", basis: "reported", note: "Re-checked", citations: [BETA_ACCEPTED] };
+    const id = await submitAs(w.developer, { type: "module", id: "MOD-FX-BETA" }, { lifecycle });
+    await reviewProposal(w.founder, id, "accept");
+    const after = (await data("module", "MOD-FX-BETA")).lifecycle as Record<string, Record<string, unknown>>;
+    expect(after.documented.note).toBe("Re-checked");
+    expect(after.founder_accepted).toEqual((fixtureData("MOD-FX-BETA").lifecycle as Record<string, unknown>).founder_accepted);
+  });
+
+  it("at acceptance a build's standing is re-checked against the record as it stands then: refused with 403, not applied, still submitted", async () => {
+    // Allowed when submitted: BLD-FX-02 is reported as accepted, and this leaves its standing as it is.
+    const restate = await submitAs(w.claude, { type: "build", id: "BLD-FX-02" }, { label: "beta-build-2 (restated)", standing: "accepted_reported" });
+    // Then the founder files a correction: the build is only a candidate.
+    await reviewProposal(w.founder, await submitAs(w.developer, { type: "build", id: "BLD-FX-02" }, { standing: "candidate_not_accepted" }), "accept");
+    const before = await worldState();
+    const err = await expectStatus(reviewProposal(w.founder, restate, "accept"), 403);
+    expect(err.message).toMatch(ACCEPTANCE_RULE);
+    expect(await worldState()).toEqual(before);
+    expect((await getProposal(w.founder, restate)).status).toBe("submitted");
+    expect(await data("build", "BLD-FX-02")).toMatchObject({ standing: "candidate_not_accepted" });
+  });
+
+  it("at acceptance a module's founder_accepted is re-checked the same way", async () => {
+    const current = () => data("module", "MOD-FX-BETA").then((d) => structuredClone(d.lifecycle) as Record<string, Record<string, unknown>>);
+    // Allowed when submitted: it changes another dimension and leaves the reported acceptance identical.
+    const keep = await current();
+    keep.designed = { state: "yes", basis: "reported", note: "Designed", citations: [BETA_ACCEPTED] };
+    const keepId = await submitAs(w.claude, { type: "module", id: "MOD-FX-BETA" }, { lifecycle: keep });
+    // Then the founder files a correction that withdraws the reported acceptance.
+    const withdrawn = await current();
+    withdrawn.founder_accepted = { state: "no", basis: "reported", note: "Withdrawn", citations: [BETA_ACCEPTED] };
+    await reviewProposal(w.founder, await submitAs(w.developer, { type: "module", id: "MOD-FX-BETA" }, { lifecycle: withdrawn }), "accept");
+    const before = await worldState();
+    const err = await expectStatus(reviewProposal(w.founder, keepId, "accept"), 403);
+    expect(err.message).toMatch(ACCEPTANCE_RULE);
+    expect(await worldState()).toEqual(before);
+    expect((await getProposal(w.founder, keepId)).status).toBe("submitted");
+    expect((await current()).founder_accepted.state).toBe("no");
+  });
+
+  it("proposalImpact calls out changes to lifecycle, standing and the link fields (F1, F2)", async () => {
+    const id = await submitAs(w.claude, { type: "build", id: "BLD-FX-01" }, { label: "alpha-7", module_id: "MOD-FX-GAMMA", decision_ids: ["FD-FX-01"] });
+    const impact = await proposalImpact(w.founder, await getProposal(w.founder, id));
+    expect([...impact.sensitive_fields].sort()).toEqual(["decision_ids", "module_id"]);
+    const created = (
+      (await submitChangeProposal(w.claude, {
+        title: "New open item",
+        rationale: "F2 probe.",
+        base_rev: (await getDataset(w.founder)).head,
+        create: { record_type: "open_item", record: { kind: "risk", title: "Links", module_ids: ["MOD-FX-ALPHA"], statement: { text: "A risk.", epistemic: "submitter_claim", citations: [] } } },
+      })).proposal as { id: string }
+    ).id;
+    expect([...(await proposalImpact(w.founder, await getProposal(w.founder, created))).sensitive_fields].sort()).toEqual(["module_ids", "statement"]);
   });
 });

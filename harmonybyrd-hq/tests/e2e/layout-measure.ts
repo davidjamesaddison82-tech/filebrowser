@@ -11,11 +11,24 @@ import type { Page } from "@playwright/test";
  *   2. any such element that overlaps more than 12% of the window over the content is a covering
  *      even where it hides no text;
  *   3. a grid of points over the visible part of <main>: each point must show <main> or something
- *      inside it, so an overlay anywhere else in the page (inside the navigation, in <body>) is found.
+ *      inside it, so an overlay anywhere else in the page (inside the navigation, in <body>) is found;
+ *   4. a finer grid over <main>: where a point lies on a line of text, the element shown there must be
+ *      that text's own element (or one inside it, or one around it whose pseudo-element does not cover
+ *      the point), so a block shifted over earlier text (relative offset, transform) and a fixed
+ *      pseudo-element (body::before, main::after) are found too (F11).
  * While measuring, pointer-events is forced on, so an overlay made "click-through" is still seen.
  */
 export interface LayoutMeasure {
+  /**
+   * How far the page scrolls sideways: the document's scroll width minus the width of the layout
+   * viewport (documentElement.clientWidth). Not window.innerWidth: a mobile browser widens innerWidth
+   * to fit content that overflows, so measured against it the overflow is always 0 (F10).
+   */
   sidewaysScroll: number;
+  /** document.documentElement.scrollWidth, to be compared with the configured window width. */
+  scrollWidth: number;
+  /** document.documentElement.clientWidth. */
+  clientWidth: number;
   headingTop: number | null;
   headingUncovered: boolean;
   devOverlay: boolean;
@@ -143,9 +156,93 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
           }
         }
       }
+      // (4) Text that is under a point but is not what is shown there (F11). Checks (1)–(3) look at
+      // positioned boxes and at what lies over <main>; this finds what they cannot: a block shifted
+      // over earlier text (position: relative with top: -500px, or a transform), and a pseudo-element
+      // drawn over the content (body::before, main::after), for which elementFromPoint answers body
+      // or main. On a finer grid of points over <main>, take the text whose line box holds the point,
+      // and report when the element shown there is unrelated to it (neither its own element nor an
+      // ancestor or descendant), or is an ancestor whose own pseudo-element covers the point.
+      const clippedAt = (el: Element, x: number, y: number) => {
+        // Text cut off by an ancestor's overflow (a scrolled table, .sr-only) is not under the point.
+        for (let a: Element | null = el; a && a !== document.documentElement; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          if (cs.overflowX === "visible" && cs.overflowY === "visible" && cs.clipPath === "none" && cs.clip === "auto") continue;
+          const b = a.getBoundingClientRect();
+          if (x < b.left || x > b.right || y < b.top || y > b.bottom) return true;
+        }
+        return false;
+      };
+      const pseudoOver = (el: Element, x: number, y: number): string | null => {
+        for (const which of ["::before", "::after"] as const) {
+          const ps = getComputedStyle(el, which);
+          if (ps.content === "none" || ps.content === "normal" || ps.display === "none" || ps.visibility === "hidden" || Number(ps.opacity) === 0) continue;
+          if (ps.position !== "fixed" && ps.position !== "absolute") {
+            // In the flow a pseudo-element's box cannot be read; the hit test already says it is on top.
+            return `${describe(el)}${which} (${ps.position})`;
+          }
+          // A fixed pseudo-element is placed against the window; an absolute one against the nearest
+          // positioned element, its own element or one above it.
+          let origin = { left: 0, top: 0 };
+          if (ps.position === "absolute") {
+            let cb: Element | null = el;
+            while (cb && cb !== document.documentElement && getComputedStyle(cb).position === "static") cb = cb.parentElement;
+            origin = cb && cb !== document.documentElement ? cb.getBoundingClientRect() : { left: -window.scrollX, top: -window.scrollY };
+          }
+          const w = parseFloat(ps.width);
+          const h = parseFloat(ps.height);
+          const left = origin.left + (parseFloat(ps.left) || 0);
+          const top = origin.top + (parseFloat(ps.top) || 0);
+          if (w > 0 && h > 0 && x >= left && x <= left + w && y >= top && y <= top + h) {
+            return `${describe(el)}${which} (${ps.position}, ${Math.round(w)}×${Math.round(h)} at ${Math.round(left)},${Math.round(top)})`;
+          }
+        }
+        return null;
+      };
+      if (main && mainBox && area(mainBox) > 0) {
+        // Only text the browser renders: the content of a closed <details> still has line boxes
+        // (content-visibility: hidden keeps its layout) but is not drawn, so nothing covers it.
+        const rendered = new Map<Element, boolean>();
+        const isRendered = (el: Element) => {
+          if (!rendered.has(el)) rendered.set(el, el.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true }));
+          return rendered.get(el)!;
+        };
+        const inMain = texts.filter((t) => main.contains(t.holder) && !t.holder.closest("select, option, textarea") && isRendered(t.holder));
+        const step = 40;
+        let reported = 0;
+        for (let y = mainBox.top + 2; y < mainBox.bottom - 1 && reported < 3; y += step) {
+          for (let x = mainBox.left + 2; x < mainBox.right - 1 && reported < 3; x += step) {
+            if (navBox && x >= navBox.left && x <= navBox.right && y >= navBox.top && y <= navBox.bottom) continue;
+            // Well inside the line box: at its very edge the browser's hit test, which rounds, can
+            // answer the neighbouring element that starts there.
+            const e = 1.5;
+            const under = inMain.find((t) => x >= t.box.left + e && x <= t.box.right - e && y >= t.box.top + e && y <= t.box.bottom - e && !clippedAt(t.holder, x, y));
+            if (!under) continue;
+            const top = document.elementFromPoint(x, y);
+            const holder = under.holder;
+            if (!top || top === holder || holder.contains(top)) continue;
+            const text = `"${(holder.textContent ?? "").trim().slice(0, 40)}"`;
+            if (top.contains(holder)) {
+              const pseudo = pseudoOver(top, x, y);
+              if (!pseudo) continue;
+              coverings.push(`${pseudo} is drawn over the text ${text} at ${Math.round(x)},${Math.round(y)}`);
+              reported++;
+              continue;
+            }
+            // A sticky cell over the cells of its own table that scroll under it is the table working.
+            const cell = top.closest("th, td");
+            if (cell && getComputedStyle(cell).position === "sticky" && cell.closest("table") === holder.closest("table")) continue;
+            const cs = getComputedStyle(top);
+            coverings.push(`${describe(top)} (${cs.position}${cs.transform !== "none" ? ", transformed" : ""}) is drawn over the text ${text} at ${Math.round(x)},${Math.round(y)}`);
+            reported++;
+          }
+        }
+      }
 
       return {
-        sidewaysScroll: doc.scrollWidth - vw,
+        sidewaysScroll: doc.scrollWidth - doc.clientWidth,
+        scrollWidth: doc.scrollWidth,
+        clientWidth: doc.clientWidth,
         headingTop: r ? r.top : null,
         headingUncovered,
         devOverlay: !!document.querySelector("nextjs-portal"),

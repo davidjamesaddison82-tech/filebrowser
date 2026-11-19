@@ -8,7 +8,8 @@ import { defineConfig, devices } from "@playwright/test";
  * The spec files run in name order with one worker, because they share that database:
  * 00 and 03b test the browser guard and the layout detector on pages of their own (no database);
  * 01–04 change no record (04 adds one developer proposal to the inbox, which stays unreviewed);
- * 05 exercises the governance workflow and creates new dataset revisions.
+ * 05 exercises the governance workflow and creates new dataset revisions; 06 adds proposals and one
+ * planted build to check what the review screens say about them.
  */
 const PORT = Number(process.env.HQ_E2E_PORT ?? 3212);
 

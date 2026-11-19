@@ -1,8 +1,8 @@
 import Link from "@/components/pin-link";
 import type { ReactNode } from "react";
 import type { Dataset, Envelope } from "@/lib/domain/dataset";
-import { describeRef } from "@/lib/domain/derive";
-import { type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL } from "@/lib/domain/schemas";
+import { BUILD_ACCEPTANCE_LABEL, buildAcceptanceIsSourced, describeRef } from "@/lib/domain/derive";
+import { type BuildRecord, type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL } from "@/lib/domain/schemas";
 import { EPISTEMIC_TONE, statusLabel, statusTone, type Tone } from "@/lib/ui/format";
 import { claim as asClaim, citations as asCitations, isEpistemic, isObject } from "@/lib/ui/guards";
 import { recordHref, refHref } from "@/lib/ui/links";
@@ -39,6 +39,22 @@ export function EpistemicChip({ value }: { value: Epistemic | unknown }) {
 
 export function StatusChip({ value, label }: { value: string; label?: string }) {
   return <Chip tone={statusTone(value)}>{label ?? statusLabel(value)}</Chip>;
+}
+
+/**
+ * A build's standing (F1). "accepted_reported" reads as a reported acceptance only when the build's
+ * statement quotes a source that reports it; otherwise it is a bare claim and says so, wherever a
+ * build's standing is shown.
+ */
+export function BuildStandingChip({ build }: { build: { standing?: unknown; statement?: unknown } }) {
+  if (build.standing === "accepted_reported" && !buildAcceptanceIsSourced(build as BuildRecord)) {
+    return (
+      <Chip tone="warn" title="This build is marked as accepted, but its statement quotes no source that reports it">
+        {BUILD_ACCEPTANCE_LABEL.build_acceptance_claimed}
+      </Chip>
+    );
+  }
+  return <StatusChip value={typeof build.standing === "string" ? build.standing : ""} />;
 }
 
 export function IdTag({ id }: { id: string }) {

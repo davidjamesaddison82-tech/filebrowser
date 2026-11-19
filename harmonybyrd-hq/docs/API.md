@@ -54,7 +54,7 @@ Every tool answers with this envelope, the three inbox tools and `list_my_propos
 | --- | --- | --- |
 | 400 | `invalid_json` | The body is not a JSON object |
 | 401 | `unauthenticated` | No valid identity |
-| 403 | `forbidden` | Identity is valid but may not do this. Includes a proposal that sets a protected or build-only field, uses one of HQ's own labels, or tries to change or create a decision record (`detail.protected_fields` lists the fields), and a cross-site request |
+| 403 | `forbidden` | Identity is valid but may not do this. Includes a proposal that sets a protected or build-only field, uses one of HQ's own labels, or tries to change or create a decision record (`detail.protected_fields` lists the fields); a proposal that asserts an acceptance — a build standing `accepted_reported`, a module `lifecycle.founder_accepted` of `yes` or `partial`, or a `founder_accepted` field (`detail.rule` is `acceptance_claim`, `detail.field` names the field); and a cross-site request |
 | 404 | `not_found` | No such record, tool, revision or proposal — or a proposal that is not yours |
 | 409 | `conflict` | The proposal is stale (its target changed after it was written); its target carries a founder acceptance or rejection recorded in HQ (`detail.acceptance`); or the proposal is already closed |
 | 413 | `payload_too_large` | The body is larger than `HQ_MAX_BODY_BYTES` (default 1,048,576 bytes; `detail.max_bytes`) |
@@ -65,9 +65,16 @@ The rules behind the 403, 409 and 422 refusals of a proposal are in docs/GOVERNA
 
 Refusals with 401 and 403, and refused proposals, are written to the audit log.
 
-**Request ids.** A client may send `X-Request-Id` to correlate its calls. HQ uses it (in the
-response header, the error body and the audit log) only if it is 1–64 characters of letters, digits,
-`.`, `_` and `-`; otherwise HQ generates one. The MCP endpoint always generates its own.
+**Request ids.** HQ generates the id of every request itself (`GET /api/v1/health` has none). It is returned in the `x-request-id`
+header and in an error body's `request_id`, and it is the id the audit log stores. A client may send
+`X-Request-Id` to correlate its own calls: if it is 1–64 characters of letters, digits, `.`, `_` and
+`-`, the REST endpoints echo it in `x-client-request-id` and keep it as `detail.client_request_id`
+in the audit row they write for the call (an allowed call, or a 401 or 403 answer); otherwise it is
+dropped. It never becomes the request id. The MCP endpoint does not read it.
+
+The two founder routes (`POST /api/v1/proposals/{id}/review` and `POST /api/v1/decisions`) write no
+“allowed” row of their own: a founder act is recorded as allowed only by the database function that
+performs it, and that row carries no request id. A refusal on those routes is logged like any other.
 
 ## REST
 
@@ -155,7 +162,13 @@ you read. If the record has changed since, the proposal is refused as stale when
 (`409`), or marked stale when it is reviewed — never merged silently.
 
 What a proposal may contain — verified quotations, which labels it may use, which fields it cannot
-set — is in docs/GOVERNANCE.md, “What a proposal may assert”.
+set, and that it can never assert an acceptance — is in docs/GOVERNANCE.md, “What a proposal may assert”.
+
+When the founder reviews a proposal, HQ's review screen calls out a change to any of these fields
+(its `sensitive_fields`): `status`, `standing`, `implementation_state`, `lifecycle`, `type`,
+`result`, `statement`, `sha256`, `severity`, `exact_text`, `decision_ids`, `module_id`, `module_ids`,
+`linked_evidence_ids`, `linked_build_ids` and `founder_accepted`. This list is shown on the screen
+only; `GET /api/v1/proposals/<id>` does not return it.
 
 `idempotency_key` makes a retry safe: a second submission by the same client with the same key
 returns the first proposal (marked `idempotent_replay`) instead of creating another.

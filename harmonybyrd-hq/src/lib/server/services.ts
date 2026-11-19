@@ -9,6 +9,7 @@
 import { z } from "zod";
 import { canPropose, claimsFor, isFounderSession, type Principal, publicPrincipal } from "@/lib/auth/principal";
 import { citedSourceIds, type Dataset } from "@/lib/domain/dataset";
+import { canonicalJson } from "@/lib/domain/pack";
 import {
   acceptanceStatus,
   dependencies,
@@ -651,6 +652,44 @@ export function acceptanceBlock(type: string, id: string, data: unknown): HqErro
   );
 }
 
+/** F1: why a proposal may not claim acceptance. The same words as the database's HQ403. */
+export const ACCEPTANCE_CLAIM_RULE = "acceptance is recorded only by a founder decision in HQ or by an import; a proposal cannot assert it";
+
+const lifecycleEntryKey = (entry: unknown) =>
+  isObject(entry) ? canonicalJson([entry.state ?? null, entry.basis ?? null, entry.note ?? null, entry.citations ?? null]) : null;
+
+/**
+ * F1: a proposal can never introduce a claim of acceptance (mirrors hq._refuse_acceptance_claims).
+ * `doc` is the update's "set" or the created record; `current` is the target's data for an update and
+ * null for a create. Refused (403):
+ *   - on any record type, a top-level founder_accepted field (also as a dotted path);
+ *   - a build whose resulting standing is "accepted_reported", unless the target already had it;
+ *   - a module whose resulting lifecycle.founder_accepted is "yes" or "partial", unless the target's
+ *     current entry is identical (state, basis, note, citations).
+ * A citation does not make it acceptable: a quotation proves the words are in a source, not that they
+ * report an acceptance.
+ */
+export function acceptanceClaimProblem(type: RecordType, doc: Json, current: Json | null): HqError | null {
+  const refuse = (field: string, what: string) =>
+    forbidden(`${what}: ${ACCEPTANCE_CLAIM_RULE.charAt(0).toUpperCase()}${ACCEPTANCE_CLAIM_RULE.slice(1)}.`, { field, rule: "acceptance_claim" });
+  const named = Object.keys(doc).find((key) => key === "founder_accepted" || key.endsWith(".founder_accepted"));
+  if (named) return refuse(named, `Field "${named}"`);
+  const after: Json = current ? { ...current, ...doc } : doc;
+  if (type === "build" && after.standing === "accepted_reported" && current?.standing !== "accepted_reported") {
+    return refuse("standing", 'Build standing "accepted_reported"');
+  }
+  if (type === "module") {
+    const entry = isObject(after.lifecycle) ? after.lifecycle.founder_accepted : undefined;
+    if (isObject(entry) && (entry.state === "yes" || entry.state === "partial")) {
+      const before = current && isObject(current.lifecycle) ? current.lifecycle.founder_accepted : undefined;
+      if (lifecycleEntryKey(before) === null || lifecycleEntryKey(before) !== lifecycleEntryKey(entry)) {
+        return refuse("lifecycle.founder_accepted", `lifecycle.founder_accepted "${String(entry.state)}"`);
+      }
+    }
+  }
+  return null;
+}
+
 /** The standard answer envelope for an inbox tool, at the current head (proposals change no revision). */
 async function inboxAnswer<T extends Json>(principal: Principal, data: T, ctx?: DatasetContext): Promise<ServiceEnvelope<T> & T> {
   const at = ctx ?? (await getDataset(principal));
@@ -776,6 +815,9 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
     const links = linkProblem(ctx.ds, body.set);
     if (links) await refuse(principal, target, links);
     await checkAssertions(principal, type, body.set, merged, target);
+    // After the label and quotation checks, as in the database (hq._refuse_acceptance_claims).
+    const claim = acceptanceClaimProblem(type, body.set, currentData);
+    if (claim) await refuse(principal, target, claim);
     const check = safeParseRecord(type, merged);
     if (!check.ok) throw invalid(`The proposed change would make ${body.target.id} invalid.`, check.issues);
     return inboxAnswer(
@@ -826,6 +868,8 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
   const links = linkProblem(ctx.ds, create.record);
   if (links) await refuse(principal, target, links);
   await checkAssertions(principal, type, create.record, null, target);
+  const claim = acceptanceClaimProblem(type, create.record, null);
+  if (claim) await refuse(principal, target, claim);
   const candidate = withPlaceholders(type, create.record);
   const check = safeParseRecord(type, candidate);
   if (!check.ok) throw invalid(`The proposed ${type} record is not valid.`, check.issues);
@@ -1232,7 +1276,7 @@ export async function proposalImpact(principal: Principal, proposal: ProposalVie
 }
 
 /** Fields whose change alters what HQ shows as tested, accepted, verified or decided (D1d). Flagged for the founder. */
-const SENSITIVE_FIELDS: readonly string[] = [
+export const SENSITIVE_FIELDS: readonly string[] = [
   "status",
   "standing",
   "implementation_state",
@@ -1243,6 +1287,14 @@ const SENSITIVE_FIELDS: readonly string[] = [
   "sha256",
   "severity",
   "exact_text",
+  // F2: links that can make a record look decided or tested, and the module it is counted under.
+  "decision_ids",
+  "module_id",
+  "module_ids",
+  "linked_evidence_ids",
+  "linked_build_ids",
+  // F1: never accepted from a proposal, but called out if a stored proposal carries it.
+  "founder_accepted",
 ];
 
 /** The founder acceptance the target carries, if any: accepting a change to such a record is refused (D2). */

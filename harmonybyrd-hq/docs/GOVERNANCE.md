@@ -48,7 +48,7 @@ the records, and it changes nothing until the founder accepts it.
 ## What a proposal may assert
 
 The inbox is where developers and AI clients make claims. A proposal can never make HQ show its
-submitter's words as source-verified, as checked by HQ, or as made by HQ. Each rule is checked when
+submitter's words as source-verified, as checked by HQ, as made by HQ, or as an acceptance. Each rule is checked when
 the proposal is submitted and again when the founder accepts it.
 
 **Quotations are verified on the proposal path too.** Every object anywhere in a proposal that has
@@ -86,6 +86,22 @@ module `addenda_from_clusters`, `commission_entry`, `lifecycle_other_reports`; d
 `other_mentions`; build `possibly_same_as`, `code_ref`; evidence `search_results`; requirement
 `linked_tests`; source `doc_kind`, `content_kind`, `importance`, `identifiers`, `other_names`.
 
+**A proposal can never assert acceptance.** A verbatim quotation proves that words are in a source,
+not that they report an acceptance, so a citation is not enough. Acceptance is recorded only by a
+founder decision in HQ or by an import. On an update and on a create, whatever labels or citations
+the proposal carries, the database refuses (and the application refuses first):
+
+- a build whose standing would become `accepted_reported`, unless the record already had that standing;
+- a module whose `lifecycle.founder_accepted.state` would become `yes` or `partial`, unless the record's
+  current `lifecycle.founder_accepted` is identical (state, basis, note and citations). Replacing the
+  whole `lifecycle`, or giving a `lifecycle` that holds only `founder_accepted`, is caught the same way;
+- on any record type, a top-level field named `founder_accepted` (also spelt as a dotted path such as
+  `lifecycle.founder_accepted`);
+- evidence of type `founder_acceptance` (see below).
+
+At acceptance the rule is checked again against the record as it stands then, before the stale
+check, so a refused proposal stays in the inbox as *submitted*.
+
 **Rules for particular record types:**
 
 - Decision records cannot be created or changed by proposal: they are written only by a founder decision.
@@ -112,9 +128,10 @@ stale. The database also refuses any write to such a record other than a founder
 | Refusal | HTTP status | Error code |
 | --- | --- | --- |
 | A protected or build-only field, an HQ-only label, a forbidden evidence type, a source or evidence integrity rule, a decision record | 403 | `forbidden` (`detail.protected_fields` lists the fields, where there are any) |
+| A claim of acceptance: a build standing `accepted_reported`, a module `lifecycle.founder_accepted` of `yes` or `partial`, or a `founder_accepted` field | 403 | `forbidden` (`detail.rule` is `acceptance_claim`; `detail.field` names the field) |
 | A quotation or wording that cannot be verified, a source label without a citation, a malformed citation | 422 | `invalid_request` (`detail.unverified_quotations` lists every quotation that failed) |
 | A linked id that does not exist | 422 | `invalid_request` (`detail.unknown_links`) |
-| A target carrying a founder acceptance or rejection recorded in HQ | 409 | `conflict` (`detail.acceptance`) |
+| A target carrying a founder acceptance or rejection recorded in HQ | 409 | `conflict` (`detail.acceptance`; the message says “acceptance” or “rejection”, whichever it is) |
 | A target that changed since `base_version` | 409 | `conflict` |
 
 The application writes these refusals to the audit log (see “History and audit”), whether they
@@ -127,9 +144,21 @@ the verification status **agent-submitted, unverified** (or *submitted, unverifi
 permanently. An agent's statement that something is complete is recorded as that agent's statement.
 It never counts towards “accepted”, and it appears under *Unverified claims* on the dashboard.
 
-An agent's evidence never counts as an acceptance instrument. What does count is evidence of type
-`founder_acceptance` that a source reports or HQ's build checked, or an issued decision about that
-build or its module.
+An agent's evidence never counts as an acceptance instrument. For a build marked as accepted, only two
+things count:
+
+- evidence of type `founder_acceptance` that a source reports or HQ's build checked, whose `build_id`
+  is that build; or
+- an issued decision recorded in HQ whose effects include a `set_acceptance` that accepts that build
+  (the same thing the build's HQ acceptance records).
+
+Nothing else counts: not a decision that only names the build's module, not a decision a source
+reports (those carry no reference to a build), and never a link the build itself carries, such as
+`decision_ids`, because a proposal can set those. A build marked as accepted without an instrument is
+listed under *Review items*: “A source states this build was accepted, but HQ holds no
+founder-acceptance evidence for it and no founder decision recorded in HQ accepts it.” (For a build
+claimed as accepted with no source quoted, the item says that instead.) This is the
+cautious reading, and it lists more builds for review than the earlier rule did.
 
 A requirement counts as outstanding unless it is recorded as implemented and tested **and** at least
 one linked evidence record exists that a source reports or HQ's build checked. A requirement whose
@@ -162,8 +191,14 @@ approval except a founder decision.
 
 - **Acceptance reported in a source** — a document says the founder accepted something. HQ shows it
   as reported, with the quotation and the scope the document states. HQ has not seen the founder do
-  it. A module's lifecycle may record a reported acceptance only with the basis `reported` or
-  `founder_statement` and a citation.
+  it. Such a report reaches HQ only through an import, never through a proposal (see “A proposal can
+  never assert acceptance”). HQ counts it as reported only when it is labelled `reported` or
+  `founder_statement` and quotes a source: a module's lifecycle entry, or a build's statement. A pack
+  is refused if a build in it has the standing `accepted_reported` with no citation, and is warned if
+  the citing statement has another label.
+- **Acceptance claimed — no source quoted** — a build marked as accepted whose statement does not meet
+  that test (for example, one stored before this rule). HQ shows it with this label, lists it under
+  *Unverified claims*, and does not count it as reported.
 - **Acceptance recorded in HQ** — the founder recorded it here. This is the only thing HQ itself calls accepted.
 - **Rejection recorded in HQ** — the founder recorded a rejection here. It is shown as “Founder
   rejected in HQ”, it outranks anything a source reports, and it has its own development-health list.

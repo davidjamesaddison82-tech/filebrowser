@@ -5,6 +5,7 @@ import { LifecycleDetail } from "@/components/lifecycle";
 import {
   AcceptanceLock,
   bindingAcceptance,
+  BuildStandingChip,
   Card,
   Chip,
   Citations,
@@ -395,7 +396,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                       {b.ref.title}
                     </Link>
                     <div className="row" style={{ gap: 6 }}>
-                      <StatusChip value={b.standing} />
+                      <BuildStandingChip build={ds.get("build", b.ref.id)?.data ?? { standing: b.standing }} />
                       {b.sha256 ? (
                         <span className="mono xsmall muted break">sha256 {shortHash(b.sha256, 16)}</span>
                       ) : (

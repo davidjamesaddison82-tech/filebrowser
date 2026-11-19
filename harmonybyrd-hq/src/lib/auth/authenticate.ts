@@ -73,6 +73,17 @@ export async function authenticateSessionToken(sessionToken: string | undefined 
   return fromRow(row, "session", SESSION_SCOPES[row.app_role]);
 }
 
+/**
+ * The principal id behind a sign-in name, or null. Used only to tell whether a device cookie belongs
+ * to the name being signed in (the throttle lane); it checks no passphrase and says nothing to the caller.
+ */
+export async function loginPrincipalId(handle: string): Promise<string | null> {
+  return asAuthRole(async (q) => {
+    const result = await q.query<{ id: string | null }>("select (hq.auth_find_login($1) ->> 'principal_id') as id", [handle.trim().toLowerCase()]);
+    return result.rows[0]?.id ?? null;
+  });
+}
+
 /** Verify a passphrase sign-in. Returns the principal on success, null otherwise (no detail leaked). */
 export async function authenticatePassphrase(handle: string, passphrase: string): Promise<SignedIn | null> {
   const row = await asAuthRole(async (q) => {

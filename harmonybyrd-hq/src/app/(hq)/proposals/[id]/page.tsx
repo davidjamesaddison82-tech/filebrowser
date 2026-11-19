@@ -8,6 +8,7 @@ import { loadPage, param, routeId, type SearchParams } from "@/lib/server/page";
 import { getProposal, proposalImpact } from "@/lib/server/services";
 import { humanise, isoDate, isoDateTime, statusLabel } from "@/lib/ui/format";
 import { recordHref } from "@/lib/ui/links";
+import { citedSources, standingFieldsSet } from "@/lib/ui/proposal-review";
 
 /** What the founder's (or submitter's) action was, as a noun: "Your rejection was not applied". */
 const ACTION_NOUN: Record<string, string> = {
@@ -74,6 +75,9 @@ export default async function ProposalPage({ params, searchParams }: { params: P
       ? `Your ${ACTION_NOUN[refused]} was not applied: this proposal was already ${CLOSED_AS[outcome.event] ?? statusLabel(outcome.event).toLowerCase()} by ${outcome.actor} at ${isoDateTime(String(outcome.at))}.`
       : null;
   const acceptance = impact.op === "update" ? bindingAcceptance({ hq_acceptance: impact.target_acceptance }) : null;
+  // F9: for a new record, the context is what it cites; and a proposal that sets where a record stands says so.
+  const cited = impact.op === "create" ? citedSources(ctx.ds, impact.record) : [];
+  const standingFields = standingFieldsSet(proposal.payload);
   const madeByPreview = impact.op === "create" && impact.record_type === "recommendation" ? `Proposed through the inbox by ${proposal.submitted_by}` : null;
 
   return (
@@ -261,32 +265,68 @@ export default async function ProposalPage({ params, searchParams }: { params: P
             )}
           </Card>
 
-          <Card title="Original context" hint="Sources the target rests on" flush>
-            {impact.sources.length === 0 ? (
-              <Empty>No source is recorded for the target.</Empty>
-            ) : (
-              <ul className="list">
-                {impact.sources.map((s) => (
-                  <li key={s.id}>
-                    <span>
-                      <Link className="li-title" href={recordHref("source", s.id)}>
-                        {s.title}
-                      </Link>{" "}
-                      <IdTag id={s.id} />
-                    </span>
-                    <div className="li-note">
-                      {isoDate(s.date)} · {humanise(s.authority)} · {s.citations.length} quotation{s.citations.length === 1 ? "" : "s"} used by the record
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
+          {impact.op === "create" ? (
+            <Card title="Original context" hint="Sources the proposed record cites" flush>
+              {cited.length === 0 ? (
+                <Empty>The proposed record cites no source.</Empty>
+              ) : (
+                <ul className="list">
+                  {cited.map((s) => (
+                    <li key={s.id}>
+                      <span>
+                        {s.title ? (
+                          <Link className="li-title" href={recordHref("source", s.id)}>
+                            {s.title}
+                          </Link>
+                        ) : (
+                          <span className="li-title">No source with this id is on record</span>
+                        )}{" "}
+                        <IdTag id={s.id} />
+                      </span>
+                      <div className="li-note">
+                        {s.textHeld
+                          ? "HQ holds this source's text. Quotations from it are checked against that text."
+                          : "HQ holds no text for this source, so nothing quoted from it can be checked."}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          ) : (
+            <Card title="Original context" hint="Sources the target rests on" flush>
+              {impact.sources.length === 0 ? (
+                <Empty>No source is recorded for the target.</Empty>
+              ) : (
+                <ul className="list">
+                  {impact.sources.map((s) => (
+                    <li key={s.id}>
+                      <span>
+                        <Link className="li-title" href={recordHref("source", s.id)}>
+                          {s.title}
+                        </Link>{" "}
+                        <IdTag id={s.id} />
+                      </span>
+                      <div className="li-note">
+                        {isoDate(s.date)} · {humanise(s.authority)} · {s.citations.length} quotation{s.citations.length === 1 ? "" : "s"} used by the record
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          )}
 
           <Card title="Known risks to weigh">
             <ul className="plain small">
               {fromAi ? <li>The proposer is an AI client. Treat its rationale as a claim to check, not as evidence.</li> : null}
               {impact.op === "update" && impact.stale ? <li>The target changed since the proposal was written.</li> : null}
+              {standingFields.length ? (
+                <li>
+                  It sets where the record stands ({standingFields.join(", ")}). That changes what HQ shows as tested, accepted or decided: check the
+                  sources for it before accepting.
+                </li>
+              ) : null}
               {evidence.length === 0 ? <li>No supporting evidence was attached.</li> : null}
               {impact.affected.length > 0 ? <li>{impact.affected.length} other record(s) refer to the target and may read differently after the change.</li> : null}
               <li>Accepting creates a new dataset revision. The previous version stays in the history and can always be reopened.</li>

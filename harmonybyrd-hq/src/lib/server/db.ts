@@ -103,16 +103,32 @@ export function auditDetailJson(detail: unknown): string | null {
 /**
  * Append an audit event in its own transaction, so that denials are recorded even though the request failed.
  * Refusals go through hq.log_refusal and allowed uses through hq.log_access: the database decides who the
- * caller is from the claims, and an allowed use is recorded only for an active principal (no detail).
+ * caller is from the claims, and an allowed use is recorded only for an active principal. An allowed row
+ * takes no detail from the caller; the one thing kept beside the server's request id is the id the
+ * client sent for its own correlation (clientRequestId), which the database stores apart.
  */
 export async function audit(
   claims: DbClaims | null,
-  event: { action: string; objectType?: string | null; objectId?: string | null; outcome: "allowed" | "denied" | "error"; detail?: unknown; requestId?: string | null },
+  event: {
+    action: string;
+    objectType?: string | null;
+    objectId?: string | null;
+    outcome: "allowed" | "denied" | "error";
+    detail?: unknown;
+    requestId?: string | null;
+    clientRequestId?: string | null;
+  },
 ): Promise<void> {
   try {
     await run(claims ? "authenticated" : "anon", claims, false, (q) =>
       event.outcome === "allowed"
-        ? q.query("select hq.log_access($1, $2, $3, $4)", [event.action, event.objectType ?? null, event.objectId ?? null, event.requestId ?? null])
+        ? q.query("select hq.log_access($1, $2, $3, $4, $5)", [
+            event.action,
+            event.objectType ?? null,
+            event.objectId ?? null,
+            event.requestId ?? null,
+            event.clientRequestId ?? null,
+          ])
         : q.query("select hq.log_refusal($1, $2, $3, $4, $5::jsonb, $6)", [
             event.action,
             event.objectType ?? null,

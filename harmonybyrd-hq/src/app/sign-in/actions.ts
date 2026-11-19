@@ -2,22 +2,40 @@
 
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { authenticatePassphrase, authenticateSessionToken, type SignedIn } from "@/lib/auth/authenticate";
+import { authenticatePassphrase, authenticateSessionToken, loginPrincipalId, type SignedIn } from "@/lib/auth/authenticate";
+import { DEVICE_COOKIE, DEVICE_DAYS, type DeviceClaims, secureCookies, signDevice, verifyDevice } from "@/lib/auth/device";
 import { claimsFor } from "@/lib/auth/principal";
 import { safeNext } from "@/lib/auth/safe-next";
 import { SESSION_COOKIE, SESSION_HOURS, signSession } from "@/lib/auth/session";
-import { signInThrottle } from "@/lib/auth/throttle";
+import { type Lane, signInThrottle } from "@/lib/auth/throttle";
 import { audit, writeAs } from "@/lib/server/db";
 
 /**
  * The client's address, for the audit log only. X-Forwarded-For is read only when HQ_TRUST_PROXY=1
  * says a proxy HQ trusts sets it (then the right-most hop, the one that proxy appended); otherwise a
- * client could write anything there. It never affects the throttle, which is keyed on the name.
+ * client could write anything there. It never affects the throttle, which is keyed on the name (and
+ * the device cookie).
  */
 async function clientAddress(): Promise<string | null> {
   if (process.env.HQ_TRUST_PROXY !== "1") return null;
   const hops = ((await headers()).get("x-forwarded-for") ?? "").split(",").map((h) => h.trim()).filter(Boolean);
   return hops.at(-1)?.slice(0, 64) ?? null;
+}
+
+/**
+ * The throttle lane for this attempt: the device lane when the browser carries a valid device cookie
+ * for the principal of this name, otherwise the name's anonymous lane. A forged, expired or malformed
+ * cookie, or one for another principal, gets the anonymous lane. The name is looked up only when a valid
+ * cookie is present, so without one a known and an unknown name take exactly the same path.
+ */
+async function laneFor(handle: string, device: DeviceClaims | null): Promise<Lane> {
+  if (!device) return { name: handle };
+  try {
+    return (await loginPrincipalId(handle)) === device.sub ? { name: handle, device: device.did } : { name: handle };
+  } catch {
+    // The database is unreachable: the attempt itself will say so.
+    return { name: handle };
+  }
 }
 
 export async function signIn(_previous: { error?: string } | undefined, formData: FormData): Promise<{ error?: string }> {
@@ -27,8 +45,11 @@ export async function signIn(_previous: { error?: string } | undefined, formData
 
   if (!handle || !passphrase) return { error: "Enter your name and passphrase." };
   const address = await clientAddress();
+  const store = await cookies();
+  const device = await verifyDevice(store.get(DEVICE_COOKIE)?.value);
+  const lane = await laneFor(handle, device);
 
-  const { value: principal } = await signInThrottle().run<SignedIn | null | "unavailable">(handle, async () => {
+  const result = await signInThrottle().run<SignedIn | null | "unavailable">(lane, async () => {
     try {
       const found = await authenticatePassphrase(handle, passphrase);
       return { outcome: found ? "success" : "failure", value: found };
@@ -36,6 +57,17 @@ export async function signIn(_previous: { error?: string } | undefined, formData
       return { outcome: "error", value: "unavailable" };
     }
   });
+  if (result.busy) {
+    await audit(null, {
+      action: "session.sign_in",
+      objectType: "principal",
+      objectId: handle,
+      outcome: "denied",
+      detail: { reason: "too_many_in_progress", lane: lane.device ? "device" : "anonymous", ...(address ? { client_address: address } : {}) },
+    });
+    return { error: "Too many sign-in attempts are in progress. Try again in a moment." };
+  }
+  const principal = result.value;
   if (principal === "unavailable") {
     return { error: "HQ cannot reach its database right now. Check that the database is running and try again." };
   }
@@ -45,18 +77,27 @@ export async function signIn(_previous: { error?: string } | undefined, formData
       objectType: "principal",
       objectId: handle,
       outcome: "denied",
-      detail: { failures: signInThrottle().failures(handle), ...(address ? { client_address: address } : {}) },
+      detail: { failures: signInThrottle().failures(lane), lane: lane.device ? "device" : "anonymous", ...(address ? { client_address: address } : {}) },
     });
     return { error: "That name and passphrase do not match." };
   }
 
-  const store = await cookies();
+  const secure = secureCookies();
   store.set(SESSION_COOKIE, await signSession(principal.id, principal.sessionEpoch), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production" && process.env.HQ_INSECURE_COOKIES !== "1",
+    secure,
     path: "/",
     maxAge: SESSION_HOURS * 3600,
+  });
+  // Set only now, after the passphrase matched, so the cookie says nothing about a name that was not
+  // signed in. A browser that already holds one for this person keeps its device id.
+  store.set(DEVICE_COOKIE, await signDevice(principal.id, device?.sub === principal.id ? device.did : undefined), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    path: "/",
+    maxAge: DEVICE_DAYS * 24 * 3600,
   });
   await audit(claimsFor(principal), { action: "session.sign_in", objectType: "principal", objectId: principal.handle, outcome: "allowed" });
   redirect(next);
@@ -65,6 +106,7 @@ export async function signIn(_previous: { error?: string } | undefined, formData
 /**
  * Sign out everywhere: hq.end_sessions() increments the person's session epoch, so this cookie and any
  * copy of it (or another browser's session) stop working, then the cookie is removed from this browser.
+ * The device cookie stays: it identifies the browser, not a session, and authenticates nothing.
  */
 export async function signOut(): Promise<void> {
   const store = await cookies();

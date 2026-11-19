@@ -245,7 +245,8 @@ describe("D6 / db-7 — proposal_status reveals nothing about proposals the call
     try {
       await client.query("begin");
       await client.query("set local role service_role");
-      expect((await client.query("select hq.proposal_status($1) as s", [open])).rows[0].s).toBeNull();
+      // F3: service_role no longer calls any function but the read helpers.
+      await expect(client.query("select hq.proposal_status($1) as s", [open])).rejects.toMatchObject({ code: "42501" });
     } finally {
       await client.query("rollback").catch(() => undefined);
       await client.end();

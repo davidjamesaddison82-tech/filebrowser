@@ -8,7 +8,8 @@
  * passphrase, increments the epoch and so ends every session that person has open.
  *
  * Only tokens HQ itself issued are accepted: a token without HQ's issuer, the session `amr`, an
- * expiry or an epoch is refused even if it is signed with the right secret.
+ * expiry or an epoch is refused even if it is signed with the right secret, and so is any token
+ * carrying a `typ` claim (the device cookie carries typ "device": it is never a session).
  */
 import { jwtVerify, SignJWT } from "jose";
 import { environmentProblem } from "./environment";
@@ -17,7 +18,8 @@ export const SESSION_COOKIE = "hq_session";
 export const SESSION_HOURS = 12;
 export const SESSION_ISSUER = "harmonybyrd-hq";
 
-function secret(): Uint8Array {
+/** The HS256 key for HQ's own tokens: sessions here, and the device cookie (device.ts), told apart by their claims. */
+export function secret(): Uint8Array {
   const value = process.env.HQ_JWT_SECRET;
   // Only the secret is checked here; the database URL is checked at start-up (src/instrumentation.ts).
   const problem = environmentProblem({ HQ_JWT_SECRET: value });
@@ -56,6 +58,8 @@ export async function verifySession(token: string | undefined | null): Promise<S
       requiredClaims: ["sub", "iat", "exp", "sv"],
     });
     if (payload.role !== "authenticated" || payload.amr !== "session") return null;
+    // A device cookie (device.ts) is signed with the same secret; it is never a session.
+    if (payload.typ !== undefined) return null;
     if (typeof payload.sub !== "string" || !Number.isInteger(payload.sv)) return null;
     return { sub: payload.sub, sv: payload.sv as number };
   } catch {

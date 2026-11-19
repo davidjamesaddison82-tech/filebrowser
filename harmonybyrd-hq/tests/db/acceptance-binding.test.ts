@@ -104,9 +104,9 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
     expect((await getDataset(w.founder)).ds.get("build", "BLD-FX-01")!.data.label).toBe("alpha-candidate-7");
   });
 
-  it("a rejection binds the same way", async () => {
+  it("a rejection binds the same way, and every refusal calls it a rejection (F7)", async () => {
     await accept("module", "MOD-FX-BETA", "rejected");
-    await expectStatus(
+    const viaService = await expectStatus(
       submitChangeProposal(w.developer, {
         title: "Beta summary",
         rationale: "Reword.",
@@ -116,6 +116,7 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
       }),
       409,
     );
+    expect(viaService.message).toMatch(/MOD-FX-BETA carries a founder rejection recorded in HQ \(FD-HQ-0003\)/);
     // The database binds a rejection on its own too, at submission and in the sealing trigger.
     const before = await worldState();
     const version = await versionOf("module", "MOD-FX-BETA");
@@ -128,7 +129,7 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
           JSON.stringify({ op: "update", set: { summary: "Reworded." } }),
         ]),
       ),
-    ).rejects.toMatchObject({ code: "HQ409", message: expect.stringMatching(/MOD-FX-BETA carries a founder acceptance recorded in HQ/) });
+    ).rejects.toMatchObject({ code: "HQ409", message: expect.stringMatching(/^module\/MOD-FX-BETA carries a founder rejection recorded in HQ \(FD-HQ-0003\)\. Record a founder decision/) });
     const client = await admin();
     try {
       await client.query("begin");
@@ -141,7 +142,7 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
           rev,
           founderId,
         ]),
-      ).rejects.toMatchObject({ code: "HQ409", message: expect.stringMatching(/only a founder decision can change it/) });
+      ).rejects.toMatchObject({ code: "HQ409", message: expect.stringMatching(/^module\/MOD-FX-BETA carries a founder rejection recorded in HQ \(FD-HQ-0003\); only a founder decision can change it/) });
     } finally {
       await client.query("rollback").catch(() => undefined);
       await client.end();

@@ -63,6 +63,9 @@ shown on the map is derived from them and can never read “accepted” because 
 `partial` counts towards the standing only if a source supports it (basis `reported`,
 `design_intention`, `source_recommendation` or `founder_statement`, with a citation) or its basis is
 `verified`; a reported founder acceptance must have the basis `reported` or `founder_statement`. A
+build's standing `accepted_reported` counts as a reported acceptance only when its statement is
+labelled `reported` or `founder_statement` and quotes a source; otherwise it is shown as “Acceptance
+claimed — no source quoted”. Neither kind of acceptance can be introduced by a proposal (docs/GOVERNANCE.md). A
 submitter's claim never raises a standing; it is listed under *Unverified claims*. A founder
 rejection recorded in HQ gives the standing “Founder rejected in HQ”, which outranks everything else.
 
@@ -149,7 +152,9 @@ anything is imported (`src/lib/domain/pack.ts`):
 3. every cited source must have a source record;
 4. a pack may not carry an HQ acceptance or a decision “recorded in HQ” — those exist only through the
    founder's own action — and may not use ids of the form `XX-HQ-<number>`, which HQ issues itself
-   (the database refuses them too).
+   (the database refuses them too);
+5. a build with the standing `accepted_reported` must have a statement that quotes a source (a
+   warning if that statement is not labelled `reported` or `founder_statement`).
 
 If one quotation fails, nothing is imported. The import also stores the normalised text of every
 source snapshot in `hq.source_texts`, a table no API role can read. The database checks every
@@ -166,7 +171,9 @@ import or by proposal.
 same model Supabase's API layer uses. The application's own login role (`hq_app`) owns nothing and
 has no privileges except to assume the API roles, so a bug in the web application cannot bypass the database's rules.
 
-- **People** sign in with a passphrase (scrypt). The session is a signed, HTTP-only cookie.
+- **People** sign in with a passphrase (scrypt). The session is a signed, HTTP-only cookie. After a
+  successful sign-in the browser also gets a device cookie, which only the sign-in action reads, to
+  give a browser that has signed in before a throttle lane of its own (docs/SECURITY.md). It authenticates nothing.
 - **AI clients and scripts** present a bearer token of the form `hbq_<id>_<secret>`; only its SHA-256 is stored.
 - Reads run in `READ ONLY` transactions. A read cannot write, by construction.
 - The application writes every refusal to the audit log in its own transaction, through
@@ -199,10 +206,10 @@ Every answer from every tool is an envelope:
 
 | Path | Contents |
 | --- | --- |
-| `supabase/migrations/0001…0006` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role` |
+| `supabase/migrations/0001…0007` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target |
 | `src/lib/domain/` | Schemas, the `Dataset` snapshot, derivations, pack validation — no database, no network |
 | `src/lib/server/` | Database access, the store, services, tools, HTTP helpers, server actions |
-| `src/lib/auth/` | Passphrases, tokens, sessions, the sign-in delay, the safe redirect after sign-in, the start-up environment check |
+| `src/lib/auth/` | Passphrases, tokens, sessions, the device cookie (`device.ts`), the sign-in throttle and its lanes (`throttle.ts`), the safe redirect after sign-in, the start-up environment check |
 | `src/lib/ui/` | Labels, formatting, pinned-revision link rules (`pin-rules.ts`, `pin.ts`, used by `src/components/pin-link.tsx`), and type guards through which screens read stored fields (`guards.ts`) |
 | `src/lib/integrations/` | Read-only GitHub and Google Drive adapters that return failure values instead of throwing |
 | `src/app/(hq)/` | The screens; `error.tsx` keeps a failed screen inside the shell |

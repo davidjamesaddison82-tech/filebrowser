@@ -25,7 +25,7 @@ WD = "hq.withdraw_proposal(text,text)"
 EVO = "hq.tg_proposal_event_order()"
 PST = "hq.proposal_status(text)"
 LR = "hq.log_refusal(text,text,text,text,jsonb,text)"
-LA = "hq.log_access(text,text,text,text)"
+LA = "hq.log_access(text,text,text,text,text)"
 ES = "hq.end_sessions()"
 PES = "hq.tg_passphrase_ends_sessions()"
 BR = "hq._begin_revision(text,text,text,uuid)"
@@ -206,8 +206,32 @@ rep("mau6_refusal_request_id", LR, "if v_request is not null and v_request !~ '^
 rep("mau7_refusal_active", LR, "select * into v_p from hq.principals where id = hq.current_principal_id() and active;", "select * into v_p from hq.principals where id = hq.current_principal_id();")
 rep("mau8_access_principal", LA, "if v_p.id is null then", "if false then")
 rep("mau9_access_anon", LA, "if current_setting('role', true) is distinct from 'anon' then", "if true then")
-rep("mau10_access_action", LA, "if p_action is null or p_action !~ '^[a-z_]+(\\.[a-z_0-9]+){1,3}$' then", "if false then")
+# (0007, F4) log_access accepts only the action families the application logs; mau10 removes the check.
+LA_ACTIONS = r"""if p_action is null
+     or p_action !~ '^(api\.[a-z_.]+|mcp\.[a-z_.]+|tool\.[a-z_]+|tools\.list|integrations\.read|proposal\.read|session\.(sign_in|sign_out|end_all))$' then"""
+rep("mau10_access_action", LA, LA_ACTIONS, "if false then")
 rep("mau11_access_request_id", LA, "if v_request is not null and v_request !~ '^[A-Za-z0-9._-]{1,64}$' then", "if false then")
+
+# ---- 0007 F1: a proposal cannot introduce a claim of acceptance ----
+RAC = "hq._refuse_acceptance_claims(text,jsonb,hq.record_versions)"
+rep("mf1a_build_standing", RAC, "if p_type = 'build' and v_after ->> 'standing' = 'accepted_reported'", "if false and v_after ->> 'standing' = 'accepted_reported'")
+rep("mf1b_build_standing_unless", RAC, "and (v_before ->> 'standing') is distinct from 'accepted_reported' then", "then")
+rep("mf1c_module_lifecycle", RAC, "if jsonb_typeof(v_fa) = 'object' and v_fa ->> 'state' in ('yes', 'partial') then", "if false then")
+rep("mf1d_module_identical_state_only", RAC, "jsonb_build_object('state', v_fa -> 'state', 'basis', v_fa -> 'basis', 'note', v_fa -> 'note', 'citations', v_fa -> 'citations')", "jsonb_build_object('state', v_fa -> 'state')")
+rep("mf1d_module_identical_state_only", RAC, "jsonb_build_object('state', v_was -> 'state', 'basis', v_was -> 'basis', 'note', v_was -> 'note', 'citations', v_was -> 'citations')", "jsonb_build_object('state', v_was -> 'state')")
+rep("mf1e_top_level_field", RAC, "if v_key = 'founder_accepted' or v_key like '%.founder\\_accepted' then", "if false then")
+# The rule removed from one path at a time: submission (update, create) and acceptance (update, create).
+rep("mf1f_submit_update", SUBMIT, "perform hq._refuse_acceptance_claims(p_target_type, p_payload, v_cur);", "perform 1;")
+rep("mf1g_submit_create", SUBMIT, "perform hq._refuse_acceptance_claims(p_payload ->> 'record_type', p_payload, null::hq.record_versions);", "perform 1;")
+rep("mf1h_review_update", REVIEW, "perform hq._refuse_acceptance_claims(v_prop.target_type, v_prop.payload, v_cur);", "perform 1;")
+rep("mf1i_review_create", REVIEW, "perform hq._refuse_acceptance_claims(v_prop.payload ->> 'record_type', v_prop.payload, null::hq.record_versions);", "perform 1;")
+
+# ---- 0007 F3: service_role acts as no one ----
+sql("mf3_service_role_founder_decision", "grant execute on function hq.record_founder_decision(text,text,text,jsonb,jsonb,jsonb,text) to service_role;")
+
+# ---- 0007 F4: log_access families, audit detail size ----
+rep("mf4_access_any_dotted_action", LA, LA_ACTIONS, "if p_action is null or p_action !~ '^[a-z_]+(\\.[a-z_0-9]+){1,3}$' then")
+sql("mf4b_audit_detail_size", "alter table hq.audit_log drop constraint audit_log_detail_size;")
 
 # ---- D7 session epoch ----
 rep("mse1_end_sessions_noop", ES, "set session_epoch = session_epoch + 1 where id = v_p.id", "set session_epoch = session_epoch where id = v_p.id")

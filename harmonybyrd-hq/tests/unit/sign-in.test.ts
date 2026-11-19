@@ -59,7 +59,11 @@ function fakeThrottle(options: { maxNames?: number } = {}) {
       clock += ms;
     },
   });
-  const attempt = (name: string, ok: boolean) => throttle.run(name, async () => ({ outcome: ok ? "success" : "failure", value: ok }));
+  const attempt = async (name: string, ok: boolean) => {
+    const result = await throttle.run(name, async () => ({ outcome: ok ? "success" : "failure", value: ok }));
+    if (result.busy) throw new Error("refused as busy");
+    return result;
+  };
   return { throttle, sleeps, attempt, advance: (ms: number) => (clock += ms) };
 }
 
@@ -87,8 +91,12 @@ describe("sign-in throttle: a growing delay per name, never a lock-out (api-2, d
     expect((await attempt("NOBODY-AT-ALL", false)).waitedMs).toBe(2000);
   });
 
-  it("processes one name's attempts one at a time, so parallel guesses still each wait", async () => {
+  // Changed in the second round (F5): attempts no longer queue one behind another, because the queue let
+  // N open wrong attempts hold the right passphrase for N x 8 s. Each waits on its own, and at most
+  // four run at once for a name (tests/unit/throttle.test.ts covers the lanes and caps).
+  it("does not queue one name's attempts: parallel guesses each wait on their own, at most four at once", async () => {
     const { throttle, sleeps } = fakeThrottle();
+    for (let i = 0; i < 5; i += 1) await throttle.run("developer", async () => ({ outcome: "failure" as const, value: false }));
     let running = 0;
     let most = 0;
     const slow = () =>
@@ -99,9 +107,12 @@ describe("sign-in throttle: a growing delay per name, never a lock-out (api-2, d
         running -= 1;
         return { outcome: "failure" as const, value: false };
       });
-    await Promise.all(Array.from({ length: 8 }, slow));
-    expect(most).toBe(1);
-    expect(sleeps).toEqual([500, 1000, 2000]);
+    const results = await Promise.all(Array.from({ length: 8 }, slow));
+    expect(most).toBe(4);
+    expect(results.filter((r) => r.busy)).toHaveLength(4);
+    // Each of the four started from the same count (5) and waited 500 ms, not 500, 1000, 2000, 4000.
+    expect(sleeps).toEqual([500, 500, 500, 500]);
+    expect(throttle.failures("developer")).toBe(9);
   });
 
   it("counts expire after 15 minutes without attempts", async () => {
