@@ -16,7 +16,7 @@ in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | Branch | `claude/harmonybyrd-hq-command-centre-76pgaq` |
 | Folder | `harmonybyrd-hq/` (nothing outside this folder was changed) |
 | Commit the recorded test runs were made on | named in [TEST-RESULTS.md](TEST-RESULTS.md) and [REPEATABILITY.md](REPEATABILITY.md) (“Source revision”). Both are generated reports; each describes the commit named inside it, not necessarily the code beside it |
-| History | `git log -- harmonybyrd-hq`: the first delivery, then the fixes for the adversarial review ([REVIEW-FINDINGS.md](REVIEW-FINDINGS.md)) in four rounds ([PROGRESS-REGISTER.md](PROGRESS-REGISTER.md)); the fourth has not been re-checked |
+| History | `git log -- harmonybyrd-hq`: the first delivery, then the fixes for the adversarial review ([REVIEW-FINDINGS.md](REVIEW-FINDINGS.md)) in five rounds ([PROGRESS-REGISTER.md](PROGRESS-REGISTER.md)). Each of the first four was re-checked by verifiers; the fifth and last was not |
 | File checksums | [FILE-MANIFEST.sha256](FILE-MANIFEST.sha256) — a generated list of the SHA-256 of the files in this folder. It names no commit itself: it describes the files as they were in the commit that last changed it (`git log -1 --format=%H -- docs/FILE-MANIFEST.sha256`), not necessarily the files beside it |
 
 To produce a source package of exactly what is committed in this folder. The command works from the
