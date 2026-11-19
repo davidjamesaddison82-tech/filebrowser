@@ -6,8 +6,26 @@
  * the code below reads fields as the record schemas declare them, and a stored record of the wrong
  * shape would make it throw or read as something it does not validly hold. The type says so, so a
  * stored dataset cannot be passed by accident.
+ *
+ * ROUND4 H6a: a record that fails validation (conform.ts isReadable) never counts as proof of anything.
+ * Each place below that counts a record or an entry as positive proof asks isReadable first, through the
+ * helpers just below (standingOf, hqAcceptanceOf, defectIsOpen, requirementIsLive):
+ *   - a lifecycle entry towards a module's standing (standingOf: a module HQ cannot read is "not reliable");
+ *   - an acceptance or rejection recorded in HQ (hqAcceptanceOf: only a rejection is kept from such a record);
+ *   - a build's reported acceptance (acceptance_reported_only, acceptanceStatus);
+ *   - an acceptance instrument: founder-acceptance evidence, or the founder decision a build's acceptance names;
+ *   - test evidence linked to a requirement (requirementTestEvidence: such evidence is listed as unreadable);
+ *   - an HQ check (hq_verified evidence);
+ *   - a decision recorded in HQ that resolves something, and an open item it settles (resolvedByHqDecisions);
+ *   - a link that settles missing work: a loop or a build for a module, a source for recency (missingWork,
+ *     moduleLastSeen), a loop step towards a stage (stageCoverage), a reference that resolves (reviewItems);
+ *   - a status that settles work: a defect HQ cannot read is open, a requirement HQ cannot read is live and
+ *     outstanding, and such a record is listed under every missing-work heading of its type.
+ * Negative content is never lost (H6b): each module's figures carry the records that fail validation and
+ * name it in their stored data (unreadable_records, with unreadableNote's words), and development health
+ * lists every such record.
  */
-import type { DatasetView } from "./conform";
+import { type DatasetView, isReadable, storedDataOf, unreadableFieldNotes, unreadableNaming, unreadableRecords } from "./conform";
 import { citedSourceIds, collectCitations, type Dataset, type Envelope, outgoingRefs, type RecordRef, refKey } from "./dataset";
 import { normaliseForQuote } from "./quote";
 import {
@@ -134,7 +152,8 @@ export type StandingHeadline =
   | "prototype_untested"
   | "designed_only"
   | "documented_only"
-  | "named_only";
+  | "named_only"
+  | "not_reliable";
 
 export const STANDING_LABEL: Record<StandingHeadline, string> = {
   accepted_in_hq: "Founder acceptance recorded in HQ",
@@ -145,6 +164,7 @@ export const STANDING_LABEL: Record<StandingHeadline, string> = {
   designed_only: "Designed — nothing runnable on record",
   documented_only: "Documented only",
   named_only: "Named only — no supporting evidence",
+  not_reliable: "Not reliable — its record cannot be read in full",
 };
 
 export interface ModuleStanding {
@@ -196,6 +216,61 @@ const acceptanceOf = (data: unknown): AcceptanceLike => {
   const value = (data as { hq_acceptance?: unknown } | null)?.hq_acceptance;
   return value && typeof value === "object" ? (value as AcceptanceLike) : undefined;
 };
+
+/**
+ * The acceptance recorded in HQ on a record of the view, as HQ counts it (H6a): from a record that fails
+ * validation only a rejection is kept (negative content), never an acceptance or a cleared one.
+ */
+function hqAcceptanceOf(envelope: Envelope<unknown>): AcceptanceLike {
+  const acc = acceptanceOf(envelope.data);
+  if (isReadable(envelope)) return acc;
+  return acc?.state === "rejected" ? acc : undefined;
+}
+
+/** H6a: a defect is open when its status says so, when HQ cannot read its status, and when HQ cannot read its record. */
+const defectIsOpen = (envelope: Envelope<{ status: unknown }>) => !isReadable(envelope) || isOpenDefect(envelope.data.status);
+
+/** Not reliable: the standing of a module whose own record fails validation (H6a, H6b). */
+const NOT_RELIABLE_CAUTION =
+  "This module's record cannot be read in full, so HQ counts nothing in it towards its standing. Its record exactly as stored is on its history page.";
+
+/**
+ * A module's standing in the view: moduleStanding of its record, or, for a record that fails validation,
+ * "not reliable" with nothing counted (H6a). Every derivation below reads a module's standing through this.
+ */
+export function standingOf(module: Envelope<ModuleRecord>): ModuleStanding {
+  if (isReadable(module)) return moduleStanding(module.data);
+  const flags = {
+    documented: false,
+    designed: false,
+    runnable: false,
+    test_evidence: false,
+    acceptance_reported: false,
+    acceptance_recorded_in_hq: false,
+    rejected_in_hq: hqAcceptanceOf(module)?.state === "rejected",
+  };
+  // Every positive state it holds is a claim HQ does not count, and is listed as one (negative content is kept).
+  const lc = (module.data.lifecycle ?? {}) as Partial<ModuleRecord["lifecycle"]>;
+  const claimed_only = LIFECYCLE_DIMENSIONS.filter((d) => positive(lc[d]?.state));
+  return { headline: "not_reliable", label: STANDING_LABEL.not_reliable, flags, claimed_only, caution: NOT_RELIABLE_CAUTION };
+}
+
+/**
+ * The words every screen and answer gives for a module's records that fail validation (H6b), or null when
+ * there are none. `refs` is unreadable_records: the records that name the module, itself included if its
+ * own record fails.
+ */
+export function unreadableNote(moduleId: string, refs: readonly RecordRef[]): string | null {
+  if (refs.length === 0) return null;
+  const self = refs.some((r) => r.type === "module" && r.id === moduleId);
+  const others = refs.length - (self ? 1 : 0);
+  const parts: string[] = [];
+  if (self) parts.push("This module's own record cannot be read in full: its figures are not reliable.");
+  if (others > 0) {
+    parts.push(`${others} ${others === 1 ? "record that names" : "records that name"} this module cannot be read in full; its figures may be incomplete.`);
+  }
+  return parts.join(" ");
+}
 
 export function moduleStanding(module: ModuleRecord): ModuleStanding {
   const lc = (module.lifecycle ?? {}) as Partial<ModuleRecord["lifecycle"]>;
@@ -282,10 +357,25 @@ export function acceptanceStatus(ds: DatasetView, type: RecordType, id: string):
   const cleared = hq?.state === "none" ? `Founder decision ${hq.decision_id} cleared an earlier acceptance or rejection recorded in HQ.` : null;
   const withCleared = (caution: string | null) => (cleared ? (caution ? `${caution} ${cleared}` : cleared) : caution);
 
+  // H6a: a record that fails validation counts for no acceptance, report or test. A rejection recorded
+  // in HQ is negative and is kept.
+  if (!isReadable(envelope)) {
+    const rejected = hqAcceptanceOf(envelope);
+    return {
+      ...base,
+      recorded_in_hq: rejected ? hq : null,
+      headline: "not_reliable",
+      label: "Not reliable — this record cannot be read in full",
+      reported_in_sources: null,
+      tests: [],
+      caution: `HQ cannot read this record in full, so it counts no acceptance, report or test from it.${rejected ? ` Founder decision ${rejected.decision_id ?? "(unknown)"} rejected it in HQ.` : ""}`,
+    };
+  }
+
 
   if (type === "module") {
     const module = envelope.data as ModuleRecord;
-    const standing = moduleStanding(module);
+    const standing = standingOf(envelope as Envelope<ModuleRecord>);
     const fa = module.lifecycle.founder_accepted;
     return {
       ...base,
@@ -395,6 +485,12 @@ export interface ModuleNode {
   loops: number;
   requirements: number;
   summary: string;
+  /** False when the module's own record fails validation: its figures are not reliable (H6b). */
+  reliable: boolean;
+  /** Records that fail validation and name this module in their stored data, itself included (H6b). */
+  unreadable_records: RecordRef[];
+  /** What unreadable_records means, in words; null when there are none. */
+  unreadable_note: string | null;
 }
 
 export interface ModuleEdge {
@@ -421,19 +517,19 @@ const SETTLED_DEFECT_STATUSES = new Set(["resolved", "deferred", "unknown"]);
 export const isOpenDefect = (status: unknown) => !(typeof status === "string" && SETTLED_DEFECT_STATUSES.has(status));
 
 export function ecosystemOverview(ds: DatasetView): EcosystemOverview {
-  const openDefects = countBy(
-    ds.defects.filter((d) => isOpenDefect(d.data.status)),
-    (d) => d.data.module_ids,
-  );
+  const openDefects = countBy(ds.defects.filter(defectIsOpen), (d) => d.data.module_ids);
   const reqCount = countBy(ds.requirements, (r) => r.data.module_ids);
-  const loopCount = countBy(ds.loops, (l) => l.data.module_ids);
+  // H6a: a loop HQ cannot read gives a module no loop.
+  const loopCount = countBy(ds.loops.filter(isReadable), (l) => l.data.module_ids);
   const blockerItems = countBy(
     ds.openItems.filter((o) => ["blocker", "unresolved_dependency", "not_authorised"].includes(o.data.kind)),
     (o) => o.data.module_ids,
   );
 
-  const modules: ModuleNode[] = ds.modules.map(({ data }) => {
-    const standing = moduleStanding(data);
+  const modules: ModuleNode[] = ds.modules.map((envelope) => {
+    const { data } = envelope;
+    const standing = standingOf(envelope);
+    const unreadable = [...unreadableNaming(ds, data.id)];
     return {
       id: data.id,
       name: data.name,
@@ -445,9 +541,12 @@ export function ecosystemOverview(ds: DatasetView): EcosystemOverview {
       standing_label: standing.label,
       open_defects: openDefects.get(data.id) ?? 0,
       blockers: data.blockers.length + (blockerItems.get(data.id) ?? 0),
-      loops: Math.max(loopCount.get(data.id) ?? 0, data.loop_ids.length),
+      loops: Math.max(loopCount.get(data.id) ?? 0, isReadable(envelope) ? data.loop_ids.length : 0),
       requirements: reqCount.get(data.id) ?? 0,
       summary: data.summary,
+      reliable: isReadable(envelope),
+      unreadable_records: unreadable,
+      unreadable_note: unreadableNote(data.id, unreadable),
     };
   });
 
@@ -512,6 +611,8 @@ export interface DevelopmentHealth {
   unverified_claims: HealthItem[];
   pending_founder_decisions: HealthItem[];
   unresolved_dependencies: HealthItem[];
+  /** Records HQ cannot read: stored in a form that fails validation, so nothing in them is counted (H6b). */
+  unreadable_records: HealthItem[];
 }
 
 /**
@@ -519,8 +620,11 @@ export interface DevelopmentHealth {
  * recorded since? Its content is then the submitter's, filed by the founder, not a source's.
  */
 export function enteredThroughInbox(envelope: Envelope<AnyRecord>): boolean {
-  return envelope.meta.origin === "proposal_acceptance" && acceptanceOf(envelope.data)?.state !== "accepted";
+  return envelope.meta.origin === "proposal_acceptance" && hqAcceptanceOf(envelope)?.state !== "accepted";
 }
+
+/** What development health says of a record HQ cannot read (H6b). */
+export const UNREADABLE_NOTE = "Stored in a form that does not pass validation: nothing in it counts in HQ's figures. Its page shows it exactly as stored.";
 
 export function developmentHealth(ds: DatasetView): DevelopmentHealth {
   const item = (envelope: Envelope<AnyRecord>, note: string): HealthItem => ({
@@ -535,28 +639,29 @@ export function developmentHealth(ds: DatasetView): DevelopmentHealth {
 
   const accepted_in_hq = ds
     .all()
-    .filter((e) => acceptanceOf(e.data)?.state === "accepted")
-    .map((e) => item(e, decisionNote(acceptanceOf(e.data))));
+    .filter((e) => hqAcceptanceOf(e)?.state === "accepted")
+    .map((e) => item(e, decisionNote(hqAcceptanceOf(e))));
 
   const rejected_in_hq = ds
     .all()
-    .filter((e) => acceptanceOf(e.data)?.state === "rejected")
-    .map((e) => item(e, decisionNote(acceptanceOf(e.data))));
+    .filter((e) => hqAcceptanceOf(e)?.state === "rejected")
+    .map((e) => item(e, decisionNote(hqAcceptanceOf(e))));
 
   const hq_verified = ds.evidence
-    .filter((e) => e.data.verification === "hq_verified")
+    .filter((e) => isReadable(e) && e.data.verification === "hq_verified")
     .map((e) => item(e, e.data.result.text));
 
   const acceptance_reported_only: HealthItem[] = [];
   for (const b of ds.builds) {
-    const decided = acceptanceOf(b.data)?.state === "accepted" || acceptanceOf(b.data)?.state === "rejected";
-    if (buildAcceptanceIsSourced(b.data) && !decided) {
+    const state = hqAcceptanceOf(b)?.state;
+    const decided = state === "accepted" || state === "rejected";
+    if (isReadable(b) && buildAcceptanceIsSourced(b.data) && !decided) {
       acceptance_reported_only.push(item(b, b.data.statement.text));
     }
   }
   const tested_not_accepted: HealthItem[] = [];
   for (const m of ds.modules) {
-    const standing = moduleStanding(m.data);
+    const standing = standingOf(m);
     if (standing.headline === "acceptance_reported") {
       acceptance_reported_only.push(item(m, m.data.lifecycle.founder_accepted.note || standing.label));
     } else if (standing.headline === "tested_not_accepted") {
@@ -564,7 +669,7 @@ export function developmentHealth(ds: DatasetView): DevelopmentHealth {
     }
   }
 
-  const open_defects = ds.defects.filter((d) => isOpenDefect(d.data.status)).map((d) => item(d, d.data.statement.text));
+  const open_defects = ds.defects.filter(defectIsOpen).map((d) => item(d, d.data.statement.text));
 
   // A blocker recorded both as an open item and on the module it names, quoting the same
   // sentence, is one blocker: the module's copy is not counted again.
@@ -593,8 +698,8 @@ export function developmentHealth(ds: DatasetView): DevelopmentHealth {
   // F1: a build marked as accepted whose statement quotes no source is a claim, not a report.
   // Listed first, so this is the note it carries.
   for (const b of ds.builds) {
-    const state = acceptanceOf(b.data)?.state;
-    if (b.data.standing === "accepted_reported" && !buildAcceptanceIsSourced(b.data) && state !== "accepted" && state !== "rejected") {
+    const state = hqAcceptanceOf(b)?.state;
+    if (b.data.standing === "accepted_reported" && !(isReadable(b) && buildAcceptanceIsSourced(b.data)) && state !== "accepted" && state !== "rejected") {
       addClaim(b, `${BUILD_ACCEPTANCE_LABEL.build_acceptance_claimed}.`);
     }
   }
@@ -613,7 +718,7 @@ export function developmentHealth(ds: DatasetView): DevelopmentHealth {
     else if (enteredThroughInbox(envelope)) addClaim(envelope, "Its content was proposed through the inbox and filed by the founder.");
   }
   for (const m of ds.modules) {
-    const { claimed_only } = moduleStanding(m.data);
+    const { claimed_only } = standingOf(m);
     if (claimed_only.length > 0) {
       addClaim(m, `Lifecycle states with no source behind them: ${claimed_only.map((d) => LIFECYCLE_LABEL[d].label.toLowerCase()).join(", ")}.`);
     }
@@ -650,6 +755,7 @@ export function developmentHealth(ds: DatasetView): DevelopmentHealth {
     unverified_claims,
     pending_founder_decisions,
     unresolved_dependencies,
+    unreadable_records: unreadableRecords(ds).map((ref) => item(ds.get(ref.type, ref.id)!, UNREADABLE_NOTE)),
   };
 }
 
@@ -659,13 +765,14 @@ export function developmentHealth(ds: DatasetView): DevelopmentHealth {
  */
 export function resolvedByHqDecisions(ds: DatasetView): Set<string> {
   const resolved = new Set<string>();
+  // H6a: only a decision HQ can read resolves anything, and only an open item HQ can read is settled by one.
   for (const d of ds.decisions) {
-    if (d.data.recorded_in === "hq" && d.data.status === "issued") {
+    if (isReadable(d) && d.data.recorded_in === "hq" && d.data.status === "issued") {
       for (const id of d.data.resolves) resolved.add(id);
     }
   }
   for (const o of ds.openItems) {
-    if (o.data.decision_id && resolved.has(o.data.decision_id)) resolved.add(o.meta.id);
+    if (isReadable(o) && o.data.decision_id && resolved.has(o.data.decision_id)) resolved.add(o.meta.id);
   }
   return resolved;
 }
@@ -697,6 +804,12 @@ const CLOSED_DISPOSITIONS = new Set(["superseded", "withdrawn", "satisfied"]);
  */
 const isLive = (disposition: unknown) => !(typeof disposition === "string" && CLOSED_DISPOSITIONS.has(disposition));
 
+/** H6a: a requirement HQ cannot read is live, whatever its disposition says. */
+const requirementIsLive = (r: Envelope<RequirementRecord>) => !isReadable(r) || isLive(r.data.disposition);
+
+/** What missing work says of a record HQ cannot read: it is listed under every heading of its type (H6a). */
+const CANNOT_COUNT = "HQ cannot read this record in full, so nothing in it is counted.";
+
 export function missingWork(ds: DatasetView, windowDays = 21): MissingWork {
   const item = (envelope: Envelope<AnyRecord>, note: string): HealthItem => ({
     type: envelope.meta.type,
@@ -704,23 +817,34 @@ export function missingWork(ds: DatasetView, windowDays = 21): MissingWork {
     title: recordTitle(envelope.meta.type, envelope.data),
     note,
   });
-  const live = ds.requirements.filter((r) => isLive(r.data.disposition));
+  // H6a: a record HQ cannot read counts for nothing, so it is listed under every heading of its type,
+  // with that reason: what it holds settles no missing work.
+  const listed = <T extends AnyRecord>(envelopes: Envelope<T>[], missing: (e: Envelope<T>) => boolean, note: (e: Envelope<T>) => string): HealthItem[] =>
+    envelopes.flatMap((e) => (!isReadable(e) ? [item(e, CANNOT_COUNT)] : missing(e) ? [item(e, note(e))] : []));
+  const live = ds.requirements.filter(requirementIsLive);
 
   const modulesWithLoop = new Set<string>();
-  for (const l of ds.loops) l.data.module_ids.forEach((m) => modulesWithLoop.add(m));
-  for (const m of ds.modules) if (m.data.loop_ids.length) modulesWithLoop.add(m.meta.id);
-  const modulesWithBuild = new Set(ds.builds.map((b) => b.data.module_id).filter(Boolean) as string[]);
+  for (const l of ds.loops.filter(isReadable)) l.data.module_ids.forEach((m) => modulesWithLoop.add(m));
+  for (const m of ds.modules) if (isReadable(m) && m.data.loop_ids.length) modulesWithLoop.add(m.meta.id);
+  const modulesWithBuild = new Set(
+    ds.builds
+      .filter(isReadable)
+      .map((b) => b.data.module_id)
+      .filter(Boolean) as string[],
+  );
 
-  // Recency: which modules do the most recent sources still talk about?
-  const ingested = ds.sources.filter((s) => s.data.access === "read_full" || s.data.access === "read_partial");
+  // Recency: which modules do the most recent sources still talk about? Only sources HQ can read count.
+  const ingested = ds.sources.filter((s) => isReadable(s) && (s.data.access === "read_full" || s.data.access === "read_partial"));
   const newest = ingested.map((s) => sourceDate(s.data)).filter((d): d is string => d !== null).sort().at(-1) ?? null;
   const cutoff: string | null = newest ? shiftDate(newest, -windowDays) : null;
   const stale: HealthItem[] = [];
   if (newest && cutoff) {
     const lastSeen = moduleLastSeen(ds);
     for (const m of ds.modules) {
-      const seen = lastSeen.get(m.meta.id) ?? null;
-      if (!seen) {
+      const seen = isReadable(m) ? (lastSeen.get(m.meta.id) ?? null) : null;
+      if (!isReadable(m)) {
+        stale.push(item(m, CANNOT_COUNT));
+      } else if (!seen) {
         stale.push(item(m, "No dated source refers to this module."));
       } else if (seen < cutoff) {
         stale.push(item(m, `Last referred to by a source dated ${seen}.`));
@@ -729,43 +853,56 @@ export function missingWork(ds: DatasetView, windowDays = 21): MissingWork {
   }
 
   return {
-    requirements_without_implementation_record: live
-      .filter((r) => r.data.implementation_state === "no_record")
-      .map((r) => item(r, "No implementation record is linked or reported.")),
-    requirements_without_test_evidence: live.flatMap((r) => {
-      const evidence = requirementTestEvidence(ds, r.data);
-      if (evidence.verified.length > 0) return [];
-      const parts: string[] = [];
-      if (evidence.unverified.length > 0) parts.push(`only unverified claims are linked (${evidence.unverified.join(", ")})`);
-      if (evidence.missing.length > 0) parts.push(`linked ids that are not evidence records: ${evidence.missing.join(", ")}`);
-      const note = parts.length === 0 ? "No test or acceptance evidence is linked." : `No verified evidence: ${parts.join("; ")}.`;
-      return [item(r, note)];
-    }),
-    requirements_unreviewed: ds.requirements
-      .filter((r) => r.data.disposition === "unreviewed")
-      .map((r) => item(r, "Registered from a source; the founder has not confirmed its standing in HQ.")),
-    requirements_without_module: live
-      .filter((r) => r.data.module_ids.length === 0)
-      .map((r) => item(r, "Not linked to any module.")),
-    modules_without_source_evidence: ds.modules
-      .filter((m) => m.data.evidence_level !== "documented_in_sources")
-      .map((m) =>
-        item(
-          m,
-          m.data.evidence_level === "commission_list_only"
-            ? "Named in the commission's illustrative module list; no accessible source describes it."
-            : "Named in accessible sources, but no source describes it in substance.",
-        ),
-      ),
-    modules_without_learning_loop: ds.modules
-      .filter((m) => ["module", "product", "programme", "submodule"].includes(m.data.kind) && !modulesWithLoop.has(m.meta.id))
-      .map((m) => item(m, "No learning loop has been recovered for this module.")),
-    modules_without_build: ds.modules
-      .filter((m) => ["module", "product", "submodule"].includes(m.data.kind) && !modulesWithBuild.has(m.meta.id))
-      .map((m) => item(m, "No executable version is on record.")),
-    sources_not_accessible: ds.sources
-      .filter((s) => s.data.access === "not_accessible")
-      .map((s) => item(s, s.data.authority_note || "Named, but not accessible to this build.")),
+    requirements_without_implementation_record: listed(
+      live,
+      (r) => r.data.implementation_state === "no_record",
+      () => "No implementation record is linked or reported.",
+    ),
+    requirements_without_test_evidence: listed(
+      live,
+      (r) => requirementTestEvidence(ds, r.data).verified.length === 0,
+      (r) => {
+        const evidence = requirementTestEvidence(ds, r.data);
+        const parts: string[] = [];
+        if (evidence.unverified.length > 0) parts.push(`only unverified claims are linked (${evidence.unverified.join(", ")})`);
+        if (evidence.unreadable.length > 0) parts.push(`linked evidence HQ cannot read: ${evidence.unreadable.join(", ")}`);
+        if (evidence.missing.length > 0) parts.push(`linked ids that are not evidence records: ${evidence.missing.join(", ")}`);
+        return parts.length === 0 ? "No test or acceptance evidence is linked." : `No verified evidence: ${parts.join("; ")}.`;
+      },
+    ),
+    requirements_unreviewed: listed(
+      ds.requirements,
+      (r) => r.data.disposition === "unreviewed",
+      () => "Registered from a source; the founder has not confirmed its standing in HQ.",
+    ),
+    requirements_without_module: listed(
+      live,
+      (r) => r.data.module_ids.length === 0,
+      () => "Not linked to any module.",
+    ),
+    modules_without_source_evidence: listed(
+      ds.modules,
+      (m) => m.data.evidence_level !== "documented_in_sources",
+      (m) =>
+        m.data.evidence_level === "commission_list_only"
+          ? "Named in the commission's illustrative module list; no accessible source describes it."
+          : "Named in accessible sources, but no source describes it in substance.",
+    ),
+    modules_without_learning_loop: listed(
+      ds.modules,
+      (m) => ["module", "product", "programme", "submodule"].includes(m.data.kind) && !modulesWithLoop.has(m.meta.id),
+      () => "No learning loop has been recovered for this module.",
+    ),
+    modules_without_build: listed(
+      ds.modules,
+      (m) => ["module", "product", "submodule"].includes(m.data.kind) && !modulesWithBuild.has(m.meta.id),
+      () => "No executable version is on record.",
+    ),
+    sources_not_accessible: listed(
+      ds.sources,
+      (s) => s.data.access === "not_accessible",
+      (s) => s.data.authority_note || "Named, but not accessible to this build.",
+    ),
     not_in_recent_sources: { cutoff, newest, window_days: windowDays, items: stale },
   };
 }
@@ -789,8 +926,9 @@ function sourceDate(s: SourceRecord): string | null {
 /** For each module, the latest date of any source that a record about that module cites. */
 export function moduleLastSeen(ds: DatasetView): Map<string, string> {
   const dateOf = new Map<string, string>();
+  // H6a: a source HQ cannot read gives no date, and a record HQ cannot read refers to nothing.
   for (const s of ds.sources) {
-    const date = sourceDate(s.data);
+    const date = isReadable(s) ? sourceDate(s.data) : null;
     if (date) dateOf.set(s.meta.id, date);
   }
   const lastSeen = new Map<string, string>();
@@ -802,9 +940,9 @@ export function moduleLastSeen(ds: DatasetView): Map<string, string> {
       if (!current || date > current) lastSeen.set(moduleId, date);
     }
   };
-  for (const m of ds.modules) bump(m.meta.id, citedSourceIds(m.data));
+  for (const m of ds.modules) if (isReadable(m)) bump(m.meta.id, citedSourceIds(m.data));
   for (const envelope of ds.all()) {
-    if (envelope.meta.type === "module" || envelope.meta.type === "source") continue;
+    if (envelope.meta.type === "module" || envelope.meta.type === "source" || !isReadable(envelope)) continue;
     const data = envelope.data as { module_ids?: string[]; module_id?: string | null };
     const moduleIds = [...(data.module_ids ?? []), ...(data.module_id ? [data.module_id] : [])];
     if (moduleIds.length === 0) continue;
@@ -924,10 +1062,10 @@ export function reviewItems(ds: DatasetView): ReviewItem[] {
   // Acceptance reported for a build with no acceptance instrument or decision on record.
   // A build the founder has accepted or rejected in HQ is decided; nothing is pending for it.
   for (const b of ds.builds) {
-    const state = acceptanceOf(b.data)?.state;
+    const state = hqAcceptanceOf(b)?.state;
     if (b.data.standing !== "accepted_reported" || state === "accepted" || state === "rejected") continue;
     if (!hasAcceptanceInstrument(ds, b)) {
-      const sourced = buildAcceptanceIsSourced(b.data);
+      const sourced = isReadable(b) && buildAcceptanceIsSourced(b.data);
       items.push({
         key: `acc:${b.meta.id}`,
         kind: "missing_acceptance_evidence",
@@ -945,21 +1083,22 @@ export function reviewItems(ds: DatasetView): ReviewItem[] {
     if (r.data.implementation_state !== "implemented_tested") continue;
     const evidence = requirementTestEvidence(ds, r.data);
     if (evidence.verified.length + evidence.unverified.length > 0) continue;
+    const problems = [
+      ...(evidence.missing.length > 0 ? [`The linked ids are not evidence records in the register: ${evidence.missing.join(", ")}.`] : []),
+      ...(evidence.unreadable.length > 0 ? [`HQ cannot read the linked evidence in full: ${evidence.unreadable.join(", ")}.`] : []),
+    ];
     items.push({
       key: `tnoev:${r.meta.id}`,
       kind: "tested_without_evidence",
       title: `${r.meta.id} is marked "implemented and tested", but no evidence record is linked`,
-      detail:
-        evidence.missing.length > 0
-          ? `The linked ids are not evidence records in the register: ${evidence.missing.join(", ")}.`
-          : "Link the evidence record that shows the tests, or change the implementation state.",
+      detail: problems.length > 0 ? problems.join(" ") : "Link the evidence record that shows the tests, or change the implementation state.",
       refs: [ref(r.meta.id)],
     });
   }
 
   // Tests without acceptance.
   for (const m of ds.modules) {
-    if (moduleStanding(m.data).headline === "tested_not_accepted") {
+    if (standingOf(m).headline === "tested_not_accepted") {
       items.push({
         key: `tna:${m.meta.id}`,
         kind: "tests_without_acceptance",
@@ -983,17 +1122,22 @@ export function reviewItems(ds: DatasetView): ReviewItem[] {
     }
   }
 
-  // Dangling references.
+  // Dangling references. H6a: a reference resolves only to a record HQ can read; one to a record that
+  // fails validation is listed too, and says so.
   for (const envelope of ds.all()) {
-    const missing = [...outgoingRefs(envelope.meta.type, envelope.data), ...citedSourceIds(envelope.data)].filter(
-      (id) => !ds.byId(id) && !/^(FD|OPEN|PROP)-HQ-/.test(id),
-    );
+    const missing = [...outgoingRefs(envelope.meta.type, envelope.data), ...citedSourceIds(envelope.data)].filter((id) => {
+      const target = ds.byId(id);
+      return target ? !isReadable(target) && id !== envelope.meta.id : !/^(FD|OPEN|PROP)-HQ-/.test(id);
+    });
     for (const id of new Set(missing)) {
+      const held = ds.byId(id) !== undefined;
       items.push({
         key: `dangling:${envelope.meta.id}:${id}`,
         kind: "dangling_reference",
-        title: `${envelope.meta.id} refers to ${id}, which is not in the register`,
-        detail: "Either the referenced record was never captured or the reference is wrong.",
+        title: held ? `${envelope.meta.id} refers to ${id}, which HQ cannot read in full` : `${envelope.meta.id} refers to ${id}, which is not in the register`,
+        detail: held
+          ? "The referenced record is stored in a form that does not pass validation, so it settles nothing here."
+          : "Either the referenced record was never captured or the reference is wrong.",
         refs: [ref(envelope.meta.id)],
       });
     }
@@ -1051,8 +1195,10 @@ export function reviewItems(ds: DatasetView): ReviewItem[] {
  * (decision_ids and the like), because a proposal can set those.
  */
 export function hasAcceptanceInstrument(ds: DatasetView, b: Envelope<BuildRecord>): boolean {
+  // H6a: only records HQ can read are instruments (an evidence record that fails validation is none).
   const evidence = ds.evidence.some(
     (e) =>
+      isReadable(e) &&
       e.data.build_id === b.meta.id &&
       e.data.type === "founder_acceptance" &&
       (e.data.verification === "source_reported" || e.data.verification === "hq_verified"),
@@ -1060,10 +1206,11 @@ export function hasAcceptanceInstrument(ds: DatasetView, b: Envelope<BuildRecord
   if (evidence) return true;
   // G1e: a founder decision counts only while it is the one the build's current HQ acceptance names,
   // with state accepted. An acceptance the founder later cleared, or replaced by a rejection, is none.
-  const current = acceptanceOf(b.data);
+  const current = hqAcceptanceOf(b);
   if (current?.state !== "accepted") return false;
   return ds.decisions.some(
     (d) =>
+      isReadable(d) &&
       d.meta.id === current.decision_id &&
       d.data.recorded_in === "hq" &&
       d.data.status === "issued" &&
@@ -1099,9 +1246,11 @@ function haystacks(ds: DatasetView) {
   if (!map) {
     map = new Map();
     for (const envelope of ds.all()) {
+      // H6b: a record HQ cannot read is found by what it holds as stored too, so nothing it says is lost to search.
+      const stored = isReadable(envelope) ? "" : ` \n ${flattenText(storedDataOf(ds, envelope))}`;
       map.set(`${envelope.meta.type}:${envelope.meta.id}`, {
         title: `${envelope.meta.id} ${recordTitle(envelope.meta.type, envelope.data)}`.toLowerCase(),
-        body: flattenText(envelope.data).toLowerCase(),
+        body: `${flattenText(envelope.data)}${stored}`.toLowerCase(),
       });
     }
     haystackCache.set(ds, map);
@@ -1148,7 +1297,7 @@ export function search(ds: DatasetView, query: string, options: { types?: Record
       id: envelope.meta.id,
       title: recordTitle(envelope.meta.type, envelope.data),
       type_label: RECORD_TYPE_LABEL[envelope.meta.type],
-      snippet: snippetFor(flattenText(envelope.data), terms[0]),
+      snippet: snippetFor(`${flattenText(envelope.data)}${isReadable(envelope) ? "" : ` \n ${flattenText(storedDataOf(ds, envelope))}`}`, terms[0]),
       score,
     });
   }
@@ -1186,14 +1335,17 @@ export interface RequirementTestEvidence {
   unverified: string[];
   /** Linked ids that are not evidence records in this dataset. */
   missing: string[];
+  /** Linked evidence records HQ cannot read in full: they prove nothing (H6a). */
+  unreadable: string[];
 }
 
 /** Resolve a requirement's linked evidence ids against the dataset and sort them by what they prove. */
 export function requirementTestEvidence(ds: DatasetView, r: RequirementRecord): RequirementTestEvidence {
-  const out: RequirementTestEvidence = { verified: [], unverified: [], missing: [] };
+  const out: RequirementTestEvidence = { verified: [], unverified: [], missing: [], unreadable: [] };
   for (const id of Array.isArray(r.linked_evidence_ids) ? r.linked_evidence_ids : []) {
     const e = ds.get("evidence", id);
     if (!e) out.missing.push(id);
+    else if (!isReadable(e)) out.unreadable.push(id);
     else if (e.data.verification === "source_reported" || e.data.verification === "hq_verified") out.verified.push(id);
     else out.unverified.push(id);
   }
@@ -1206,6 +1358,9 @@ export function requirementTestEvidence(ds: DatasetView, r: RequirementRecord): 
  * their number is checked (the older, weaker rule).
  */
 export function isOutstanding(r: RequirementRecord, ds?: DatasetView): boolean {
+  // H6a: a requirement HQ cannot read is outstanding, whatever it holds.
+  const envelope = ds?.get("requirement", r.id);
+  if (envelope && !isReadable(envelope)) return true;
   if (!isLive(r.disposition)) return false;
   if (r.implementation_state !== "implemented_tested") return true;
   return ds ? requirementTestEvidence(ds, r).verified.length === 0 : r.linked_evidence_ids.length === 0;
@@ -1233,6 +1388,12 @@ export function filterRequirements(ds: DatasetView, filter: RequirementFilter): 
 export interface ModuleBrief {
   module: Envelope<ModuleRecord>;
   standing: ModuleStanding;
+  /** False when the module's own record fails validation: its figures are not reliable (H6b). */
+  reliable: boolean;
+  /** Records that fail validation and name this module in their stored data, itself included (H6b). */
+  unreadable_records: RecordRef[];
+  /** What unreadable_records means, in words; null when there are none. */
+  unreadable_note: string | null;
   parent: RefSummary | null;
   children: RefSummary[];
   loops: RefSummary[];
@@ -1293,9 +1454,13 @@ export function moduleBrief(ds: DatasetView, id: string): ModuleBrief | null {
   const related = ds.all().filter((e) => e.meta.type !== "module" && e.meta.type !== "source" && touches(e.data as never));
   for (const envelope of related) citedSourceIds(envelope.data).forEach((s) => sourceIds.add(s));
 
+  const unreadable = [...unreadableNaming(ds, id)];
   return {
     module,
-    standing: moduleStanding(module.data),
+    standing: standingOf(module),
+    reliable: isReadable(module),
+    unreadable_records: unreadable,
+    unreadable_note: unreadableNote(id, unreadable),
     parent: module.data.parent_id ? ref(module.data.parent_id) : null,
     children: ds.modules.filter((m) => m.data.parent_id === id).map((m) => ref(m.meta.id)),
     loops: [...loopIds].sort().map(ref),
@@ -1366,7 +1531,8 @@ export function stageCoverage(ds: DatasetView): Record<Stage, { module_id: strin
     Stage,
     Map<string, Set<string>>
   >;
-  for (const { data } of ds.loops) {
+  // H6a: only a loop HQ can read shows a module contributing to a stage.
+  for (const { data } of ds.loops.filter(isReadable)) {
     for (const step of data.steps) {
       if (step.shared_stage === "none") continue;
       const modules = step.module_id ? [step.module_id] : data.module_ids;
@@ -1443,6 +1609,12 @@ export interface Dependencies {
   depends_on: { ref: RefSummary; relation: string }[];
   depended_on_by: { ref: RefSummary; relation: string }[];
   blockers: { ref: RefSummary | null; text: string }[];
+  /**
+   * L8: on a record that fails validation, each of its lists that conforming emptied, with the words
+   * "Not readable — see the stored record": the empty lists above may be empty because HQ cannot read
+   * what is stored, not because nothing is recorded. Absent otherwise.
+   */
+  unreadable_fields?: Record<string, string>;
 }
 
 export function dependencies(ds: DatasetView, type: RecordType, id: string): Dependencies | null {
@@ -1487,7 +1659,8 @@ export function dependencies(ds: DatasetView, type: RecordType, id: string): Dep
     if (r.data.blocked_by.includes(id)) depended_on_by.push({ ref: ref(r.meta.id), relation: "is blocked by this" });
   }
 
-  return { ref: { type, id }, title: recordTitle(type, envelope.data), depends_on, depended_on_by, blockers };
+  const unreadable = unreadableFieldNotes(ds, envelope);
+  return { ref: { type, id }, title: recordTitle(type, envelope.data), depends_on, depended_on_by, blockers, ...(unreadable ? { unreadable_fields: unreadable } : {}) };
 }
 
 // ---------------------------------------------------------------------------

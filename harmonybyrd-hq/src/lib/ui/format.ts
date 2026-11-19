@@ -6,6 +6,7 @@ import {
   DEFECT_SEVERITIES,
   DEFECT_STATUSES,
   type Epistemic,
+  EPISTEMIC_LABEL,
   EVIDENCE_LEVELS,
   EVIDENCE_TYPES,
   EVIDENCE_VERIFICATION,
@@ -13,6 +14,7 @@ import {
   LIFECYCLE_STATES,
   MODULE_KINDS,
   OPEN_ITEM_KINDS,
+  MADE_BY_NOT_STATED,
   PATHWAY_BASES,
   RECOMMENDATION_STATUSES,
   REQUIREMENT_ATTRIBUTIONS,
@@ -35,6 +37,25 @@ export const EPISTEMIC_TONE: Record<Epistemic, { tone: Tone; glyph: string; shor
   submitter_claim: { tone: "warn", glyph: "?", short: "Submitter's claim" },
   no_evidence: { tone: "ghost", glyph: "∅", short: "No evidence" },
 };
+
+/**
+ * How a pathway's basis is shown. "commission_example" (only an import sets it) says the commission
+ * gives the pathway as an example; every other basis is an epistemic label, "submitter_claim" (what a
+ * pathway created by proposal has) included. Anything else is null: the screen says it cannot read it.
+ */
+export function pathwayBasisDisplay(value: unknown): { tone: Tone; glyph: string; short: string; title: string } | null {
+  if (value === "commission_example") return { tone: "founder", glyph: "★", short: "Example given in the commission", title: "The commission gives this pathway as an example" };
+  if (typeof value !== "string" || !(PATHWAY_BASES as readonly string[]).includes(value) || !Object.hasOwn(EPISTEMIC_TONE, value)) return null;
+  const t = EPISTEMIC_TONE[value as Epistemic];
+  return { tone: t.tone, glyph: t.glyph, short: t.short, title: EPISTEMIC_LABEL[value as Epistemic] };
+}
+
+/** Who made a recommendation, as a sentence for its page. A recommendation that names nobody is nobody's, not HQ's (L7). */
+export function recommendationMaker(madeBy: unknown): string {
+  if (madeBy === MADE_BY_NOT_STATED) return "This recommendation does not say who made it.";
+  if (typeof madeBy === "string" && madeBy && madeBy !== NOT_VALID) return `This is a recommendation by ${madeBy}.`;
+  return "This recommendation names no maker HQ can read.";
+}
 
 /** What a screen shows in place of a stored value of the wrong kind, or one outside its field's list (G1f). Defined with the conformer. */
 export { NOT_VALID };
@@ -194,6 +215,8 @@ const STATUS_LABEL: Record<string, string> = {
   read_partial: "Read in part",
   inventoried_not_ingested: "Inventoried, not ingested",
   not_accessible: "Not accessible",
+  commission_example: "Example given in the commission",
+  submitter_claim: "Submitter's claim",
 };
 
 export function statusLabel(value: unknown): string {

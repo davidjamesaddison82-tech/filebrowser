@@ -26,13 +26,14 @@ Built under commission **HB-HQ-P02-R1**.
 
 Three rules are enforced by the database, not by convention:
 
-1. **Nothing without a source.** A record gets in only if every quotation in it is found, verbatim, in the snapshot of the document it cites. This is checked when a pack is imported and again for every proposal, when it is submitted and when the founder accepts it. A quotation must be at least twelve characters long once spacing is normalised.
+1. **Nothing without a source.** A record gets in only if every quotation in it is found, verbatim, in the snapshot of the document it cites. This is checked when a pack is imported and again for every proposal, when it is submitted and when the founder accepts it. A quotation must be at least twelve characters long once spacing is normalised. A verbatim quotation shows that the words are in the source, not that they are about what they are attached to, so whatever enters through the proposal inbox is the submitter's claim: only an import can label something as reported by a source, and records HQ did not write (evidence a source reports or HQ's build checked, sources HQ has read) cannot be rewritten by proposal.
 2. **Nothing is overwritten.** Every change is a new version; any earlier revision can be read exactly as it stood.
-3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing. No proposal can even claim an acceptance, or change a build a source reports as accepted except to withdraw that report: acceptance is recorded only by a founder decision in HQ, or reported by an imported source. The database checks the values that drive these labels itself, so a proposal that goes round the application cannot store a build standing such as `accepted` or a founder-acceptance state such as `Yes` either.
+3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing. No proposal can even claim an acceptance, or change a build a source reports as accepted except to withdraw that report: acceptance is recorded only by a founder decision in HQ, or reported by an imported source. Nor can a proposal say a requirement is implemented and tested. The database checks the values that drive these labels, and the fields each record type has, itself, so a proposal that goes round the application cannot store a build standing such as `accepted`, a founder-acceptance state such as `Yes`, or a look-alike field such as `"hq_acceptance "` either.
 
 ## Quick start
 
-Requirements: Node.js 22.12 or later, PostgreSQL 16.
+Requirements: Node.js 22.12 or later, PostgreSQL 16. For the browser tests, the Chromium that
+Playwright drives (`npx playwright install chromium`); for the mutation check, `python3`.
 
 ```bash
 cd harmonybyrd-hq
@@ -41,6 +42,10 @@ docker compose up -d        # or point .env.local at any PostgreSQL 16 server (s
 npm run setup               # creates or completes .env.local, migrates, creates identities, imports the pack
 npm run dev                 # http://localhost:3210
 ```
+
+On a PostgreSQL server that already holds another HQ installation, give this one its own
+application role name in `DATABASE_URL` first: setup stops rather than change the password of a
+role that exists (docs/INSTALL.md).
 
 `npm run setup` prints a passphrase for each local identity (founder, developer, reader) and an
 API token for each AI client (claude, chatgpt). They are also saved in `.hq-local-credentials.json`,
@@ -58,13 +63,17 @@ npm run test:repeat    # run the suites twice from a clean database and compare 
 npm run test:mutation  # remove one database protection at a time and check that a test notices
 ```
 
-Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md), which names the
-commit it was made on. An adversarial review, by reviewers who had not written the code, confirmed 71
-defects by reproduction. Every original attack was then re-run against the fixes, and a second round
-fixed what was only partly closed. A re-check of the second round found ways round some of its
-rules, mostly by calling the database directly, and one serious sign-in defect; a third round
-(migration 0008) fixed those and has not yet been re-checked. Each finding, and what was done about
-it, is in [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) (generated) and
+[docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) is a generated report of one run. It names the commit it
+was made on and describes that commit, not necessarily the code as it is now.
+
+An adversarial review confirmed 71 defects by reproduction. The reviewers had not written the code,
+but they — like the engineers who fixed the defects and the verifiers who re-checked the fixes — were
+AI agents of the same build process, not independent people. The defects were fixed in rounds, and
+each of the first three rounds was re-checked by re-running the attacks. The re-check of the third round (migration
+0008) gave 38 results: 24 fixed, 13 only partly fixed and 1 a documented limit; it found 30 new
+defects, none of high severity, 8 of medium and 22 of low. A fourth round (migration 0009) fixed what
+it found and has not yet been re-checked. Each finding, and what was done about it, is in
+[docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) (generated) and
 [docs/PROGRESS-REGISTER.md](docs/PROGRESS-REGISTER.md); what remains is in
 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). None of this satisfies an acceptance gate.
 
@@ -84,8 +93,8 @@ fails if git would ignore one.
 | [docs/API.md](docs/API.md) | REST and MCP reference |
 | [docs/CONNECTING-AI-CLIENTS.md](docs/CONNECTING-AI-CLIENTS.md) | Connecting Claude and ChatGPT: what is tested, what is not |
 | [docs/TESTING.md](docs/TESTING.md) | What each suite proves, the acceptance checks, what is not tested |
-| [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | Generated report of the last run |
-| [docs/REPEATABILITY.md](docs/REPEATABILITY.md) | Generated report of the last run-twice comparison |
+| [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md) | Generated report of one full run, on the commit it names |
+| [docs/REPEATABILITY.md](docs/REPEATABILITY.md) | Generated report of one run-twice comparison, on the commit it names |
 | [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) | Generated report of the adversarial review: every finding and what was done |
 | [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) | Gaps, blocked integrations, limits |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Engineering decisions and their reasons |

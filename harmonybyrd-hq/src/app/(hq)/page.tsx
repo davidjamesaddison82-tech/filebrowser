@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { EcosystemMap } from "@/components/ecosystem-map";
 import { Card, Chip, Empty, IdTag, PageHead, RecordLink, Tile } from "@/components/ui";
+import { isReadable } from "@/lib/domain/conform";
 import { developmentHealth, ecosystemOverview, missingWork } from "@/lib/domain/derive";
 import { loadPage, type SearchParams } from "@/lib/server/page";
 import { listChanges } from "@/lib/server/store";
@@ -23,12 +24,13 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
   const changes = (await listChanges(principal, ctx.pinned ? ctx.head - shownRev + 6 : 6)).filter((c) => c.rev <= shownRev).slice(0, 6);
   const layout = layoutMap(overview);
   const recommendations = [...ds.recommendations].sort((a, b) => a.data.rank - b.data.rank);
-  const withBuild = new Set(ds.builds.map((b) => b.data.module_id).filter(Boolean));
+  // ROUND4 H6a: a record HQ cannot read in full counts for nothing here either.
+  const withBuild = new Set(ds.builds.filter(isReadable).map((b) => b.data.module_id).filter(Boolean));
   // "Read" means HQ holds a text snapshot it drew records from. Repositories that were inspected but
   // hold nothing, and artefacts inventoried but not ingested, are not counted as read.
-  const readSources = ds.sources.filter((s) => s.data.text_snapshot != null).length;
+  const readSources = ds.sources.filter((s) => isReadable(s) && s.data.text_snapshot != null).length;
   const unread = ds.sources.length - readSources;
-  const unreached = ds.sources.filter((s) => s.data.text_snapshot == null && s.data.access === "not_accessible").length;
+  const unreached = ds.sources.filter((s) => isReadable(s) && s.data.text_snapshot == null && s.data.access === "not_accessible").length;
 
   const missingCounts: [MissingKey, number][] = [
     ["sources_not_accessible", missing.sources_not_accessible.length],
@@ -67,6 +69,15 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
           </>
         }
       />
+
+      {health.unreadable_records.length > 0 ? (
+        <div className="notice bad" role="alert" data-testid="unreadable-dashboard">
+          <strong>
+            HQ cannot read {plural(health.unreadable_records.length, "record")} in full; the figures of the modules they name may be incomplete.
+          </strong>{" "}
+          <Link href={withRev("/health/unreadable_records", rev)}>See the records</Link>
+        </div>
+      ) : null}
 
       <Card
         title="Ecosystem overview"

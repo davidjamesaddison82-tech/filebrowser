@@ -56,3 +56,11 @@ export function reportedAcceptanceEffect(payload: unknown, targetType: string | 
   const withdraws = typeof after === "string" && after !== "accepted_reported" && (BUILD_STANDINGS as readonly string[]).includes(after);
   return withdraws ? "withdraws" : "keeps";
 }
+
+/**
+ * ROUND4 H1, H3: one plain sentence on what any proposal may say, shown on every propose form. A
+ * proposal's statement is the submitter's own claim; source labels and "implemented and tested" are not
+ * a proposal's to give.
+ */
+export const SUBMITTER_CLAIM_SENTENCE =
+  "Whatever you propose is recorded as your own claim: label a statement submitter_claim (it may quote a source) or no_evidence, because only an import can say that a source reports something, and only an import or a founder decision can say a requirement is implemented and tested.";

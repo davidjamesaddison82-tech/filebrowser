@@ -1,5 +1,5 @@
 import { notFound as notFoundError } from "@/lib/server/errors";
-import { argsFromQuery, readJson, withApi } from "@/lib/server/http";
+import { argsFromQuery, otherMethods, readJson, withApi } from "@/lib/server/http";
 import { findTool } from "@/lib/server/tools";
 
 type Params = { params: Promise<{ name: string }> };
@@ -33,3 +33,6 @@ export async function POST(request: Request, { params }: Params) {
     return tool.run(principal, await readJson(request));
   });
 }
+
+/** The methods this route does not implement: 405 (OPTIONS 204) with Allow and a request id. */
+export const { PUT, PATCH, DELETE, OPTIONS } = otherMethods(["GET", "POST"]);

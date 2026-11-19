@@ -36,7 +36,9 @@ Twelve record types: `source`, `module`, `loop`, `pathway`, `requirement`, `deci
 `src/lib/domain/schemas.ts`, and used to validate imports, to validate proposals and to type every read.
 The fields whose value comes from a fixed list are also held in the database (`hq.field_enums`, the
 same rows as `FIELD_ENUMS` in `schemas.ts`; a test compares them), so the database refuses a value
-outside its list in a proposal even when a caller goes round the application.
+outside its list in a proposal even when a caller goes round the application. So are the top-level
+fields each record type declares (`hq.record_fields`, the same as `RECORD_FIELDS` in `schemas.ts`;
+`tests/db/record-fields.test.ts` compares them): a proposal may set no other field.
 
 **A statement always says what kind of statement it is.** A factual field is a *claim*: text, an
 epistemic label and citations.
@@ -55,8 +57,13 @@ epistemic label and citations.
 A claim labelled `reported`, `design_intention`, `source_recommendation` or `founder_statement` must
 carry at least one citation, and a citation is a verbatim quotation, with the id of the source it
 comes from, of at least twelve characters once spacing is normalised (every run of whitespace counts
-as one space, and leading and trailing spaces do not count). A proposal may never use `verified` or
-`hq_recommendation` (docs/GOVERNANCE.md).
+as one space, and leading and trailing spaces do not count). A verbatim quotation shows that the
+words are in the source, not that they are about what they are attached to. So a proposal may never
+use `verified` or `hq_recommendation`, and may carry one of the four source labels (or a pathway's
+basis `commission_example`, which says the commission gives the pathway as an example) only where the
+record as stored already holds that very claim at the same place: what enters through the inbox is
+the submitter's claim, and a pathway created by proposal has the basis `submitter_claim`
+(docs/GOVERNANCE.md).
 
 **A module is never one percentage.** It has twelve independent lifecycle dimensions — documented,
 designed, prototyped, implemented, automated tests, browser tested, hardware tested, independently
@@ -70,7 +77,8 @@ build's standing `accepted_reported` counts as a reported acceptance only when i
 labelled `reported` or `founder_statement` and quotes a source; otherwise it is shown as “Acceptance
 claimed — no source quoted”. Neither kind of acceptance can be introduced by a proposal, and a build a
 source reports as accepted can be changed by proposal only to withdraw the report (docs/GOVERNANCE.md). A
-submitter's claim never raises a standing; it is listed under *Unverified claims*. A founder
+submitter's claim never raises a standing; it is listed under *Unverified claims*. A module whose own
+record fails validation has the standing “Not reliable”, and nothing in it is counted. A founder
 rejection recorded in HQ gives the standing “Founder rejected in HQ”, which outranks everything else.
 
 **A requirement has two halves.** The original (`exact_wording`, `source_id`, `locator`,
@@ -79,7 +87,9 @@ refuses. A proposal that creates a requirement gives them, and its wording must 
 source (at least eight non-space characters). The working half (title, interpretation, links to code,
 tests, builds and decisions) can be changed by accepted proposal. Its *standing* (`disposition`) can
 be changed only by a founder decision. A requirement is outstanding until it is recorded as
-implemented and tested **and** has linked evidence that a source reports or HQ's build checked.
+implemented and tested **and** has linked evidence that a source reports or HQ's build checked and
+that passes validation. Only an import can record it as implemented and tested: a proposal can
+neither set that state nor change what a tested requirement links to.
 
 **Dates** (`doc_date`, `updated`, `source_date`, `date`) are `YYYY-MM-DD…` or null.
 
@@ -111,12 +121,27 @@ Every reader — the screens, the REST API and the MCP tools — computes on it 
 (`src/lib/domain/conform.ts`): a value of the wrong kind, or outside its list, reads “Not a valid
 value”; a reference of the wrong kind is null; a list of the wrong kind is empty, and an element of
 the wrong kind is left out; a value of the right kind that breaks its field's rule (an id that is not
-an id, a quotation too short to be one) is null or left out. Conforming only takes a meaning away:
-nothing reads as accepted, tested, checked or linked because of a value that is not valid. A rule
+an id, a quotation too short to be one) is null or left out; a missing field takes its default only
+when the default says nothing (an empty list or object, null, false, or a value such as `unknown`
+or `none`), and otherwise reads “Not a valid value”. Conforming only takes a meaning away. A rule
 across the fields of an object (a lifecycle “yes” with no quotation) is left to the derivations,
-which never count such a statement and list it as an unverified claim. The record's page says it
-does not pass validation and shows, or links to, the record exactly as stored; an API answer that
-names such a record says so too, with the problems and the stored form (docs/API.md).
+which never count such a statement and list it as an unverified claim.
+
+Conforming is not enough on its own, because what survives it could still count, and what it leaves
+out could be negative. So each conformed record's `meta` says `valid: false`, and one test,
+`isReadable` (`conform.ts`), is asked by every place in `derive.ts` that counts something as proof
+(the list is at the top of that file): a record that fails validation never counts as an acceptance,
+a test, a check, a lifecycle entry or a link that resolves something, while a defect HQ cannot read
+counts as open and a requirement as outstanding. The view also keeps, for each module, the records
+that fail validation and hold its id anywhere in their stored data, so the module's figures say they
+may be incomplete (`unreadable_records`), and it keeps those records' stored data, so search still
+finds what they say. The record's page says it does not pass validation and shows, or links to, the
+record exactly as stored; an API answer that names such a record says so too, with the problems and
+the stored form (docs/API.md). A list that is empty only because conforming emptied it (its stored
+value is not an empty list) is never shown or returned as “nothing”: the view records which lists
+those are (`unreadableFields`, `conform.ts`), the record's page shows each as “Not readable — see the
+stored record”, and an API answer for the record names them in `unreadable_fields` with those words. The *Propose a change* form reads the record as stored, never the
+view, so “Not a valid value” is never offered back; a proposal containing it is refused.
 
 ## Storage: append-only, revisioned, hash-chained
 
@@ -195,6 +220,8 @@ import or by proposal.
 `authenticated` with `SET LOCAL ROLE`, and puts the caller's identity in `request.jwt.claims` — the
 same model Supabase's API layer uses. The application's own login role (`hq_app`) owns nothing and
 has no privileges except to assume the API roles, so a bug in the web application cannot bypass the database's rules.
+The role belongs to the whole PostgreSQL server; migration never changes the password of one that
+exists unless told to (docs/INSTALL.md).
 
 - **People** sign in with a passphrase (scrypt). The session is a signed, HTTP-only cookie. After a
   successful sign-in the browser also gets a device cookie, which only the sign-in action reads, to
@@ -202,7 +229,9 @@ has no privileges except to assume the API roles, so a bug in the web applicatio
 - **AI clients and scripts** present a bearer token of the form `hbq_<id>_<secret>`; only its SHA-256 is stored.
 - Reads run in `READ ONLY` transactions. A read cannot write, by construction.
 - The application writes every refusal to the audit log in its own transaction, through
-  `hq.log_refusal`, so it survives the rollback of the request that caused it. A refusal raised
+  `hq.log_refusal`, so it survives the rollback of the request that caused it. Refusals of callers
+  without a valid identity are written in full up to 120 a minute per action and reason, per
+  process, and the rest counted in a summary row (`src/lib/server/audit-limit.ts`). A refusal raised
   inside a database function cannot record itself (the refusal rolls back its own writes), so a
   caller that goes round the application leaves no record of being refused. API roles cannot write
   to the audit log any other way.
@@ -213,7 +242,11 @@ has no privileges except to assume the API roles, so a bug in the web applicatio
 
 `src/lib/server/tools.ts` defines 18 tools (15 read, 3 that add to the inbox). The REST route
 `/api/v1/tools/<name>` and the MCP endpoint `/api/mcp` both dispatch into that registry; neither has
-logic of its own. The MCP endpoint is stateless Streamable HTTP with JSON responses and implements
+logic of its own. The database keeps the tools' names (`hq.tool_names`) so that `hq.log_access` can
+accept exactly the actions the application logs; a test fails if the two lists differ. Every route
+under `src/app/api` but the health check exports the methods it does not implement through one shared handler
+(`otherMethods` in `src/lib/server/http.ts`), which answers 405 with `Allow` and a request id (the MCP
+endpoint's own `GET` and `DELETE` answer 405 the same way). The MCP endpoint is stateless Streamable HTTP with JSON responses and implements
 `initialize`, `ping`, `tools/list` and `tools/call`.
 
 Every answer from every tool is an envelope:
@@ -234,7 +267,7 @@ Every answer from every tool is an envelope:
 
 | Path | Contents |
 | --- | --- |
-| `supabase/migrations/0001…0008` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target; 0008: a build reported as accepted frozen for proposals except to withdraw the report, a module's reported acceptance compared as a whole entry, the database's own check of allowed values (`hq.field_enums`, `hq._check_field_enums`), and bounded audit action names |
+| `supabase/migrations/0001…0009` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target; 0008: a build reported as accepted frozen for proposals except to withdraw the report, a module's reported acceptance compared as a whole entry, the database's own check of allowed values (`hq.field_enums`, `hq._check_field_enums`), and bounded audit action names; 0009: what a proposal may say (`hq._check_proposal_claims`: no source label the record does not already hold, no “implemented and tested”, only declared fields from `hq.record_fields`, never “Not a valid value”), evidence a source reports and sources HQ has read frozen for proposals, no clearing of an acceptance that is not there, `hq.log_access` limited to an exact list with tool names from `hq.tool_names`, and caller text cut in every refusal of the functions it replaces |
 | `src/lib/domain/` | Schemas, the `Dataset` snapshot and its conformed view (`conform.ts`), derivations, pack validation — no database, no network |
 | `src/lib/server/` | Database access, the store, services, tools, HTTP helpers, server actions |
 | `src/lib/auth/` | Passphrases, tokens, sessions, the device cookie (`device.ts`), the sign-in throttle and its lanes (`throttle.ts`), the length limits on sign-in input (`sign-in-input.ts`), the safe redirect after sign-in, the start-up environment check |

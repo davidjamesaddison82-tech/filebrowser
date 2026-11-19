@@ -12,7 +12,7 @@ import { principalFromRequest } from "@/lib/auth/authenticate";
 import { claimsFor, type Principal, publicPrincipal } from "@/lib/auth/principal";
 import { audit } from "@/lib/server/db";
 import { fromDatabaseError, HqError } from "@/lib/server/errors";
-import { assertSameOrigin, json, readBodyText } from "@/lib/server/http";
+import { assertSameOrigin, json, otherMethods, readBodyText } from "@/lib/server/http";
 import { HQ_NOTICE } from "@/lib/server/services";
 import { findTool, TOOLS, toolInputSchema } from "@/lib/server/tools";
 
@@ -214,13 +214,16 @@ export async function POST(request: Request) {
 export async function GET() {
   return json(rpcError(null, -32000, "This MCP server does not offer a server-initiated stream. Use POST."), {
     status: 405,
-    headers: { allow: "POST", "x-request-id": randomUUID() },
+    headers: { allow: "POST, OPTIONS", "x-request-id": randomUUID() },
   });
 }
 
 export async function DELETE() {
   return json(rpcError(null, -32000, "This MCP server is stateless; there is no session to end."), {
     status: 405,
-    headers: { allow: "POST", "x-request-id": randomUUID() },
+    headers: { allow: "POST, OPTIONS", "x-request-id": randomUUID() },
   });
 }
+
+/** The other methods: 405 (OPTIONS 204) with Allow and a request id, as for GET and DELETE above. */
+export const { PUT, PATCH, OPTIONS } = otherMethods(["POST"], "jsonrpc");

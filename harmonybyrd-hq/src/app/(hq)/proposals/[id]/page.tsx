@@ -300,7 +300,7 @@ export default async function ProposalPage({ params, searchParams }: { params: P
                       </span>
                       <div className="li-note">
                         {s.textHeld
-                          ? "HQ holds this source's text. Quotations from it are checked against that text."
+                          ? "HQ holds this source's text. The submitter's quotations from it are checked against that text: HQ checks the words are in the source, not that they support this proposal."
                           : "HQ holds no text for this source, so nothing quoted from it can be checked."}
                       </div>
                     </li>

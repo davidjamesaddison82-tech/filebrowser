@@ -96,7 +96,12 @@ export async function signIn(_previous: { error?: string } | undefined, formData
       objectType: "principal",
       objectId: handle,
       outcome: "denied",
-      detail: { failures: signInThrottle().failures(lane), lane: lane.device ? "device" : "anonymous", ...(address ? { client_address: address } : {}) },
+      detail: {
+        reason: "no_match",
+        failures: signInThrottle().failures(lane),
+        lane: lane.device ? "device" : "anonymous",
+        ...(address ? { client_address: address } : {}),
+      },
     });
     return { error: NO_MATCH };
   }

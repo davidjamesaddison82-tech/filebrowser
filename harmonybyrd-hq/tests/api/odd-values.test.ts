@@ -3,7 +3,7 @@ import { beforeAll, describe, expect, inject, it } from "vitest";
 import { freshWorld, type TestWorld } from "../helpers/db";
 import { TEST_BASE_URL } from "../helpers/env";
 import { api } from "../helpers/http";
-import { fuzz, named, type Planted, plantOddRecords } from "../helpers/odd-values";
+import { fuzz, named, type Planted, plantOddRecords, screensCases } from "../helpers/odd-values";
 
 /**
  * The REST API and the MCP endpoint never fail on a stored record of the wrong shape (round 3, G11a).
@@ -298,7 +298,12 @@ function summarise(answers: Answer[]): { failures: string[]; problems: string[] 
   for (const a of answers) {
     const where = `${a.transport} ${a.call.tool} ${JSON.stringify(a.call.args)}`;
     if (a.status >= 500 || (a.status !== 200 && (a.status < 400 || a.status >= 500))) failures.push(`${where}: ${a.status} ${JSON.stringify(a.body).slice(0, 200)}`);
-    if (a.status === 200) problems.push(...positiveProblems(a.body, where, (base) => baselines.get(`${a.call.tool}:${base}`) ?? new Set()));
+    // Way D keeps every value its fixture record had, so it may show anything a single-record tool shows
+    // about that fixture record, whichever tool this answer comes from. (ROUND4 H6a: a requirement HQ
+    // cannot read is listed as outstanding, so a way-D requirement now appears in the outstanding lists,
+    // with the implementation state its fixture record validly holds, where its fixture record does not.)
+    const anyTool = (base: string) => new Set([...baselines.entries()].filter(([k]) => k.endsWith(`:${base}`)).flatMap(([, v]) => [...v]));
+    if (a.status === 200) problems.push(...positiveProblems(a.body, where, (base) => new Set([...(baselines.get(`${a.call.tool}:${base}`) ?? []), ...anyTool(base)])));
   }
   return { failures, problems };
 }
@@ -404,5 +409,96 @@ describe("an answer says plainly that a stored record is not valid (G11a)", () =
       expect(entry!.problems.length).toBeGreaterThan(0);
       expect(entry!.stored).toEqual(fuzzed.find((r) => r.id === source.id)!.data);
     }
+  });
+});
+
+describe("ROUND4 H6: a record that fails validation never makes anything read better, and is listed on what it names", () => {
+  type Ref = { type: string; id: string };
+  type Brief = { data: { reliable: boolean; unreadable_records: Ref[]; unreadable_note: string | null; standing: { headline: string } }; integrity?: { records: { id: string }[] } };
+  let cases: Planted[];
+
+  beforeAll(async () => {
+    cases = screensCases();
+    await plantOddRecords(cases, "The screens verifier's records (HTTP test, ROUND4 H6)");
+  }, 120_000);
+
+  it("Y15/H6b: Gamma's brief lists the records that name it, says so in words, and the overview says the same words; over MCP too", async () => {
+    const rest = await api<Brief>("/api/v1/tools/get_module_brief?module=MOD-FX-GAMMA", { token: w.tokens.claude });
+    expect(rest.status).toBe(200);
+    const ids = rest.body.data.unreadable_records.map((r) => r.id).sort();
+    expect(ids).toEqual(expect.arrayContaining(["DEF-RV3-MODSTR", "OPEN-RV3-STR", "DEF-R4-COMMA", "EV-R4-HQV", "BLD-R4-ACC"]));
+    expect(rest.body.data.reliable).toBe(true);
+    expect(rest.body.data.unreadable_note).toBe(`${ids.length} records that name this module cannot be read in full; its figures may be incomplete.`);
+    // Each is listed in the answer's integrity block, with its stored form.
+    const listed = new Set(rest.body.integrity!.records.map((r) => r.id));
+    for (const id of ids) expect(listed.has(id), id).toBe(true);
+    const mcp = await mcpCall({ tool: "get_module_brief", args: { module: "MOD-FX-GAMMA" } }, w.tokens.claude);
+    expect((mcp.body as Brief).data.unreadable_note).toBe(rest.body.data.unreadable_note);
+    const overview = await api<{ data: { modules: { id: string; unreadable_note: string | null; unreadable_records: Ref[] }[]; health: Record<string, { count: number; items: { id: string }[] }> } }>(
+      "/api/v1/tools/get_ecosystem_overview",
+      { token: w.tokens.claude },
+    );
+    const gamma = overview.body.data.modules.find((m) => m.id === "MOD-FX-GAMMA")!;
+    expect(gamma.unreadable_note).toBe(rest.body.data.unreadable_note);
+    // Development health lists every record HQ cannot read: the planted ones among them.
+    const unreadable = new Set(overview.body.data.health.unreadable_records.items.map((i) => i.id));
+    for (const c of cases) expect(unreadable.has(c.id), c.id).toBe(true);
+  });
+
+  it("a module whose own record fails validation is not reliable, says so, and counts nothing towards a standing", async () => {
+    const res = await api<Brief>("/api/v1/tools/get_module_brief?module=MOD-RV3-BLK", { token: w.tokens.claude });
+    expect(res.status).toBe(200);
+    expect(res.body.data.reliable).toBe(false);
+    expect(res.body.data.standing.headline).toBe("not_reliable");
+    expect(res.body.data.unreadable_note).toBe("This module's own record cannot be read in full: its figures are not reliable.");
+    const health = await api<{ data: { health: Record<string, { items: { id: string }[] }> } }>("/api/v1/tools/get_ecosystem_overview", { token: w.tokens.claude });
+    expect(health.body.data.health.tested_not_accepted.items.map((i) => i.id)).not.toContain("MOD-RV3-BLK");
+  });
+
+  it("Y14: an evidence record that fails validation is no acceptance instrument: Beta build 2 keeps its review item", async () => {
+    const res = await api<{ data: { items: { key: string }[] } }>("/api/v1/tools/get_review_items", { token: w.tokens.claude });
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.map((i) => i.key)).toContain("acc:BLD-FX-02");
+  });
+
+  it("Y17: a recommendation with no made_by does not read as HQ's builder's", async () => {
+    const res = await api<{ data: { record: { made_by: unknown }; stored: Record<string, unknown> } }>("/api/v1/tools/get_record?type=recommendation&id=REC-RV3-BLK", { token: w.tokens.claude });
+    expect(res.status).toBe(200);
+    expect(res.body.data.record.made_by).toBe("Not a valid value");
+    expect(res.body.data.stored).not.toHaveProperty("made_by");
+  });
+
+  it("L8 (Y15): a list HQ cannot read is answered with the note beside it, never as nothing", async () => {
+    const NOTE = "Not readable — see the stored record";
+    type Deps = { data: { blockers: unknown[]; unreadable_fields?: Record<string, string> }; integrity?: { records: { id: string; unreadable_fields?: Record<string, string> }[] } };
+    const deps = await api<Deps>("/api/v1/tools/get_development_dependencies?type=recommendation&id=REC-RV3-BLK", { token: w.tokens.claude });
+    expect(deps.status).toBe(200);
+    expect(deps.body.data.blockers).toEqual([]);
+    expect(deps.body.data.unreadable_fields).toMatchObject({ blocked_by: NOTE });
+    expect(deps.body.integrity!.records.find((r) => r.id === "REC-RV3-BLK")!.unreadable_fields).toMatchObject({ blocked_by: NOTE });
+    const record = await api<{ data: { record: { blocked_by: unknown }; unreadable_fields?: Record<string, string> } }>("/api/v1/tools/get_record?type=recommendation&id=REC-RV3-BLK", { token: w.tokens.claude });
+    expect(record.body.data.record.blocked_by).toEqual([]);
+    expect(record.body.data.unreadable_fields).toMatchObject({ blocked_by: NOTE });
+    // Control: a valid record's answer carries no such note.
+    const valid = await api<{ data: { unreadable_fields?: unknown } }>("/api/v1/tools/get_development_dependencies?type=recommendation&id=REC-FX-01", { token: w.tokens.claude });
+    expect(valid.body.data).not.toHaveProperty("unreadable_fields");
+  });
+
+  it("an invalid record's stored words are still found by search", async () => {
+    const res = await api<{ data: { hits: { id: string }[] } }>(`/api/v1/tools/search_records?query=${encodeURIComponent("MIDI input is broken")}`, { token: w.tokens.claude });
+    expect(res.status).toBe(200);
+    expect(res.body.data.hits.map((h) => h.id)).toContain("MOD-RV3-BLK");
+  });
+
+  it("H6c: a proposal that writes the marker back is refused (422), and nothing is stored", async () => {
+    const before = await api<{ data: { proposals: unknown[] } }>("/api/v1/tools/list_my_proposals", { token: w.tokens.claude });
+    const res = await api<{ error: { code: string; detail?: { rule?: string } } }>("/api/v1/tools/submit_change_proposal", {
+      token: w.tokens.claude,
+      body: { title: "Write the marker back", rationale: "ROUND4 H6c test.", base_rev: headRev + 1, target: { type: "module", id: "MOD-RV3-CA", base_version: 1 }, set: { summary: "Not a valid value" } },
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.error.detail?.rule).toBe("not_a_valid_value");
+    const after = await api<{ data: { proposals: unknown[] } }>("/api/v1/tools/list_my_proposals", { token: w.tokens.claude });
+    expect(after.body.data.proposals.length).toBe(before.body.data.proposals.length);
   });
 });

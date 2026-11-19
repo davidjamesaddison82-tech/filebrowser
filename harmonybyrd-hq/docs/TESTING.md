@@ -1,9 +1,9 @@
 # Testing
 
-Actual results of the last run are in [TEST-RESULTS.md](TEST-RESULTS.md), which `npm run test:all`
-generates from the test reporters' own output, and which names the commit it was made on. It is
-regenerated on the final commit; until then it describes the commit named inside it. This page
-explains what the suites are and what they do and do not show.
+[TEST-RESULTS.md](TEST-RESULTS.md) is a report of one run of `npm run test:all`, generated from the
+test reporters' own output. It names the commit it was made on and describes that commit, not later
+code; [REPEATABILITY.md](REPEATABILITY.md) is the same for `npm run test:repeat`. This page explains
+what the suites are and what they do and do not show.
 
 ## Running
 
@@ -16,8 +16,16 @@ npm run test:mutation   # removes one database protection at a time and checks t
 
 Individual suites: `npm run test:unit`, `test:db`, `test:api`, `test:e2e`.
 
+Two commands need something `npm install` does not provide. The browser suite (`test:e2e`, and so
+`test:all` and `test:repeat -- --full`) needs the Chromium that Playwright drives: install it once
+with `npx playwright install chromium`. The mutation check needs `python3`: `tests/mutation/run.mjs`
+generates its mutations with `tests/mutation/gen.py` and stops (exit code 2) without it.
+
 All suites use the **synthetic fixture pack** (`data/packs/fixture`) in a separate database,
-`hq_test` (or the one named by `HQ_TEST_DATABASE`), which each suite resets and reseeds. The HTTP
+`hq_test` (or the one named by `HQ_TEST_DATABASE`), which each suite resets and reseeds. They use the
+application role and password of `DATABASE_URL` in `.env.local`, on the same server; the
+application role belongs to the whole server, and migration never changes the password of one that
+exists (docs/INSTALL.md), so a test run cannot break another installation's role. The HTTP
 suite's server listens on `HQ_TEST_PORT` (default 3211); `tests/api/server-config.test.ts` also uses that port plus 2, 3 and 4. They never touch the development database, and they
 use no network: the GitHub and Drive adapters are tested with injected failures.
 
@@ -41,7 +49,7 @@ use no network: the GitHub and Drive adapters are tested with injected failures.
 | 5 | The same pinned revision retrieved by two independent clients | `tests/db/pinned-revision.test.ts`; `tests/api/mcp.test.ts` (“the same answers for every client”); browser: “the earlier revision can still be read exactly as it stood” |
 | 6 | Rejection of stale or conflicting writes | `tests/db/stale-writes.test.ts`; `tests/db/proposal-states.test.ts` (withdraw against accept); `tests/api/mcp.test.ts`; browser: “a proposal written against an old version is refused as stale, not applied” |
 | 7 | Prevention of cross-role and unauthorised access | `tests/db/access-control.test.ts`; `tests/db/write-path.test.ts`; `tests/db/audit-log.test.ts`; `tests/api/rest.test.ts`; `tests/api/sessions.test.ts`; `tests/e2e/04-roles.spec.ts` |
-| 8 | Prevention of AI-generated founder acceptance | `tests/db/founder-authority.test.ts`; `tests/db/founder-gate.test.ts`; `tests/db/proposal-evidence-rules.test.ts`; `tests/db/acceptance-claims.test.ts`; `tests/db/acceptance-binding.test.ts`; `tests/api/rest.test.ts`, `mcp.test.ts` (no approval tool exists); browser: token “cannot decide” |
+| 8 | Prevention of AI-generated founder acceptance | `tests/db/founder-authority.test.ts`; `tests/db/founder-gate.test.ts`; `tests/db/proposal-evidence-rules.test.ts`; `tests/db/acceptance-claims.test.ts`; `tests/db/proposal-claims.test.ts`; `tests/db/acceptance-binding.test.ts`; `tests/api/rest.test.ts`, `mcp.test.ts` (no approval tool exists); browser: token “cannot decide” |
 | 9 | Source lineage and immutable historical records | `tests/db/immutability.test.ts`; `tests/db/chain-verification.test.ts`; `tests/unit/derive.test.ts` (lineage); `tests/unit/pack.test.ts` |
 | 10 | Browser navigation and functional controls | `tests/e2e/01-auth`, `02-navigation`, `05-governance` |
 | 11 | Responsive laptop layouts without overlays covering content | `tests/e2e/03-layout.spec.ts` — measured in the browser at 1366×768, 1280×720, 1440×900 and 390×844; the detector itself is tested in `tests/e2e/03b-layout-detector.spec.ts` (see “Layout measurement”) |
@@ -58,10 +66,31 @@ attempt is refused *and* nothing changed. Examples:
 - one AI client reads another's proposal, or asks the database for its status;
 - a proposal rewrites a requirement's original wording, or its standing;
 - a proposal carries an invented quotation, a quotation too short to mean anything, one of HQ's own
-  labels, a source label without a citation, HQ's own checks, a changed source checksum, kind or
-  authority, a build-only field, or evidence of a type only the founder or HQ's build records — each
-  tried through the application as an AI client and as a developer, directly in the database, and at
-  the founder's acceptance (`tests/db/proposal-evidence-rules.test.ts`);
+  labels, HQ's own checks, a changed source checksum, kind or authority, a build-only field, or
+  evidence of a type only the founder or HQ's build records — each tried through the application as
+  an AI client and as a developer, directly in the database, and at the founder's acceptance
+  (`tests/db/proposal-evidence-rules.test.ts`);
+- a proposal says what only an import can say (`tests/db/proposal-claims.test.ts`, “ROUND4 — what a
+  proposal may say, on every path”): a source label it attaches to its own words — on a module's
+  lifecycle entry with a real but unrelated quotation, on a loop's standing, a pathway's basis, a
+  created build's statement or a created open item, on a list element, in a reversed list, two
+  levels down in a list, on reworded text that keeps the label, and on a withdrawal of a reported
+  acceptance that rewrites the statement; a change to evidence a source reports (retitled, moved,
+  relinked) or to a source HQ has read; a requirement made implemented and tested, or a tested one
+  relinked; a field its record type does not have (`"hq_acceptance "`, `Standing`, a 1 MB key, a key
+  of another type); and “Not a valid value” anywhere in it. Each is tried four ways: through the
+  application as an AI client and as a developer, straight at `hq.submit_proposal`, and planted in
+  the inbox and then accepted through the application (with the same `detail.rule` and `detail.field`
+  as at submission) and straight at `hq.review_proposal`; each must be refused with the exact status
+  or SQLSTATE, leave the records unchanged and leave the proposal *submitted*. The controls go
+  through: the same change as the submitter's claim (and the module's standing does not rise), an
+  imported claim left as it is, removed or labelled `no_evidence`, a source that is only named, a
+  requirement marked implemented but unverified (it stays outstanding), and a record of every type a
+  proposal may create, with only its declared fields. `tests/db/record-fields.test.ts` checks that the
+  database's list of each type's fields equals the schemas' and that no API role can read it;
+- a founder decision clears an acceptance that was never recorded (422 from the application and from
+  the database, nothing written); clearing one that was recorded still works, also in the decision
+  that recorded it (`tests/db/proposal-claims.test.ts`, “ROUND4 H5”);
 - a proposal asserts an acceptance — a build re-marked `accepted_reported`, with and without a real
   quotation; a created build with that standing; a module whose whole lifecycle is replaced, or whose
   lifecycle gives only `founder_accepted`, or whose reported acceptance is restated with a different
@@ -106,11 +135,26 @@ attempt is refused *and* nothing changed. Examples:
   such a function being created;
 - `UPDATE`, `DELETE` and `TRUNCATE` against the record history, the proposal history and the audit log;
 - stored versions, seals and the seal chain are tampered with (`tests/db/chain-verification.test.ts`);
-- an API role writes the audit log directly; a founder act, any action outside the application's
-  families, or a name that reads like a founder act (`api.decision.record`, `mcp.record_founder_decision`)
-  is recorded through `hq.log_access`; an action over 80 characters through either wrapper or written
-  straight into the log; an audit detail over 16,384 bytes (`tests/db/audit-log.test.ts`; the list of
-  actions the application really logs is taken from the tool registry);
+- an API role writes the audit log directly; a founder act, or any action outside the exact list —
+  names that read like a founder act (`api.decision.record`, `mcp.record_founder_decision`,
+  `tool.sign_off`), upper case, a trailing space, an empty name after the dot — is recorded through
+  `hq.log_access`; a session row naming another person; an action over 80 characters through either
+  wrapper or written straight into the log; an audit detail over 16,384 bytes
+  (`tests/db/audit-log.test.ts`, which also checks that `hq.tool_names` equals the tool registry and
+  that every action the application really logs is still accepted);
+- 500 unauthenticated MCP requests write at most 120 refusal rows a minute in full, then one summary
+  row with the count, while a signed-in caller's 200 refusals are all written
+  (`tests/api/audit-volume.test.ts`; the counting itself in `tests/unit/audit-limit.test.ts`);
+- a 1 MB argument name, 80,000 unknown arguments, an 8 KB query key, a 900 KB record id and a 1 MB
+  proposal id: every answer stays under 4 KB (`tests/api/echo-bounds.test.ts`;
+  `tests/db/proposal-claims.test.ts`, “ROUND4 H7”, for the services and the database's own refusals);
+- every method sent to every API route found on disk: each answer carries a request id (health
+  excepted), each method a route does not implement is 405 with `Allow` and the error body, and
+  `OPTIONS` is 204 (`tests/api/methods.test.ts`);
+- a second installation migrating with another password for the same application role, in a
+  database of its own: refused before anything is applied, and the first password still works; the
+  same database with a changed password; and only `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` changes the
+  password (`tests/db/app-role.test.ts`, with a role and databases of its own that it removes);
 - withdraw and accept race each other (`tests/db/proposal-states.test.ts`);
 - a pack containing a quotation that is not in its source, or one made only of spaces; a pack carrying an HQ acceptance; a pack using an id HQ reserves; a pack build with the standing `accepted_reported` and no citation (`tests/unit/pack.test.ts`);
 - a proposal written against a superseded version;
@@ -261,6 +305,40 @@ purpose:
   not as the conformed view, since its checks are about what the database stored and what the
   write-path rules compare; a planted odd severity is still “critical” as stored.
 
+## Expectations changed in the fourth round
+
+After the re-check of the third round, these expectations changed because the behaviour changed on
+purpose. None was weakened.
+
+- `tests/db/founder-gate.test.ts`: a top-level source label (a pathway's `basis`, a loop's
+  `standing`) that the record does not already hold is now refused with HQ403 (“a proposal's claim is
+  the submitter's own”); it was HQ422 (“must cite at least one source”).
+- `tests/db/proposal-evidence-rules.test.ts`: the cases of a source label without a citation now
+  expect 403 and the new message, since a source label is set only by an import; the developer's
+  accepted update now gives its quotation as the submitter's claim; the control “source-reported
+  evidence may still get a new title” became a refusal (403, records unchanged), since such evidence
+  is frozen; the message for a change to such evidence is the new one; the review-screen test that
+  set `decision_ids` on a build now sets it on a requirement, the type that has that field.
+- `tests/db/acceptance-claims.test.ts` and `tests/db/proposal-evidence-rules.test.ts`: lifecycle
+  entries that a test changes and expects to go through are labelled `submitter_claim`, not
+  `reported`.
+- `tests/db/founder-authority.test.ts`: the test that clears an acceptance first records one, since
+  clearing needs something to clear.
+- `tests/unit/derive-honesty.test.ts`: records that fail validation are now read as *not reliable*
+  (a module whose founder acceptance has a basis no source can give, builds whose standing is a list,
+  an object or a number, a build whose report has no citation), not by what they claim; a
+  requirement's test evidence has a fourth list, `unreadable`.
+- `tests/unit/conform.test.ts` and `tests/e2e/07-odd-values.spec.ts`: a build that fails validation
+  now has the acceptance status *not reliable* (“Not reliable — this record cannot be read in
+  full”); its stored standing is still shown as “Not a valid value”.
+- `tests/api/odd-values.test.ts`: a planted record that keeps every value of the fixture record it
+  copies may now show, in any tool's answer, what any single-record tool shows about that fixture
+  record. A requirement HQ cannot read is now listed as outstanding, so such a requirement appears in
+  the outstanding lists where its fixture record does not.
+- `tests/api/sign-in.test.ts`: 500 sign-ins with over-long names no longer write 500 rows: at most
+  120 a minute are written in full and a summary row counts the rest, and the test checks that every
+  one of the 500 is accounted for.
+
 ## Every file the application needs is in the repository
 
 The repository HQ sits in ignores `*.mjs`. Because of that, three files were never committed:
@@ -307,7 +385,7 @@ archive).
 The review showed that several protections could be deleted without any test failing. To make that
 measurable, `npm run test:mutation` (`tests/mutation/`) takes the real database suite and, for each
 of a list of mutations, re-creates one database function, drops one trigger or changes one table
-row or constraint with a single guard removed, then runs the whole suite. A mutation that no test fails for has *survived*: that
+row or constraint with a single guard removed, then runs the whole suite. It needs `python3`. A mutation that no test fails for has *survived*: that
 protection is not tested. A mutation whose target text is not found aborts, so a mutation can never
 silently do nothing; an unmutated control run must pass in full.
 
@@ -323,10 +401,22 @@ them as well (`mf1j…`, `mg1a…`, `mg1b…`, `mg1c…`, `mg2…`): the freeze 
 accepted removed, the whole-entry comparison put back to four keys, the positive states narrowed,
 the allowed-values check removed or made to do nothing, a call to it removed, its scope changed, a
 row of `hq.field_enums` deleted or widened, the bounds on audit action names loosened, and the
-action-length constraint dropped. A full run (no mutation named) writes
-[tests/mutation/RESULTS.txt](../tests/mutation/RESULTS.txt); a run of named mutations does not. The
-file in the repository is the one from the run named in docs/TEST-RESULTS.md or in the handover. The
-command uses its own database (`HQ_MUTATION_DATABASE`, default `hq_test_mutation`).
+action-length constraint dropped. Migration 0009's rules have them too (the `mh…` entries): the
+source-label rule removed, made to compare the label only, made to skip top-level fields or lists,
+or to accept a claim at any list position, and each of its four calls in `submit_proposal` and
+`review_proposal` removed; the source freeze removed or narrowed; the “implemented and tested” rule
+and its link rule removed; the declared-fields check removed, or `hq.record_fields` given a look-alike field; clearing allowed with nothing to
+clear; the “Not a valid value” check removed; `hq.log_access` accepting any tool name or any session
+object, or a tool name added; the freeze's own validity test loosened; the `epistemic` check cut to
+one level; and the record type in a refusal left uncut. The mutations of the rules 0009 replaced
+(`ml2_label_needs_citation`, `ml5_merged_citation`, `mg2a…`, `mg2b…`) are gone, as their rules are.
+
+A full run (no mutation named) writes `tests/mutation/RESULTS.txt`. Its first line names the code it
+ran against: the commit (`git rev-parse HEAD`, followed by “with uncommitted changes” when
+`git status` was not clean), the date and the number of mutations. Then comes one line per mutation,
+with how many tests then failed, and a closing count of mutations caught and survived. A run of named
+mutations writes nothing there. Where the repository has no such file, no full run has been recorded. The command uses its own database
+(`HQ_MUTATION_DATABASE`, default `hq_test_mutation`).
 
 It covers the database layer only. The application-layer guards, the screens and the derivations
 are not mutation-tested.
@@ -334,7 +424,9 @@ are not mutation-tested.
 ## Adversarial review
 
 After the first delivery, seven reviewers who had not written HQ — AI agents working under the
-builder's direction, each with one lens — attacked it, each in a database of its own. A second
+builder's direction, each with one lens — attacked it, each in a database of its own. The engineers
+who fixed the findings, and the verifiers who re-ran the attacks after each round of fixes, were AI
+agents of the same build process too. A second
 reviewer tried to refute each finding. **71 findings were confirmed by reproduction** (or, for
 documentation and test findings, by quoting the lines that contradict each other), and they were
 then fixed in stages, each fix with a regression test that fails without it. Several findings showed
@@ -359,8 +451,11 @@ the same build process, not an assessment by an independent person.
   real pack is recorded in this repository).
 - The sign-in throttle across more than one server process, or after a restart (it is in memory).
 - Malformed stored values beyond what the odd-values tests plant (`tests/helpers/odd-values.ts`):
-  records with values of the wrong kind, put into the database as the owner — six named cases, and
-  336 records (each of the twelve types, with each of seven wrong values, in four patterns).
+  records with values of the wrong kind, put into the database as the owner — six named cases, 336
+  records (each of the twelve types, with each of seven wrong values, in four patterns), and the
+  fourth round's cases: the records a verifier planted (evidence that fails validation as an
+  acceptance instrument, a blocker or a defect whose module list is stored as text, a recommendation
+  with no maker, a check whose result is not valid) and variations of them.
   `tests/e2e/07-odd-values.spec.ts` visits every screen that shows them: each must answer with a
   heading and no error; for the named cases the page must show “Not a valid value”; and no planted
   record may appear as accepted in the health lists or the lifecycle matrix.
@@ -370,7 +465,10 @@ the same build process, not an assessment by an independent person.
   planted record a positive status it does not validly hold; `get_record`, `search_records` and a
   listing tool must say the record is not valid and give its stored form. `tests/unit/conform.test.ts`
   checks the conformer itself: a valid record comes back as the same object, and, over the 336, no
-  conformed value is one the stored record does not hold at that place. `tests/db/proposal-impact.test.ts`
+  conformed value is one the stored record does not hold at that place. It also checks that each
+  record that fails validation, added to the fixture on its own, makes nothing read better (a
+  standing, an acceptance, a count of open defects, outstanding requirements, missing work, review
+  items and more), and that each module it names lists it as a record HQ cannot read. `tests/db/proposal-impact.test.ts`
   checks that the review screen's impact (the one `proposalImpact`) works with them stored and shows
   “before” values as stored. All of this runs on the fixture only.
 - Independent re-execution. Every run recorded here was made by the builder.

@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, Fold, IdTag, InboxOriginChip, InvalidRecordNotice, KnownLink, ListedChip, ListedText, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
 
-import type { DatasetView } from "@/lib/domain/conform";
+import { type DatasetView, unreadableFields } from "@/lib/domain/conform";
 import { isOutstanding, reviewItems } from "@/lib/domain/derive";
 import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
 import { isoDate } from "@/lib/ui/format";
@@ -76,7 +76,7 @@ export default async function RequirementPage({ params, searchParams }: { params
         }
       />
       <AcceptanceLock data={r} />
-      {ctx.warnings.some((w) => w.type === "requirement" && w.id === record.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/requirement/${encodeURIComponent(record.meta.id)}`, rev)} /> : null}
+      {ctx.warnings.some((w) => w.type === "requirement" && w.id === record.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/requirement/${encodeURIComponent(record.meta.id)}`, rev)} unreadableFields={unreadableFields(ctx.ds, record)} /> : null}
 
       <Card title="Original wording" hint="Permanent — a correction is a new requirement that supersedes this one">
         <div className="stack-sm">

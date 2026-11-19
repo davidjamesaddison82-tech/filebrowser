@@ -211,7 +211,13 @@ describe("the founder's own decision path works, and is the only one that record
   });
 
   it("tests-12: a recorded rejection or a cleared acceptance is never shown as acceptance", async () => {
-    // Stored through the real founder path, then read back through the real read model.
+    // Stored through the real founder path, then read back through the real read model. (ROUND4 H5:
+    // clearing needs an acceptance or rejection to clear, so Alpha is accepted first.)
+    await recordFounderDecision(w.founder, {
+      title: "Accept Alpha, for now",
+      exact_text: "I accept Alpha for the moment.",
+      effects: [{ type: "set_acceptance", record_type: "module", record_id: "MOD-FX-ALPHA", state: "accepted" }],
+    });
     const result = await recordFounderDecision(w.founder, {
       title: "Reject alpha-candidate-7; clear Alpha",
       exact_text: "I reject alpha-candidate-7. Alpha has no acceptance from me.",

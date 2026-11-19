@@ -19,7 +19,7 @@ import { generatePassphrase } from "../src/lib/auth/secrets";
 import { adminClient } from "./lib/admin";
 import { loadEnv, projectRoot } from "./lib/env";
 import { createCredential, ensurePrincipal, setPassphrase } from "./lib/principals";
-import { ensureEnvFile, environmentProblem, type PrivateFileResult, writePrivateFile } from "./lib/setup-files";
+import { closingMessage, ensureEnvFile, environmentProblem, type PrivateFileResult, writePrivateFile } from "./lib/setup-files";
 import { migrate } from "./migrate";
 import { seed } from "./seed";
 
@@ -74,7 +74,7 @@ async function main() {
   warnAboutPermissions(".hq-local-credentials.json", writePrivateFile(credentialFile, `${JSON.stringify(saved, null, 2)}\n`));
 
   await seed({});
-  console.log("\nSetup complete. Start the application with:  npm run dev   (http://localhost:3210)");
+  for (const line of closingMessage(process.env)) console.log(line);
   console.log("Sign in as  founder  with the passphrase above (also saved in .hq-local-credentials.json).");
 }
 

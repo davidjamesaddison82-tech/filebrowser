@@ -15,15 +15,23 @@ in [KNOWN-GAPS.md](KNOWN-GAPS.md).
 | Repository | the working repository this commission was given |
 | Branch | `claude/harmonybyrd-hq-command-centre-76pgaq` |
 | Folder | `harmonybyrd-hq/` (nothing outside this folder was changed) |
-| Commit the recorded test runs were made on | named in [TEST-RESULTS.md](TEST-RESULTS.md) and [REPEATABILITY.md](REPEATABILITY.md) (“Source revision”). Both are regenerated on the final commit; until then each describes the commit named inside it |
-| History | `git log -- harmonybyrd-hq`: the first delivery, then the fixes for the adversarial review ([REVIEW-FINDINGS.md](REVIEW-FINDINGS.md)) in three rounds ([PROGRESS-REGISTER.md](PROGRESS-REGISTER.md)) |
-| File checksums | [FILE-MANIFEST.sha256](FILE-MANIFEST.sha256) — SHA-256 of every file in the folder at hand-over |
+| Commit the recorded test runs were made on | named in [TEST-RESULTS.md](TEST-RESULTS.md) and [REPEATABILITY.md](REPEATABILITY.md) (“Source revision”). Both are generated reports; each describes the commit named inside it, not necessarily the code beside it |
+| History | `git log -- harmonybyrd-hq`: the first delivery, then the fixes for the adversarial review ([REVIEW-FINDINGS.md](REVIEW-FINDINGS.md)) in four rounds ([PROGRESS-REGISTER.md](PROGRESS-REGISTER.md)); the fourth has not been re-checked |
+| File checksums | [FILE-MANIFEST.sha256](FILE-MANIFEST.sha256) — a generated list of the SHA-256 of the files in this folder. It names no commit itself: it describes the files as they were in the commit that last changed it (`git log -1 --format=%H -- docs/FILE-MANIFEST.sha256`), not necessarily the files beside it |
 
-To produce a source package of exactly what is on the branch:
+To produce a source package of exactly what is committed in this folder. The command works from the
+HQ folder (or anywhere in the repository), because it runs at the repository's root: `git archive`
+run inside the folder with a plain `HEAD:harmonybyrd-hq` writes an empty archive without any error.
+The check after it lists the archive.
 
 ```bash
-git archive --format=zip --prefix=harmonybyrd-hq/ -o harmonybyrd-hq-source.zip HEAD:harmonybyrd-hq
+root="$(git rev-parse --show-toplevel)"
+git -C "$root" archive --format=zip --prefix=harmonybyrd-hq/ -o "$root/../harmonybyrd-hq-source.zip" HEAD:harmonybyrd-hq
+unzip -l "$root/../harmonybyrd-hq-source.zip" | tail -1    # the number of files; 0 means it went wrong
 ```
+
+The archive is written beside the repository, not inside it. It holds this folder only, with no
+history; the history is on the branch (`git log -- harmonybyrd-hq`).
 
 The repository around this folder ignores `*.mjs`; HQ's own `.gitignore` un-ignores them, so
 `next.config.mjs` and the mutation runner (`tests/mutation/run.mjs`, `vitest.mut.config.mjs`) are on
@@ -55,7 +63,7 @@ public, and the founder's documents were not authorised for publication, so ever
 | --- | --- | --- |
 | 1 | Runnable local application | this folder; `npm run setup && npm run dev` ([INSTALL.md](INSTALL.md)) |
 | 2 | Source code | `src/`, `scripts/`, `tests/` |
-| 3 | Database schema and migrations | `supabase/migrations/0001_foundation.sql` … `0008_review_round3.sql` |
+| 3 | Database schema and migrations | `supabase/migrations/0001_foundation.sql` … `0009_review_round4.sql` |
 | 4 | Installation and operating documentation | [INSTALL.md](INSTALL.md), [../README.md](../README.md) |
 | 5 | Source inventory | In the application under *Sources*; `SOURCE-INVENTORY.md` in the private package |
 | 6 | Module and learning-loop explorers | In the application: *Modules*, *Learning loops* |
@@ -82,6 +90,12 @@ npm run test:repeat -- --full # runs every suite twice and compares each outcome
 sha256sum -c docs/FILE-MANIFEST.sha256   # from the harmonybyrd-hq folder
 ```
 
+`npm run test:all` needs the Playwright browser (`npx playwright install chromium`), and
+`npm run test:mutation` needs `python3` (docs/TESTING.md). The manifest check passes only on the
+commit the manifest describes (above); on any later change to a listed file it reports that file as
+failed. On a server that already has another HQ installation, give this one its own application
+role before running setup (docs/INSTALL.md, “One application role per installation”).
+
 With the private package:
 
 ```bash
@@ -91,7 +105,9 @@ npm run pack:verify -- data/packs/harmonybyrd-evidence   # every record, every q
 ## Recorded test run
 
 See [TEST-RESULTS.md](TEST-RESULTS.md) and [REPEATABILITY.md](REPEATABILITY.md). Both were made by the
-builder, on the commit each names. Nobody else has re-run them, and a passing run is not an acceptance of HQ.
+builder, on the commit each names, and describe that commit only. Nobody else has re-run them, and a
+passing run is not an acceptance of HQ. The mutation check's result, where one has been recorded, is
+`tests/mutation/RESULTS.txt` (docs/TESTING.md, “Mutation check of the database tests”).
 
 ## What the next person needs to know first
 
@@ -101,11 +117,15 @@ builder, on the commit each names. Nobody else has re-run them, and a passing ru
    bypass that: `hq.verify_chain()` then shows deleted or rewritten versions through the revision
    seals and the seal chain, and only a copy of the latest seal kept outside the database
    (`hq.head_seal()`, shown on *Review items*) shows a rewrite of history and seals together.
-2. The rules that matter are in **`supabase/migrations/0002`–`0008`**, not in the screens. Read
+2. The rules that matter are in **`supabase/migrations/0002`–`0009`**, not in the screens. Read
    [GOVERNANCE.md](GOVERNANCE.md) and the database tests before changing them. Each function a later
    migration replaced carries a header listing its rules and the migration that added each. A new
    function must have EXECUTE revoked from PUBLIC in its own migration: PostgreSQL grants it by
    default, and `tests/db/service-role.test.ts` fails if any function in `hq` is left executable.
+   Two tables mirror the code and are checked against it by a test: `hq.record_fields` (the fields of
+   each record type, `tests/db/record-fields.test.ts`) and `hq.tool_names` (the tools,
+   `tests/db/audit-log.test.ts`). Adding a field to a record schema, or a tool to the registry, needs a
+   migration that adds its row.
 3. `src/lib/domain/derive.ts` is where every figure on every screen comes from. The screens, the
    REST API and the MCP tools all call it; change it once and all three change together.
 4. A migration that has been applied must not be edited: add a new one. The migration runner checks.

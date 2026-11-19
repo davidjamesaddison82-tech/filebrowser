@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, KnownLink, Notice, PageHead, Pager } from "@/components/ui";
+import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, KnownLink, Notice, PageHead, Pager, PathwayBasisChip } from "@/components/ui";
 import { loopStageMatrix, stageCoverage } from "@/lib/domain/derive";
 import { type Epistemic, EPISTEMIC_LABEL, STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -88,13 +88,7 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
                     <strong>{p.data.name}</strong>
                   </Link>
                   <IdTag id={p.meta.id} />
-                  {p.data.basis === "commission_example" ? (
-                    <Chip tone="founder" glyph="★">
-                      Example given in the commission
-                    </Chip>
-                  ) : (
-                    <EpistemicChip value={p.data.basis as Epistemic} />
-                  )}
+                  <PathwayBasisChip value={p.data.basis} />
                 </div>
                 <div className="path">
                   {stepGroups(p.data.steps).map((group, i) => (

@@ -129,17 +129,18 @@ describe("tests-6 — submit_proposal's own role, scope, protected-field and sta
     expect(await worldState()).toEqual(before);
   });
 
-  it("a top-level source label set on a record that cites nothing is refused by the database (HQ422)", async () => {
-    // The fixture's PATH-FX-01 and LOOP-FX-02 carry no citations, so "reported" would be an unsourced claim.
-    // Only the merged-record check in hq._validate_against_target sees this: the payload alone has no citations key.
+  it("a top-level source label the record does not already hold is refused by the database (HQ403; ROUND4 H1, was HQ422)", async () => {
+    // PATH-FX-01's basis is design_intention and LOOP-FX-02's standing is design_intention: a proposal
+    // cannot make either "reported", with or without citations. Before ROUND4 this was the HQ422 "must
+    // cite at least one source"; a source label is now set only by an import.
     const before = await worldState();
     await expect(submit(claimsFor(w.claude), { op: "update", set: { basis: "reported" } }, 1, "pathway", "PATH-FX-01")).rejects.toMatchObject({
-      code: "HQ422",
-      message: expect.stringMatching(/a "reported" statement must cite at least one source \(field "basis"\)/),
+      code: "HQ403",
+      message: expect.stringMatching(/field "basis": a proposal's claim is the submitter's own: label it submitter_claim/),
     });
     await expect(submit(claimsFor(w.developer), { op: "update", set: { standing: "reported" } }, 1, "loop", "LOOP-FX-02")).rejects.toMatchObject({
-      code: "HQ422",
-      message: expect.stringMatching(/field "standing"/),
+      code: "HQ403",
+      message: expect.stringMatching(/field "standing": a proposal's claim is the submitter's own/),
     });
     expect(await worldState()).toEqual(before);
   });

@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { APP_DB_PASSWORD_PLACEHOLDER, ensureEnvFile, environmentProblem, JWT_PLACEHOLDER, writePrivateFile } from "../../scripts/lib/setup-files";
+import { APP_DB_PASSWORD_PLACEHOLDER, closingMessage, ensureEnvFile, environmentProblem, JWT_PLACEHOLDER, writePrivateFile } from "../../scripts/lib/setup-files";
 
 const mode = (file: string) => statSync(file).mode & 0o777;
 let dir: string;
@@ -82,5 +82,32 @@ describe("the environment is refused while a placeholder is still in use", () =>
   });
   it("accepts real values", () => {
     expect(environmentProblem(good)).toBeNull();
+  });
+});
+
+describe("setup's closing message names the address the application will have (L5)", () => {
+  it("without HQ_BASE_URL it gives the default address and no port advice", () => {
+    const text = closingMessage({}).join("\n");
+    expect(text).toContain("npm run dev");
+    expect(text).toContain("http://localhost:3210");
+    expect(text).not.toMatch(/-p \d/);
+  });
+
+  it("with HQ_BASE_URL on the default port it gives that address", () => {
+    const text = closingMessage({ HQ_BASE_URL: "http://127.0.0.1:3210/" }).join("\n");
+    expect(text).toContain("http://127.0.0.1:3210");
+    expect(text).not.toContain("localhost");
+    expect(text).not.toMatch(/-p \d/);
+  });
+
+  it("with HQ_BASE_URL on another port it gives that address and says which port to start on", () => {
+    const text = closingMessage({ HQ_BASE_URL: "http://localhost:3300" }).join("\n");
+    expect(text).toContain("http://localhost:3300");
+    expect(text).not.toContain("3210)");
+    expect(text).toContain("npm run dev -- -p 3300");
+  });
+
+  it("an HQ_BASE_URL without a port uses its scheme's port", () => {
+    expect(closingMessage({ HQ_BASE_URL: "https://hq.example.test" }).join("\n")).toContain("npm run dev -- -p 443");
   });
 });

@@ -96,3 +96,33 @@ export function environmentProblem(env: Record<string, string | undefined>): str
   }
   return null;
 }
+
+/** The port `npm run dev` and `npm start` use (package.json). */
+export const DEFAULT_PORT = 3210;
+
+/**
+ * What setup prints at the end: where the application will be. That is HQ_BASE_URL when it is set
+ * (from .env.local, .env or the real environment, as loadEnv reads them), else the default address;
+ * when HQ_BASE_URL's port is not the one `npm run dev` uses, it says which port to pass.
+ */
+export function closingMessage(env: Record<string, string | undefined>): string[] {
+  const given = env.HQ_BASE_URL?.trim();
+  const address = given ? given.replace(/\/+$/, "") : `http://localhost:${DEFAULT_PORT}`;
+  const lines = [`\nSetup complete. Start the application with:  npm run dev   (${address})`];
+  if (!given) return lines;
+  let port: number | null = null;
+  try {
+    const url = new URL(given);
+    port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : url.protocol === "http:" ? 80 : null;
+  } catch {
+    lines.push(`HQ_BASE_URL is not a valid address. The server listens on port ${DEFAULT_PORT} unless you pass another.`);
+    return lines;
+  }
+  if (port !== null && port !== DEFAULT_PORT) {
+    lines.push(
+      `HQ_BASE_URL uses port ${port}, but the server listens on ${DEFAULT_PORT} by default: start it with ` +
+        `npm run dev -- -p ${port}  (or npm start -- -p ${port}), unless something in front of it forwards that address to port ${DEFAULT_PORT}.`,
+    );
+  }
+  return lines;
+}

@@ -23,8 +23,15 @@ export interface TestWorld {
 
 export const PASSPHRASES = { founder: "founder-test-passphrase", developer: "developer-test-passphrase", reader: "reader-test-passphrase" };
 
+/** The server's maintenance database: the test database is created from there, never from the development database. */
+function maintenanceUrl(): string {
+  const u = new URL(DEV_ADMIN_URL);
+  u.pathname = "/postgres";
+  return u.toString();
+}
+
 async function ensureTestDatabase(): Promise<void> {
-  const client = new pg.Client({ connectionString: DEV_ADMIN_URL });
+  const client = new pg.Client({ connectionString: maintenanceUrl() });
   await client.connect();
   try {
     const exists = await client.query("select 1 from pg_database where datname = $1", [TEST_DATABASE]);

@@ -6,6 +6,10 @@
 - PostgreSQL 16 (the build used 16.15). The owner connection must be able to create roles; the
   test suites also need permission to create a database.
 - About 600 MB of disk for dependencies and the build.
+- For some of the checks only (docs/TESTING.md): `python3` for `npm run test:mutation`, which
+  generates its mutations with a Python script and stops without it; and the Chromium browser that
+  Playwright drives, for `npm run test:e2e` and `npm run test:all`. Install it once with
+  `npx playwright install chromium` (the build used Playwright 1.63).
 
 No external account is needed. Nothing in a default installation talks to the internet.
 
@@ -39,8 +43,9 @@ npm run setup
    `__GENERATED_…__` placeholders still left in it. Either way it makes `.env.local` readable by its
    owner only (0600), and warns if it was readable by others. It then stops if `HQ_JWT_SECRET` is
    still a placeholder or shorter than 32 characters, or `DATABASE_URL` still holds the placeholder password;
-2. applies the migrations in `supabase/migrations` (`0001_foundation.sql` to `0008_review_round3.sql`,
-   in order) and creates the application login role;
+2. applies the migrations in `supabase/migrations` (`0001_foundation.sql` to `0009_review_round4.sql`,
+   in order) and creates the application login role named in `DATABASE_URL` if it does not exist
+   (see “One application role per installation” below);
 3. creates the local identities — `founder`, `developer`, `reader` (people) and `claude`, `chatgpt`
    (AI clients) — and prints a passphrase or API token for each, once, saving them in
    `.hq-local-credentials.json` (also made owner-only, 0600, on every run);
@@ -55,6 +60,31 @@ cp .env.example .env.local && chmod 600 .env.local
 # (To set them yourself instead, use long random strings, for example: openssl rand -base64 48)
 ```
 
+### One application role per installation
+
+The application login role (`hq_app` in `.env.example`) belongs to the whole PostgreSQL server, not
+to one database. Before it applies any migration, `npm run setup` (and `npm run db:migrate`) checks
+whether that role already exists:
+
+- if it does not, it is created with the password in `DATABASE_URL`;
+- if it does and the password in `DATABASE_URL` signs in as it, its password is left alone and only
+  its grants on this database are made;
+- if it does and the password does not sign in, migration stops before anything is applied, with:
+  “role <name> already exists on this server with a different password. It may belong to another HQ
+  installation: use a different role name in DATABASE_URL, or set HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 to
+  change its password.”
+
+So a second installation on a server that already has one must use another role name: edit the
+user name in `DATABASE_URL` (for example `postgres://hq_app_second:__GENERATED_APP_DB_PASSWORD__@…`)
+before running setup. Changing the password of an existing role would stop the other installation
+from connecting, and would let the new password open the other installation's database. Set
+`HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` for one run only when you mean to change it, for example after
+losing the password: `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 npm run db:migrate`. Any other value does not
+count. On a server whose `pg_hba.conf` lets these connections in without a password (`trust`), any
+password signs in, so the check cannot tell two installations apart. The test suites use the role
+and password of `DATABASE_URL` in `.env.local` (or of `HQ_TEST_DATABASE_URL`), on the same server,
+and so leave them as they are.
+
 **The application will not start** (the server exits with “HarmonyByrd HQ will not start: …”) while
 `HQ_JWT_SECRET` is a placeholder or shorter than 32 characters, or `DATABASE_URL` still contains the
 placeholder password. Setup applies the same check.
@@ -68,6 +98,11 @@ npm run build && npm start
 ```
 
 Sign in as `founder` with the passphrase that setup printed (also in `.hq-local-credentials.json`).
+
+The port is 3210 (set in `package.json`). To use another, add it after the command, for example
+`npm run dev -- -p 3300` or `npm start -- -p 3300`, and set `HQ_BASE_URL` to match, since that is the
+address the connection guide shows. Setup's closing message gives `HQ_BASE_URL` (or
+http://localhost:3210 when it is not set) and, when that address's port is not 3210, the port to pass.
 
 ## Using the real evidence pack
 
@@ -119,17 +154,18 @@ by `_` and lower-case letters, digits or underscores (for example `hq_test_ci`),
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run test` | Unit and database suites |
 | `npm run test:api` | REST and MCP over HTTP against a production build |
-| `npm run test:e2e` | Browser suite (Playwright, Chromium) |
-| `npm run test:all` | All of the above; writes docs/TEST-RESULTS.md |
+| `npm run test:e2e` | Browser suite (Playwright, Chromium; needs `npx playwright install chromium` once) |
+| `npm run test:all` | All of the above; writes docs/TEST-RESULTS.md (needs the Playwright browser) |
 | `npm run test:repeat` | Runs the suites twice and compares every outcome |
-| `npm run test:mutation` | Removes one database protection at a time and checks that a test notices; a full run writes `tests/mutation/RESULTS.txt` |
+| `npm run test:mutation` | Removes one database protection at a time and checks that a test notices; a full run writes `tests/mutation/RESULTS.txt`. Needs `python3` |
 
 ## Environment
 
 | Variable | Used by | Meaning |
 | --- | --- | --- |
 | `HQ_ADMIN_DATABASE_URL` | setup, migrations, seeding, tests | Owner connection. **Never used by the web application** |
-| `DATABASE_URL` | web application | The application's login role: it owns nothing and can only assume the API roles |
+| `DATABASE_URL` | web application | The application's login role: it owns nothing and can only assume the API roles. The role is server-wide: use a role name of its own for each installation on one server |
+| `HQ_ALLOW_ROLE_PASSWORD_CHANGE=1` | setup, migrations | Lets migration change the password of an application role that already exists. Without it, migration stops instead. Set it for one run, not in `.env.local` |
 | `HQ_JWT_SECRET` | web application | Signs session cookies and the sign-in device cookie (HS256, at least 32 characters; the application refuses to start with a placeholder or a shorter value). Changing it ends every session and every device cookie |
 | `HQ_PACK_DIR` | seeding | Which pack `npm run db:seed` imports |
 | `HQ_BASE_URL` | web application | Address shown in the connection guide |

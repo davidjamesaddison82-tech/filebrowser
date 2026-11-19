@@ -1,4 +1,4 @@
-import { readJson, withApi } from "@/lib/server/http";
+import { otherMethods, readJson, withApi } from "@/lib/server/http";
 import { recordFounderDecision } from "@/lib/server/services";
 
 /**
@@ -10,3 +10,6 @@ export async function POST(request: Request) {
     result: await recordFounderDecision(principal, await readJson(request)),
   }));
 }
+
+/** The methods this route does not implement: 405 (OPTIONS 204) with Allow and a request id. */
+export const { GET, HEAD, PUT, PATCH, DELETE, OPTIONS } = otherMethods(["POST"]);

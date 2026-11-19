@@ -34,6 +34,24 @@ export interface ToolDefinition {
   run: (principal: Principal, input: Record<string, unknown>) => Promise<unknown>;
 }
 
+/** At most this many characters of anything the client sent are echoed back in an error (H7). */
+const ECHO_MAX = 80;
+/** At most this many unknown arguments or problems are listed in an error, then a count of the rest. */
+const LIST_MAX = 10;
+
+/** Client text as echoed in an error: its first 80 characters, marked when cut. */
+export function echoed(text: string): string {
+  return text.length > ECHO_MAX ? `${text.slice(0, ECHO_MAX)}…` : text;
+}
+
+/** A path of argument names (which the client chose) as echoed in an error. */
+const pathOf = (path: readonly PropertyKey[]) => echoed(path.map(String).join("."));
+
+/** The first LIST_MAX items, then one line saying how many more there are. */
+function bounded<T>(items: T[], more: (count: number) => T): T[] {
+  return items.length > LIST_MAX ? [...items.slice(0, LIST_MAX), more(items.length - LIST_MAX)] : items;
+}
+
 function define<S extends z.ZodObject>(tool: {
   name: string;
   title: string;
@@ -48,19 +66,23 @@ function define<S extends z.ZodObject>(tool: {
       const parsed = tool.input.safeParse(raw ?? {});
       if (!parsed.success) {
         // An argument a tool does not take is refused, never silently dropped (e.g. `rev` on a tool
-        // that always answers at the latest revision).
+        // that always answers at the latest revision). Names are the client's: each is cut to 80
+        // characters, and at most 10 are listed, with a count of the rest.
         const unknown = parsed.error.issues.flatMap((issue) =>
-          issue.code === "unrecognized_keys" ? issue.keys.map((key) => [...issue.path, key].join(".")) : [],
+          issue.code === "unrecognized_keys" ? issue.keys.map((key) => pathOf([...issue.path, key])) : [],
+        );
+        const listed = unknown.slice(0, LIST_MAX).map((k) => `"${k}"`).join(", ");
+        const rest = unknown.length > LIST_MAX ? ` and ${unknown.length - LIST_MAX} more` : "";
+        const problems = parsed.error.issues.flatMap((issue) =>
+          issue.code === "unrecognized_keys"
+            ? issue.keys.map((key) => `${pathOf([...issue.path, key])}: not an argument of ${tool.name}`)
+            : [`${issue.path.length > 0 ? pathOf(issue.path) : "(arguments)"}: ${issue.message.slice(0, 200)}`],
         );
         throw invalid(
           unknown.length > 0
-            ? `${tool.name} does not take the argument${unknown.length > 1 ? "s" : ""} ${unknown.map((k) => `"${k}"`).join(", ")}.`
+            ? `${tool.name} does not take the argument${unknown.length > 1 ? "s" : ""} ${listed}${rest}.`
             : `Invalid arguments for ${tool.name}.`,
-          parsed.error.issues.flatMap((issue) =>
-            issue.code === "unrecognized_keys"
-              ? issue.keys.map((key) => `${[...issue.path, key].join(".")}: not an argument of ${tool.name}`)
-              : [`${issue.path.join(".") || "(arguments)"}: ${issue.message}`],
-          ),
+          bounded(problems, (count) => `(${count} more problem(s) not listed)`),
         );
       }
       return tool.run(principal, parsed.data);
@@ -172,7 +194,8 @@ export const TOOLS: ToolDefinition[] = [
   define({
     name: "get_development_dependencies",
     title: "Development dependencies",
-    description: "What a record depends on, what depends on it, and what blocks it (prerequisites, parent modules, connections, open blockers).",
+    description:
+      "What a record depends on, what depends on it, and what blocks it (prerequisites, parent modules, connections, open blockers). On a record that does not pass validation, a list HQ cannot read is named in unreadable_fields (\"Not readable — see the stored record\"): an empty list there does not mean nothing is recorded.",
     mode: "read",
     input: z.strictObject({ type: recordType, id: z.string().min(1), rev }),
     run: (p, a) => services.getDevelopmentDependencies(p, a.type, a.id, { rev: a.rev }),
@@ -181,7 +204,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "get_record",
     title: "Get record",
     description:
-      "Any single record by type and id, with its version history. A record that does not pass validation is returned conformed to its schema (a value of the wrong kind reads \"Not a valid value\"), with valid: false, its validation problems and the record exactly as stored (stored). Use the version number when proposing a change.",
+      "Any single record by type and id, with its version history. A record that does not pass validation is returned conformed to its schema (a value of the wrong kind reads \"Not a valid value\"), with valid: false, its validation problems, the record exactly as stored (stored) and, for each list HQ cannot read and so returns empty, unreadable_fields (\"Not readable — see the stored record\"). Use the version number when proposing a change.",
     mode: "read",
     input: z.strictObject({ type: recordType, id: z.string().min(1), rev }),
     run: (p, a) => services.getRecord(p, a.type, a.id, { rev: a.rev }),

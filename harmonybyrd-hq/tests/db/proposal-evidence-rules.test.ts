@@ -157,19 +157,21 @@ const CASES: Case[] = [
   },
   {
     rule: "D1b",
+    // ROUND4 H1 (was 422 "must cite at least one source"): a created record carries no source label at all.
     name: 'a "founder_statement" claim with no citation',
     body: { create: { record_type: "open_item", record: { kind: "risk", title: "Ruling", statement: { text: "The founder approved it.", epistemic: "founder_statement", citations: [] } } } },
-    status: 422,
-    sqlstate: "HQ422",
-    message: /"founder_statement" statement must cite at least one source/i,
+    status: 403,
+    sqlstate: "HQ403",
+    message: /field "statement": a proposal's claim is the submitter's own: label it submitter_claim/i,
   },
   {
     rule: "D1b",
+    // ROUND4 H1 (was 422 "must cite at least one source"): a source label the target does not hold is refused.
     name: 'a "reported" lifecycle entry with no citation',
     body: { target: { type: "module", id: "MOD-FX-DELTA" }, set: { lifecycle: { documented: { state: "no", basis: "reported", note: "", citations: [] } } } },
-    status: 422,
-    sqlstate: "HQ422",
-    message: /"reported" statement must cite at least one source/i,
+    status: 403,
+    sqlstate: "HQ403",
+    message: /field "lifecycle.documented": a proposal's claim is the submitter's own/i,
   },
   // D1c — more protected fields
   {
@@ -279,7 +281,8 @@ const CASES: Case[] = [
     body: { target: { type: "evidence", id: "EV-FX-01" }, set: { result: { text: "All 300 tests pass.", epistemic: "submitter_claim", citations: [] } } },
     status: 403,
     sqlstate: "HQ403",
-    message: /cannot be rewritten by proposal; submit new evidence instead/i,
+    // ROUND4 H2 (was "cannot be rewritten by proposal"): such evidence is frozen as a whole.
+    message: /evidence that a source reports or HQ's build checked is changed only by an import; submit new evidence instead/i,
   },
   {
     rule: "D1c",
@@ -287,7 +290,7 @@ const CASES: Case[] = [
     body: { target: { type: "evidence", id: "EV-FX-02" }, set: { date: "2031-05-01" } },
     status: 403,
     sqlstate: "HQ403",
-    message: /cannot be rewritten by proposal/i,
+    message: /evidence that a source reports or HQ's build checked is changed only by an import/i,
   },
   // D15 — build-only fields
   {
@@ -621,19 +624,21 @@ describe("D1a — what still goes through", () => {
     expect(record.data.meta.origin).toBe("proposal_acceptance");
   });
 
-  it("a developer's update citing the source verbatim is accepted and applied", async () => {
+  it("a developer's update citing the source verbatim, as the submitter's claim, is accepted and applied", async () => {
+    // ROUND4 H1: the positive form is submitter_claim with a verified quotation (a source label such as
+    // design_intention is set only by an import; that refusal is tested in tests/db/proposal-claims.test.ts).
     const quote = "Gamma should let a learner improvise over the pattern they practised in Alpha.";
     const submitted = await submitChangeProposal(w.developer, {
       title: "Gamma objective",
       rationale: "From Fixture Document A.",
       base_rev: (await getDataset(w.founder)).head,
       target: { type: "module", id: "MOD-FX-GAMMA", base_version: await baseVersion("module", "MOD-FX-GAMMA") },
-      set: { objective: { text: "Improvise over a practised pattern.", epistemic: "design_intention", citations: [{ source_id: "SRC-F01", locator: "Gamma module", quote }] } },
+      set: { objective: { text: "Improvise over a practised pattern.", epistemic: "submitter_claim", citations: [{ source_id: "SRC-F01", locator: "Gamma module", quote }] } },
     });
     const filed = await reviewProposal(w.founder, (submitted.proposal as { id: string }).id, "accept");
     expect(filed.record_id).toBe("MOD-FX-GAMMA");
     const ctx = await getDataset(w.founder);
-    expect(ctx.ds.get("module", "MOD-FX-GAMMA")!.data.objective).toMatchObject({ epistemic: "design_intention", citations: [{ quote }] });
+    expect(ctx.ds.get("module", "MOD-FX-GAMMA")!.data.objective).toMatchObject({ epistemic: "submitter_claim", citations: [{ quote }] });
   });
 
   it("a named-only source can still be proposed, with a verified mention", async () => {
@@ -676,17 +681,23 @@ describe("D1a — what still goes through", () => {
     expect((record.data.record as { made_by: string }).made_by).not.toMatch(/HQ builder/);
   });
 
-  it("source-reported evidence may still get a new title, and keeps its verification", async () => {
-    const submitted = await submitChangeProposal(w.claude, {
-      title: "Clearer evidence title",
-      rationale: "Names the build.",
-      base_rev: (await getDataset(w.founder)).head,
-      target: { type: "evidence", id: "EV-FX-01", base_version: await baseVersion("evidence", "EV-FX-01") },
-      set: { title: "alpha-candidate-7 automated suite (42 tests)" },
-    });
-    await reviewProposal(w.founder, (submitted.proposal as { id: string }).id, "accept");
+  it("source-reported evidence can no longer get a new title by proposal (ROUND4 H2; was a control)", async () => {
+    const before = await worldState();
+    const err = await expectStatus(
+      submitChangeProposal(w.claude, {
+        title: "Clearer evidence title",
+        rationale: "Names the build.",
+        base_rev: (await getDataset(w.founder)).head,
+        target: { type: "evidence", id: "EV-FX-01", base_version: await baseVersion("evidence", "EV-FX-01") },
+        set: { title: "alpha-candidate-7 automated suite (42 tests)" },
+      }),
+      403,
+    );
+    expect(err.message).toMatch(/changed only by an import; submit new evidence instead/i);
+    expect(await worldState()).toEqual(before);
     const record = (await getDataset(w.founder)).ds.get("evidence", "EV-FX-01")!;
-    expect(record.data).toMatchObject({ title: "alpha-candidate-7 automated suite (42 tests)", verification: "source_reported", type: "automated_test" });
+    expect(record.data).toMatchObject({ verification: "source_reported", type: "automated_test" });
+    expect(record.data.title).not.toBe("alpha-candidate-7 automated suite (42 tests)");
   });
 
   it("a change to an unverified submission keeps it unverified and attributes it to whoever proposed the change", async () => {
@@ -823,7 +834,8 @@ describe("F1 — a proposal cannot introduce a claim of acceptance: what still g
 
   it("control: a module's lifecycle can change elsewhere while its reported acceptance stays identical", async () => {
     const lifecycle = structuredClone((await data("module", "MOD-FX-BETA")).lifecycle) as Record<string, Record<string, unknown>>;
-    lifecycle.documented = { state: "yes", basis: "reported", note: "Re-checked", citations: [BETA_ACCEPTED] };
+    // ROUND4 H1: the changed entry is the submitter's claim (it may quote the source).
+    lifecycle.documented = { state: "yes", basis: "submitter_claim", note: "Re-checked", citations: [BETA_ACCEPTED] };
     const id = await submitAs(w.developer, { type: "module", id: "MOD-FX-BETA" }, { lifecycle });
     await reviewProposal(w.founder, id, "accept");
     const after = (await data("module", "MOD-FX-BETA")).lifecycle as Record<string, Record<string, unknown>>;
@@ -859,11 +871,11 @@ describe("F1 — a proposal cannot introduce a claim of acceptance: what still g
     const current = () => data("module", "MOD-FX-BETA").then((d) => structuredClone(d.lifecycle) as Record<string, Record<string, unknown>>);
     // Allowed when submitted: it changes another dimension and leaves the reported acceptance identical.
     const keep = await current();
-    keep.designed = { state: "yes", basis: "reported", note: "Designed", citations: [BETA_ACCEPTED] };
+    keep.designed = { state: "yes", basis: "submitter_claim", note: "Designed", citations: [BETA_ACCEPTED] };
     const keepId = await submitAs(w.claude, { type: "module", id: "MOD-FX-BETA" }, { lifecycle: keep });
     // Then the founder files a correction that withdraws the reported acceptance.
     const withdrawn = await current();
-    withdrawn.founder_accepted = { state: "no", basis: "reported", note: "Withdrawn", citations: [BETA_ACCEPTED] };
+    withdrawn.founder_accepted = { state: "no", basis: "submitter_claim", note: "Withdrawn", citations: [BETA_ACCEPTED] };
     await reviewProposal(w.founder, await submitAs(w.developer, { type: "module", id: "MOD-FX-BETA" }, { lifecycle: withdrawn }), "accept");
     const before = await worldState();
     const err = await expectStatus(reviewProposal(w.founder, keepId, "accept"), 403);
@@ -874,9 +886,12 @@ describe("F1 — a proposal cannot introduce a claim of acceptance: what still g
   });
 
   it("proposalImpact calls out changes to lifecycle, standing and the link fields (F1, F2)", async () => {
-    const id = await submitAs(w.claude, { type: "build", id: "BLD-FX-01" }, { label: "alpha-7", module_id: "MOD-FX-GAMMA", decision_ids: ["FD-FX-01"] });
+    const id = await submitAs(w.claude, { type: "build", id: "BLD-FX-01" }, { label: "alpha-7", module_id: "MOD-FX-GAMMA" });
     const impact = await proposalImpact(w.founder, await getProposal(w.founder, id));
-    expect([...impact.sensitive_fields].sort()).toEqual(["decision_ids", "module_id"]);
+    expect([...impact.sensitive_fields].sort()).toEqual(["module_id"]);
+    // decision_ids is a requirement's field (ROUND4 H4: a proposal sets only the fields its type declares).
+    const linked = await submitAs(w.claude, { type: "requirement", id: "FR-FX-005" }, { title: "Linked to a decision", decision_ids: ["FD-FX-01"] });
+    expect([...(await proposalImpact(w.founder, await getProposal(w.founder, linked))).sensitive_fields].sort()).toEqual(["decision_ids"]);
     const created = (
       (await submitChangeProposal(w.claude, {
         title: "New open item",

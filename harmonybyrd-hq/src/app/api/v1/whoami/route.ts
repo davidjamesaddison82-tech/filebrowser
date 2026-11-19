@@ -1,5 +1,5 @@
 import { publicPrincipal } from "@/lib/auth/principal";
-import { withApi } from "@/lib/server/http";
+import { otherMethods, withApi } from "@/lib/server/http";
 
 export async function GET(request: Request) {
   return withApi(request, { action: "api.whoami" }, async ({ principal }) => ({
@@ -12,3 +12,6 @@ export async function GET(request: Request) {
     note: "Review, acceptance and founder decisions are available only in the founder's interactive session — never to an API token.",
   }));
 }
+
+/** The methods this route does not implement: 405 (OPTIONS 204) with Allow and a request id. */
+export const { POST, PUT, PATCH, DELETE, OPTIONS } = otherMethods(["GET"]);

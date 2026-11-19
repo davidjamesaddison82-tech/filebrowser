@@ -437,7 +437,12 @@ export const LoopRecord = z.looseObject({
 });
 export type LoopRecord = z.infer<typeof LoopRecord>;
 
-export const PATHWAY_BASES = ["reported", "design_intention", "commission_example", "hq_recommendation", "source_recommendation"] as const;
+/**
+ * A pathway's basis. "commission_example" says the commission gives this pathway as an example, a claim
+ * about a source like "reported", so only an import sets it (ROUND4 H1, L6); a pathway created by
+ * proposal has the basis "submitter_claim".
+ */
+export const PATHWAY_BASES = ["reported", "design_intention", "commission_example", "hq_recommendation", "source_recommendation", "submitter_claim"] as const;
 
 export const PathwayRecord = z.looseObject({
   id: id("PATH"),
@@ -654,6 +659,9 @@ export const EvidenceRecord = z.looseObject({
   submitted_by: z.string().nullish(),
   date: IsoDate.nullable().default(null),
   sha256: z.string().nullable().default(null),
+  /** Set by record_test_evidence: where the tested code lives (a reference, never a copy) and the counts it gives. */
+  code_ref: z.looseObject({ repository: z.string(), ref: z.string(), path: z.string().nullish() }).nullish(),
+  counts: z.object({ passed: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), skipped: z.number().int().nonnegative() }).nullish(),
   citations: z.array(Citation).default([]),
   hq_acceptance: HqAcceptance.optional(),
   // -- written only by HQ's build --
@@ -682,6 +690,9 @@ export const DefectRecord = z.looseObject({
   severity: z.enum(DEFECT_SEVERITIES).default("unknown"),
   statement: Claim,
   citations: z.array(Citation).default([]),
+  /** Set by submit_defect_report: how the defect reached HQ, and the handle of whoever reported it. */
+  reported_via: z.string().optional(),
+  reported_by: z.string().optional(),
   ...recordedFromCluster,
 });
 export type DefectRecord = z.infer<typeof DefectRecord>;
@@ -712,6 +723,9 @@ export type OpenItemRecord = z.infer<typeof OpenItemRecord>;
 /** A recommendation is only ever proposed: only a founder decision can approve work. */
 export const RECOMMENDATION_STATUSES = ["proposed"] as const;
 
+/** What a recommendation that names nobody as its maker reads as. */
+export const MADE_BY_NOT_STATED = "Not stated";
+
 /** A proposed next step. Always a recommendation: only a founder decision can approve work. */
 export const RecommendationRecord = z.looseObject({
   id: id("REC"),
@@ -719,7 +733,8 @@ export const RecommendationRecord = z.looseObject({
   rationale: z.string().min(1),
   rank: z.number().int().positive(),
   status: z.enum(RECOMMENDATION_STATUSES),
-  made_by: z.string().default("HQ builder (commission HB-HQ-P02-R1)"),
+  /** Who made it. A stored recommendation that names nobody says so; it is never taken to be HQ's (L7). */
+  made_by: z.string().default(MADE_BY_NOT_STATED),
   module_ids: z.array(ModuleId).default([]),
   prerequisite_ids: z.array(z.string()).default([]),
   blocked_by: z.array(z.string()).default([]),
@@ -746,6 +761,15 @@ export const RECORD_SCHEMAS = {
   open_item: OpenItemRecord,
   recommendation: RecommendationRecord,
 } as const satisfies Record<RecordType, z.ZodType>;
+
+/**
+ * ROUND4 H4: the top-level fields each record type declares, from the schemas above. A proposal may set
+ * only these (imports stay loose, for forward compatibility). The database holds the same rows in
+ * hq.record_fields (migration 0009); tests/db/record-fields.test.ts compares the two.
+ */
+export const RECORD_FIELDS: Readonly<Record<RecordType, readonly string[]>> = Object.fromEntries(
+  RECORD_TYPES.map((type) => [type, Object.keys((RECORD_SCHEMAS[type] as unknown as { shape: Record<string, unknown> }).shape).sort()]),
+) as unknown as Record<RecordType, readonly string[]>;
 
 export type RecordOf<T extends RecordType> = z.infer<(typeof RECORD_SCHEMAS)[T]>;
 export type AnyRecord = RecordOf<RecordType>;

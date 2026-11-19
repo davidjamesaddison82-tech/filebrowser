@@ -17,7 +17,7 @@ The automated HTTP suite drives `/api/mcp` with the **official MCP TypeScript SD
 (`@modelcontextprotocol/sdk`, `StreamableHTTPClientTransport`) — an independent implementation of the
 protocol, not code written for HQ. It covers the handshake, tool listing, tool calls, two clients
 reading the same pinned revision and receiving identical records, isolation between clients, stale
-and protected-field refusals, and the absence of any approval tool. See `tests/api/mcp.test.ts` and docs/TEST-RESULTS.md.
+and protected-field refusals, and the absence of any approval tool. See `tests/api/mcp.test.ts`, and docs/TEST-RESULTS.md for one recorded run (on the commit it names).
 
 This shows that HQ speaks MCP correctly to a standard client. It does **not** show that the Claude
 or ChatGPT applications can connect: each adds its own rules about where the server must be and how it authenticates.

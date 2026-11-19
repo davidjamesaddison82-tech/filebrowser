@@ -9,7 +9,10 @@ import type { Page } from "@playwright/test";
  *      own table, and boxes too small to see such as .sr-only) is tested against every piece of text
  *      on the page: if it is drawn on top of any of it, that is a covering, whatever its size;
  *   2. any such element that overlaps more than 12% of the window over the content is a covering
- *      even where it hides no text;
+ *      even where it hides no text. A box cut away entirely by a clip-path or the legacy clip (its own
+ *      or an ancestor's) is not a covering: as in check 4, the browser's hit test is asked what is
+ *      drawn at points over the box, and if it answers the box at none of them, nothing of it is drawn
+ *      (ROUND4 H10). The same rule takes such a box out of check 1's candidates;
  *   3. a grid of points over the visible part of <main>: each point must show <main> or something
  *      inside it, so an overlay anywhere else in the page (inside the navigation, in <body>) is found;
  *   4. a finer grid over <main>: where a point lies on a line of text, the element shown there must be
@@ -20,7 +23,9 @@ import type { Page } from "@playwright/test";
  * "Shown at a point" means the topmost element there that the browser draws: an element with
  * opacity 0 (itself or through an ancestor) is hit by the browser's hit test but draws nothing, so it
  * is looked through, never reported (round 3, G6). Opacity 0.01 is drawn and is reported.
- * One measure sees only what is on screen; coveringsTopAndEnd measures at several scroll positions.
+ * One measure sees only what is on screen; coveringsTopAndEnd measures at several scroll positions,
+ * among them, for each sticky element, the positions where it is stuck (from its containing block), so
+ * a covering that exists only over a short scroll range is seen (ROUND4 H10).
  */
 export interface LayoutMeasure {
   /**
@@ -101,6 +106,30 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
         }
       }
 
+      // ROUND4 H10: a box that a clip-path or the legacy clip (its own or an ancestor's) may cut away. Its
+      // shape cannot be read, so ask the browser's hit test, as check 4 does: if at none of a grid of
+      // points over its visible box the browser answers the box or something inside it, nothing of it
+      // is drawn there, and it covers nothing.
+      const mayBeClipped = (el: Element) => {
+        for (let a: Element | null = el; a && a !== document.documentElement; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          if (cs.clipPath !== "none" || (cs.clip !== "auto" && cs.clip !== "")) return true;
+        }
+        return false;
+      };
+      const fullyClipped = (el: Element, box: Box) => {
+        if (!mayBeClipped(el)) return false;
+        const n = 7;
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            const x = box.left + ((box.right - box.left) * (i + 0.5)) / n;
+            const y = box.top + ((box.bottom - box.top) * (j + 0.5)) / n;
+            if (document.elementsFromPoint(x, y).some((hit) => hit === el || el.contains(hit))) return false;
+          }
+        }
+        return true;
+      };
+
       const coverings: string[] = [];
       for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
         const cs = getComputedStyle(el);
@@ -112,6 +141,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
         if (nav && navBox && nav.contains(el) && inside(own, navBox)) continue; // part of the navigation, inside it
         const table = el.closest("table");
         if (cs.position === "sticky" && table && inside(own, table.getBoundingClientRect())) continue; // sticky cell in its table
+        if (fullyClipped(el, box)) continue; // cut away entirely: nothing of it is drawn (H10)
         const what = `${describe(el)} (${cs.position}, ${Math.round(own.width)}×${Math.round(own.height)} at ${Math.round(own.left)},${Math.round(own.top)})`;
 
         // (1) Is it drawn over any text that is not its own?
@@ -298,11 +328,77 @@ export function middlePositions(maxScroll: number, windowHeight: number): number
   return Array.from({ length: MAX_MIDDLE_POSITIONS }, (_, i) => Math.round((maxScroll * (i + 1)) / (MAX_MIDDLE_POSITIONS + 1)));
 }
 
+/** At most this many extra positions for sticky elements' stuck ranges. */
+const MAX_STICKY_POSITIONS = 24;
+
 /**
- * Measure at the top of the page, part-way down it (see middlePositions) and scrolled to its end, so
- * that a sticky or shifted element that covers text only part-way down a long page is found (round 3,
- * G6). `top` and `end` are the measures at both ends; `middle` the ones between; `coverings` every
- * covering found anywhere, each prefixed with where it was seen.
+ * ROUND4 H10: for each sticky element (top or bottom), the scroll positions at which it is stuck, worked
+ * out from its place in the flow and its containing block (its parent): the middle of the range in which
+ * it is stuck, and its last position before it is pushed away. A sticky element covers what scrolls under
+ * it only while it is stuck, and that range can be much shorter than the step between middle positions.
+ * Positions are whole pixels between 1 and maxScroll − 1, at most MAX_STICKY_POSITIONS, sorted.
+ */
+export async function stickyPositions(page: Page): Promise<number[]> {
+  return page.evaluate((max) => {
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const vh = window.innerHeight;
+    const y0 = window.scrollY;
+    const out = new Set<number>();
+    const add = (y: number) => {
+      const v = Math.round(y);
+      if (v > 0 && v < maxScroll) out.add(v);
+    };
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+      const cs = getComputedStyle(el);
+      if (cs.position !== "sticky" || cs.display === "none") continue;
+      const parent = el.parentElement;
+      if (!parent) continue;
+      const top = cs.top === "auto" ? null : parseFloat(cs.top);
+      const bottom = cs.bottom === "auto" ? null : parseFloat(cs.bottom);
+      if (top === null && bottom === null) continue;
+      // Its place in the flow: the same element, not sticky (relative with no offset keeps its place).
+      const before = el.style.position;
+      el.style.position = "relative";
+      const flow = el.getBoundingClientRect();
+      el.style.position = before;
+      const pb = parent.getBoundingClientRect();
+      const flowTop = flow.top + window.scrollY;
+      const flowBottom = flow.bottom + window.scrollY;
+      const parentTop = pb.top + window.scrollY + parseFloat(getComputedStyle(parent).paddingTop || "0");
+      const parentBottom = pb.bottom + window.scrollY - parseFloat(getComputedStyle(parent).paddingBottom || "0");
+      const h = flow.height;
+      if (top !== null) {
+        // Stuck from when its flow top reaches `top` until the parent's end pushes it away.
+        const start = flowTop - top;
+        const stop = parentBottom - h - top;
+        if (stop > start) {
+          add((start + stop) / 2);
+          add(stop - 1);
+          add(start + Math.min(h, stop - start) - 1);
+        }
+      }
+      if (bottom !== null) {
+        // Stuck while its flow bottom is below the window's bottom less `bottom`, until the parent's start passes.
+        const stop = flowBottom - (vh - bottom);
+        const start = parentTop + h - (vh - bottom);
+        if (stop > start) {
+          add((start + stop) / 2);
+          add(start + 1);
+          add(stop - Math.min(h, stop - start) + 1);
+        }
+      }
+    }
+    window.scrollTo(0, y0);
+    return [...out].sort((a, b) => a - b).slice(0, max);
+  }, MAX_STICKY_POSITIONS);
+}
+
+/**
+ * Measure at the top of the page, part-way down it (see middlePositions), at each sticky element's stuck
+ * range (stickyPositions) and scrolled to its end, so that a sticky or shifted element that covers text
+ * only part-way down a long page, or only over a short scroll range, is found (round 3 G6, ROUND4 H10).
+ * `top` and `end` are the measures at both ends; `middle` the ones between; `coverings` every covering
+ * found anywhere, each prefixed with where it was seen.
  */
 export async function coveringsTopAndEnd(page: Page): Promise<{ top: LayoutMeasure; middle: PlacedMeasure[]; end: LayoutMeasure; coverings: string[] }> {
   // y null: the end of the page. Returns the position actually reached.
@@ -319,9 +415,13 @@ export async function coveringsTopAndEnd(page: Page): Promise<{ top: LayoutMeasu
   }));
   const first = await at(0);
   const middle: PlacedMeasure[] = [];
-  for (const y of middlePositions(maxScroll, windowHeight)) {
+  const regular = middlePositions(maxScroll, windowHeight);
+  // A sticky position within 8 px of one already measured adds nothing.
+  const sticky = (await stickyPositions(page)).filter((y) => !regular.some((r) => Math.abs(r - y) < 8));
+  const positions = [...regular.map((y) => ({ y, kind: "middle" })), ...sticky.map((y) => ({ y, kind: "sticky" }))].sort((a, b) => a.y - b.y);
+  for (const { y, kind } of positions) {
     const m = await at(y);
-    middle.push({ where: `middle at ${m.scrollY} px`, ...m });
+    middle.push({ where: `${kind === "middle" ? "middle" : "where a sticky element is stuck,"} at ${m.scrollY} px`, ...m });
   }
   const last = await at(null);
   await page.evaluate(() => window.scrollTo(0, 0));

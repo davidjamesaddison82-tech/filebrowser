@@ -1,10 +1,10 @@
 import Link from "@/components/pin-link";
 import type { ReactNode } from "react";
-import type { DatasetView } from "@/lib/domain/conform";
+import { type DatasetView, UNREADABLE_LIST } from "@/lib/domain/conform";
 import type { Envelope } from "@/lib/domain/dataset";
 import { BUILD_ACCEPTANCE_LABEL, buildAcceptanceIsSourced, describeRef } from "@/lib/domain/derive";
 import { type BuildRecord, type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL, type RecordType } from "@/lib/domain/schemas";
-import { EPISTEMIC_TONE, fieldLabel, isListedValue, type ListedField, NOT_VALID, statusLabel, statusTone, storedValueText, type Tone } from "@/lib/ui/format";
+import { EPISTEMIC_TONE, fieldLabel, isListedValue, type ListedField, NOT_VALID, pathwayBasisDisplay, statusLabel, statusTone, storedValueText, type Tone } from "@/lib/ui/format";
 import { claim as asClaim, citations as asCitations, isEpistemic, isObject } from "@/lib/ui/guards";
 import { recordHref, refHref, withRev } from "@/lib/ui/links";
 
@@ -34,6 +34,17 @@ export function EpistemicChip({ value }: { value: Epistemic | unknown }) {
   return (
     <Chip tone={t.tone} glyph={t.glyph} title={EPISTEMIC_LABEL[value]}>
       {t.short}
+    </Chip>
+  );
+}
+
+/** A pathway's basis: the commission's example, or its epistemic label (a pathway created by proposal: the submitter's claim). */
+export function PathwayBasisChip({ value }: { value: unknown }) {
+  const shown = pathwayBasisDisplay(value);
+  if (!shown) return <EpistemicChip value={value} />;
+  return (
+    <Chip tone={shown.tone} glyph={shown.glyph} title={shown.title}>
+      {shown.short}
     </Chip>
   );
 }
@@ -268,12 +279,16 @@ export function RefList({ ds, ids: raw, empty = "None recorded." }: { ds: Datase
   );
 }
 
-export function Citations({ ds, citations: raw, label }: { ds: DatasetView; citations: Citation[] | unknown; label?: string }) {
+/**
+ * A statement's quotations. `by` is the statement's label: a submitter's claim's quotations are shown as
+ * the submitter's (ROUND4 H1), since HQ checks only that the words are in the source.
+ */
+export function Citations({ ds, citations: raw, label, by }: { ds: DatasetView; citations: Citation[] | unknown; label?: string; by?: unknown }) {
   const citations = asCitations(raw);
   if (!citations.length) return null;
   return (
     <details className="cites">
-      <summary>{label ?? `${citations.length} source ${citations.length === 1 ? "quotation" : "quotations"}`}</summary>
+      <summary>{quotationsLabel(citations.length, by) ?? label ?? `${citations.length} source ${citations.length === 1 ? "quotation" : "quotations"}`}</summary>
       {citations.map((c, i) => (
         <div className="cite" key={`${c.source_id}-${i}`}>
           <q>{c.quote}</q>
@@ -301,7 +316,7 @@ export function ClaimView({ ds, claim: raw, empty }: { ds: DatasetView; claim: C
       <div className="claim-text">{claim.text}</div>
       <div className="row" style={{ gap: 8 }}>
         <EpistemicChip value={claim.epistemic} />
-        <Citations ds={ds} citations={claim.citations} />
+        <Citations ds={ds} citations={claim.citations} by={claim.epistemic} />
       </div>
     </div>
   );
@@ -367,7 +382,7 @@ export function AcceptanceLock({ data }: { data: unknown }) {
  * Said on the page of a stored record that does not pass validation (G1f). `storedAt` is where the
  * record is shown exactly as stored; omitted on that page itself, where it is at the end.
  */
-export function InvalidRecordNotice({ storedAt }: { storedAt?: string }) {
+export function InvalidRecordNotice({ storedAt, unreadableFields = [] }: { storedAt?: string; unreadableFields?: readonly string[] }) {
   return (
     <Notice tone="warn">
       <strong>This record as stored does not pass validation.</strong> Values of the wrong kind are shown as “Not a valid value” and count for nothing in
@@ -379,8 +394,47 @@ export function InvalidRecordNotice({ storedAt }: { storedAt?: string }) {
       ) : (
         "The record exactly as stored is at the end of this page."
       )}
+      {unreadableFields.length ? (
+        <>
+          {" "}
+          {/* L8: a list HQ cannot read is empty in the view; it is not a list that holds nothing. */}
+          <span data-testid="unreadable-fields">
+            Lists HQ cannot read, so shown empty here: {unreadableFields.join(", ")}. {UNREADABLE_LIST}.
+          </span>
+        </>
+      ) : null}
     </Notice>
   );
+}
+
+/**
+ * ROUND4 H6b: said on a module's figures when records that fail validation name it (its own record
+ * included). `note` is the module's unreadable_note, the same words the API answer gives; the records are
+ * listed with links to their pages, where each is shown exactly as stored.
+ */
+export function UnreadableNotice({ ds, note, refs, rev = null }: { ds: DatasetView; note: string | null; refs: { type: RecordType; id: string }[]; rev?: number | null }) {
+  if (!note || refs.length === 0) return null;
+  return (
+    <div className="notice bad unreadable" role="alert" data-testid="unreadable-records">
+      <strong>{note}</strong>
+      <ul className="plain small" style={{ marginTop: 6 }}>
+        {refs.map((r) => (
+          <li key={`${r.type}:${r.id}`}>
+            <KnownLink ds={ds} type={r.type} id={r.id} rev={rev}>
+              {describeRef(ds, r.id).title}
+            </KnownLink>{" "}
+            <IdTag id={r.id} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** The label under which a claim's quotations are shown: a submitter's quotations are the submitter's (ROUND4 H1). */
+export function quotationsLabel(count: number, by: unknown): string | undefined {
+  if (by !== "submitter_claim") return undefined;
+  return `${count} ${count === 1 ? "quotation" : "quotations"} quoted by the submitter — HQ checked the words are in the source, not that they support this`;
 }
 
 /** A build whose standing says a source reports it as accepted (G1a). */

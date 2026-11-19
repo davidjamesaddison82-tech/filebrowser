@@ -357,18 +357,43 @@ describe("linked ids in a proposal must exist; outstanding counts only verified 
     const evidenceId = filed.body.result.record_id;
     const rev = filed.body.result.resulting_rev;
 
-    const link = await api<{ proposal: { id: string } }>("/api/v1/tools/submit_change_proposal", {
+    // ROUND4 H3: saying "implemented and tested" is not a proposal's to do. The refusal changes nothing.
+    type RecordAnswer = { data: { meta: { version: number }; record: { implementation_state: string; linked_evidence_ids: string[] } } };
+    const before = await api<RecordAnswer>("/api/v1/tools/get_record", { token: w.tokens.chatgpt, body: { type: "requirement", id: "FR-FX-003" } });
+    const tested = await api<ErrorBody>("/api/v1/tools/submit_change_proposal", {
       token: w.tokens.claude,
       body: {
         title: "Mark FR-FX-003 tested",
         rationale: "The submitted run covers it.",
         base_rev: rev,
-        target: { type: "requirement", id: "FR-FX-003", base_version: 1 },
+        target: { type: "requirement", id: "FR-FX-003", base_version: before.body.data.meta.version },
         set: { implementation_state: "implemented_tested", linked_evidence_ids: [evidenceId] },
+      },
+    });
+    expect(tested.status).toBe(403);
+    expect(tested.body.error.detail).toMatchObject({ rule: "tested_claim", field: "implementation_state" });
+    expect(await myProposalTitles(w.tokens.claude)).not.toContain("Mark FR-FX-003 tested");
+    const unchanged = await api<RecordAnswer>("/api/v1/tools/get_record", { token: w.tokens.chatgpt, body: { type: "requirement", id: "FR-FX-003" } });
+    expect(unchanged.body.data.meta.version).toBe(before.body.data.meta.version);
+    expect(unchanged.body.data.record.implementation_state).toBe(before.body.data.record.implementation_state);
+    expect(unchanged.body.data.record.linked_evidence_ids).toEqual(before.body.data.record.linked_evidence_ids);
+
+    // What a proposal may say: implemented but unverified, with the unverified evidence linked.
+    const link = await api<{ proposal: { id: string } }>("/api/v1/tools/submit_change_proposal", {
+      token: w.tokens.claude,
+      body: {
+        title: "Mark FR-FX-003 implemented",
+        rationale: "The submitted run covers it.",
+        base_rev: rev,
+        target: { type: "requirement", id: "FR-FX-003", base_version: before.body.data.meta.version },
+        set: { implementation_state: "implemented_unverified", linked_evidence_ids: [evidenceId] },
       },
     });
     expect(link.status).toBe(200);
     expect((await api(`/api/v1/proposals/${link.body.proposal.id}/review`, { cookie: founderCookie, body: { decision: "accept" } })).status).toBe(200);
+    const linked = await api<RecordAnswer>("/api/v1/tools/get_record", { token: w.tokens.chatgpt, body: { type: "requirement", id: "FR-FX-003" } });
+    expect(linked.body.data.record.implementation_state).toBe("implemented_unverified");
+    expect(linked.body.data.record.linked_evidence_ids).toEqual([evidenceId]);
 
     type Outstanding = { data: { requirements: { id: string; has_linked_evidence: boolean; reasons: string[]; test_evidence: { unverified: string[] } }[] } };
     const res = await api<Outstanding>("/api/v1/tools/find_outstanding_requirements", { token: w.tokens.chatgpt });

@@ -35,6 +35,24 @@ describe("AC12 — external services that are unavailable are handled safely (Gi
     expect(calls).toHaveLength(0);
   });
 
+  it("echoes at most 80 characters of a repository it refuses, and compares the whole value (L4)", async () => {
+    const { impl, calls } = fakeFetch(() => jsonResponse({ sha: "abc" }));
+    const adapter = new GitHubAdapter(config, impl);
+    const long = "x/" + "y".repeat(16_000);
+    const refused = await adapter.resolveRef(long, "main");
+    expect(refused).toMatchObject({ ok: false, reason: "forbidden" });
+    const detail = (refused as { detail: string }).detail;
+    expect(detail).toContain(`"${long.slice(0, 80)}"`);
+    expect(detail).not.toContain(long.slice(0, 81));
+    expect(detail.length).toBeLessThan(200);
+    // An allow-listed name followed by more text is not the allow-listed name: the comparison uses the whole value.
+    const padded = REPO + "y".repeat(100);
+    expect(await adapter.resolveRef(padded, "main")).toMatchObject({ ok: false, reason: "forbidden" });
+    expect(await adapter.fileAt(REPO.padEnd(81, "z"), "main", "README.md")).toMatchObject({ ok: false, reason: "forbidden" });
+    expect(calls).toHaveLength(0);
+    expect(await adapter.resolveRef(REPO, "main")).toMatchObject({ ok: true });
+  });
+
   it("returns a failure value when the network is down", async () => {
     const adapter = new GitHubAdapter(config, async () => {
       throw new TypeError("fetch failed");

@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { LifecycleLegend, LifecycleMatrix } from "@/components/lifecycle";
 import { Card, Chip, Empty, IdTag, PageHead } from "@/components/ui";
-import { ecosystemOverview, lifecycleMatrix, search } from "@/lib/domain/derive";
+import { ecosystemOverview, lifecycleMatrix, search, type StandingHeadline } from "@/lib/domain/derive";
 import { loadPage, param, type SearchParams } from "@/lib/server/page";
 import { humanise } from "@/lib/ui/format";
 import { withRev } from "@/lib/ui/links";
 
 export const metadata: Metadata = { title: "Module atlas" };
 
-const STANDING_TONE: Record<string, "ok" | "bad" | "founder" | "info" | "accent" | "design" | "plain" | "ghost"> = {
+const STANDING_TONE: Record<StandingHeadline, "ok" | "bad" | "founder" | "info" | "accent" | "design" | "plain" | "ghost"> = {
   accepted_in_hq: "ok",
   rejected_in_hq: "bad",
   acceptance_reported: "founder",
@@ -18,6 +18,7 @@ const STANDING_TONE: Record<string, "ok" | "bad" | "founder" | "info" | "accent"
   designed_only: "design",
   documented_only: "plain",
   named_only: "ghost",
+  not_reliable: "bad",
 };
 
 export default async function ModulesPage({ searchParams }: { searchParams: SearchParams }) {
@@ -98,6 +99,19 @@ export default async function ModulesPage({ searchParams }: { searchParams: Sear
         ) : null}
       </form>
 
+      {(() => {
+        const affected = overview.modules.filter((m) => m.unreadable_records.length > 0);
+        return affected.length ? (
+          <div className="notice bad" role="alert" data-testid="unreadable-register">
+            <strong>
+              {affected.length} {affected.length === 1 ? "module's figures" : "modules' figures"} may be incomplete: records that name{" "}
+              {affected.length === 1 ? "it" : "them"} cannot be read in full.
+            </strong>{" "}
+            Each such module says so below. <Link href={withRev("/health/unreadable_records", rev)}>Records HQ cannot read</Link>
+          </div>
+        ) : null;
+      })()}
+
       <div className="tabs" role="tablist">
         <Link href={query({})} aria-current={view === "list" ? "page" : undefined}>
           Atlas
@@ -152,6 +166,14 @@ export default async function ModulesPage({ searchParams }: { searchParams: Sear
                         <div className="muted small clamp-2" title={m.summary || undefined}>
                           {m.summary || (m.parent_id ? `Part of ${ds.moduleName(m.parent_id)}` : humanise(m.kind))}
                         </div>
+                        {m.unreadable_note ? (
+                          <div className="small unreadable-note" data-testid="unreadable-note">
+                            <Chip tone="bad" glyph="!">
+                              {m.unreadable_records.length} unreadable
+                            </Chip>{" "}
+                            {m.unreadable_note}
+                          </div>
+                        ) : null}
                       </td>
                       <td>
                         <Chip tone={STANDING_TONE[m.standing] ?? "plain"}>{m.standing_label}</Chip>
@@ -161,10 +183,18 @@ export default async function ModulesPage({ searchParams }: { searchParams: Sear
                           </div>
                         ) : null}
                       </td>
-                      <td className="num">{m.loops}</td>
-                      <td className="num">{m.requirements}</td>
-                      <td className="num">{m.open_defects ? <Chip tone="bad">{m.open_defects}</Chip> : 0}</td>
-                      <td className="num">{m.blockers ? <Chip tone="warn">{m.blockers}</Chip> : 0}</td>
+                      {m.reliable ? (
+                        <>
+                          <td className="num">{m.loops}</td>
+                          <td className="num">{m.requirements}</td>
+                          <td className="num">{m.open_defects ? <Chip tone="bad">{m.open_defects}</Chip> : 0}</td>
+                          <td className="num">{m.blockers ? <Chip tone="warn">{m.blockers}</Chip> : 0}</td>
+                        </>
+                      ) : (
+                        <td className="num" colSpan={4}>
+                          <Chip tone="bad">Not reliable</Chip>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

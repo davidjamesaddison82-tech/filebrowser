@@ -95,6 +95,71 @@ export function named(): Planted[] {
   ];
 }
 
+/**
+ * ROUND4 H6: the screens verifier's planted records (rv3 new defects Y14–Y18 and G11a), and variations of
+ * them: invalid records whose stored data says something negative, names a module in a way conforming
+ * cannot keep, or would be made to say something by a default. None of them may make anything read
+ * better than it reads without them, and each that names a module must be listed in its figures.
+ * BLD-FX-02 is reported as accepted with no instrument in the fixture; MOD-FX-GAMMA has no defect.
+ */
+export function screensCases(): Planted[] {
+  const alpha = first("module", "MOD-FX-ALPHA");
+  const b1 = first("build", "BLD-FX-01");
+  const ev = first("evidence", "EV-FX-01");
+  const def = first("defect", "DEF-FX-01");
+  const rec2 = first("recommendation", "REC-FX-02");
+  const open2 = first("open_item", "OPEN-FX-02");
+  const req = first("requirement", "FR-FX-001");
+  const loop = first("loop", "LOOP-FX-01");
+  const src = first("source", "SRC-F01");
+  const withoutMadeBy = Object.fromEntries(Object.entries(rec2).filter(([k]) => k !== "made_by")) as Rec;
+  return [
+    // Y14: an evidence record that fails validation is no acceptance instrument; its stored result says the opposite.
+    { type: "evidence", id: "EV-RV3-FA", data: { ...ev, id: "EV-RV3-FA", type: "founder_acceptance", title: "rv3 odd founder acceptance of Beta build 2", module_ids: ["MOD-FX-BETA"], build_id: "BLD-FX-02", verification: "source_reported", result: "The founder did NOT accept this build." } },
+    // Y15: negative content a conformed view drops.
+    { type: "module", id: "MOD-RV3-BLK", data: { ...alpha, id: "MOD-RV3-BLK", name: "rv3 blocker module", aliases: [], blockers: [{ text: "RV3 BLOCKER: MIDI input is broken, do not ship", epistemic: "Reported", citations: [] }] } },
+    { type: "defect", id: "DEF-RV3-MODSTR", data: { ...def, id: "DEF-RV3-MODSTR", title: "rv3 open blocking defect on Gamma", status: "open", severity: "blocking", module_ids: "MOD-FX-GAMMA", build_id: null } },
+    { type: "open_item", id: "OPEN-RV3-STR", data: { ...open2, id: "OPEN-RV3-STR", title: "rv3 blocker on Gamma", kind: "blocker", module_ids: "MOD-FX-GAMMA" } },
+    // Y15 and Y17: a recommendation blocked by a string, with no made_by.
+    { type: "recommendation", id: "REC-RV3-BLK", data: { ...withoutMadeBy, id: "REC-RV3-BLK", title: "rv3 blocked recommendation", blocked_by: "OPEN-FX-02", rank: "first" } },
+    // Y18: an HQ check whose stored result is a failure object.
+    { type: "build", id: "BLD-RV3-CHK", data: { ...b1, id: "BLD-RV3-CHK", label: "rv3-checks", hq_checks: [{ check: "sha256 matches", result: "pass" }, { check: "opens in a browser", result: { failed: true, detail: "RV3 FAILED CHECK" } }] } },
+    // G11a: a tested requirement whose evidence links are a string; a module stored with a number as summary.
+    { type: "requirement", id: "FR-RV3-LINK", data: { ...req, id: "FR-RV3-LINK", title: "rv3 tested requirement with odd links", implementation_state: "implemented_tested", linked_evidence_ids: "EV-FX-01" } },
+    { type: "module", id: "MOD-RV3-CA", data: { ...alpha, id: "MOD-RV3-CA", name: "rv3 cycle A", aliases: [], parent_id: "MOD-RV3-CB", summary: 7 } },
+    { type: "module", id: "MOD-RV3-CB", data: { ...alpha, id: "MOD-RV3-CB", name: "rv3 cycle B", aliases: [], parent_id: "MOD-RV3-CA", summary: 7 } },
+    // Variations (ROUND4 view lane): a module named in a comma list, as an object key, at the end of a
+    // sentence and deep in a nested list; a valid-looking positive record that fails on one other field.
+    { type: "defect", id: "DEF-R4-COMMA", data: { ...def, id: "DEF-R4-COMMA", title: "r4 defect on two modules", status: "open", module_ids: "MOD-FX-GAMMA, MOD-FX-DELTA", build_id: null } },
+    { type: "open_item", id: "OPEN-R4-KEY", data: { ...open2, id: "OPEN-R4-KEY", title: "r4 blocker keyed by module", kind: 7, module_ids: [], by_module: { "MOD-FX-DELTA": "blocked" } } },
+    { type: "evidence", id: "EV-R4-SENT", data: { ...ev, id: "EV-R4-SENT", title: "r4 evidence", type: ["test_run"], module_ids: [], build_id: null, result: { text: "Fails on MOD-FX-BETA.", epistemic: "reported", citations: [] } } },
+    { type: "requirement", id: "FR-R4-DEEP", data: { ...req, id: "FR-R4-DEEP", title: "r4 requirement", module_ids: [], acceptance_criteria: [[{ text: "see MOD-FX-BETA" }]] } },
+    { type: "build", id: "BLD-R4-ACC", data: { ...b1, id: "BLD-R4-ACC", label: "r4-accepted", module_id: "MOD-FX-GAMMA", standing: "accepted_reported", statement: { text: "Accepted.", epistemic: "reported", citations: [{ source_id: "SRC-F01", locator: null, quote: "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only." }] }, bytes: 12 } },
+    { type: "evidence", id: "EV-R4-HQV", data: { ...ev, id: "EV-R4-HQV", title: "r4 checked evidence", verification: "hq_verified", type: "test_run", module_ids: ["MOD-FX-GAMMA"], build_id: null, date: 20310101 } },
+    { type: "loop", id: "LOOP-R4-ODD", data: { ...loop, id: "LOOP-R4-ODD", name: "r4 loop", module_ids: ["MOD-FX-DELTA"], standing: 5 } },
+    { type: "source", id: "SRC-R4-ODD", data: { ...src, id: "SRC-R4-ODD", title: "r4 source", doc_date: "2099-01-01", access: "read_full", bytes: "many" } },
+  ];
+}
+
+/**
+ * ROUND4 H1: a VALID build whose statement is a submitter's claim quoting a source verbatim, as an update
+ * may now leave one. Its page must show the statement as the submitter's, never under "What the source says".
+ */
+export function submitterClaimBuild(): Planted {
+  const b1 = first("build", "BLD-FX-01");
+  return {
+    type: "build",
+    id: "BLD-R4-SUBQ",
+    data: {
+      ...b1,
+      id: "BLD-R4-SUBQ",
+      label: "r4-submitter-claim-build",
+      standing: "development",
+      statement: { text: "The submitter says this build was accepted.", epistemic: "submitter_claim", citations: [{ source_id: "SRC-F01", locator: null, quote: "Beta build 2 was accepted by the founder on 3 March 2031 for desktop browsers only." }] },
+    },
+  };
+}
+
 /** Store the records as the owner, as an import would (hq.admin_put_records), in one new revision. */
 export async function plantOddRecords(records: Planted[], summary: string): Promise<void> {
   // Imported here, not at the top, so the unit tests can use the records without a database.

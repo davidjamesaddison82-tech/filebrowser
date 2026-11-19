@@ -67,7 +67,8 @@ export class GitHubAdapter {
       return { ok: false, reason: "not_configured", detail: "No repository is configured (HQ_GITHUB_REPOSITORIES)." };
     }
     if (!REPO.test(repository) || !this.config.repositories.includes(repository)) {
-      return { ok: false, reason: "forbidden", detail: `Repository "${repository}" is not on HQ's allow-list.` };
+      // The comparison above uses the whole value; only what is echoed is cut (ROUND4 H7: at most 80 characters).
+      return { ok: false, reason: "forbidden", detail: `Repository "${repository.slice(0, 80)}" is not on HQ's allow-list.` };
     }
     return null;
   }

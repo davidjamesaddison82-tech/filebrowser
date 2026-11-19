@@ -221,3 +221,42 @@ export function argsFromQuery(url: URL, input?: z.ZodObject): Record<string, unk
   }
   return args;
 }
+
+/** Every HTTP method a route can export. */
+export const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
+export type HttpMethod = (typeof HTTP_METHODS)[number];
+type MethodHandler = (request: Request) => Response;
+
+/** The Allow header for a route that implements `methods` (HEAD comes with GET, OPTIONS always). */
+function allowHeader(methods: readonly HttpMethod[]): string {
+  const allowed = new Set<HttpMethod>([...methods, "OPTIONS"]);
+  if (allowed.has("GET")) allowed.add("HEAD");
+  return HTTP_METHODS.filter((m) => allowed.has(m)).join(", ");
+}
+
+/**
+ * Handlers for the methods a route does NOT implement (H8, F6): 405 with `allow`, a fresh
+ * `x-request-id` and the usual error body; OPTIONS answers 204 with `allow` and the id. Without them
+ * Next answers on its own, with no request id. A route exports them beside its own handlers:
+ *
+ *   export const { PUT, PATCH, DELETE, OPTIONS } = otherMethods(["GET", "POST"]);
+ *
+ * `format: "jsonrpc"` gives the error body as a JSON-RPC error (the MCP endpoint).
+ */
+export function otherMethods(implemented: readonly HttpMethod[], format: "rest" | "jsonrpc" = "rest"): Record<HttpMethod, MethodHandler> {
+  const allow = allowHeader(implemented);
+  const notAllowed: MethodHandler = (request) => {
+    const requestId = randomUUID();
+    const message = `${request.method.slice(0, 20)} is not supported here. Use ${allow.replace(/, OPTIONS$/, "").replace(/, ([A-Z]+)$/, " or $1")}.`;
+    const body =
+      format === "jsonrpc"
+        ? { jsonrpc: "2.0", id: null, error: { code: -32000, message, data: { code: "method_not_allowed", status: 405 } } }
+        : { error: { code: "method_not_allowed", message, request_id: requestId } };
+    return json(body, { status: 405, headers: { allow, "x-request-id": requestId } });
+  };
+  const options: MethodHandler = () =>
+    new Response(null, { status: 204, headers: { allow, "x-request-id": randomUUID(), "cache-control": "no-store" } });
+  const handlers = {} as Record<HttpMethod, MethodHandler>;
+  for (const method of HTTP_METHODS) handlers[method] = method === "OPTIONS" ? options : notAllowed;
+  return handlers;
+}

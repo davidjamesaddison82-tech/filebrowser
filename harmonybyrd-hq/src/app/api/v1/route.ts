@@ -1,5 +1,5 @@
 import { publicPrincipal } from "@/lib/auth/principal";
-import { withApi } from "@/lib/server/http";
+import { otherMethods, withApi } from "@/lib/server/http";
 import { HQ_NOTICE } from "@/lib/server/services";
 import { getDataset } from "@/lib/server/store";
 import { TOOLS } from "@/lib/server/tools";
@@ -25,3 +25,6 @@ export async function GET(request: Request) {
     };
   });
 }
+
+/** The methods this route does not implement: 405 (OPTIONS 204) with Allow and a request id. */
+export const { POST, PUT, PATCH, DELETE, OPTIONS } = otherMethods(["GET"]);

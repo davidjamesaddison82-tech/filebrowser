@@ -3,7 +3,7 @@
  * revision on every link (ui-8, honesty-8, D14). Browser-level checks are in tests/e2e.
  */
 import { describe, expect, it } from "vitest";
-import { humanise, isoDate, statusLabel, statusTone } from "@/lib/ui/format";
+import { fieldLabel, humanise, isoDate, pathwayBasisDisplay, statusLabel, statusTone } from "@/lib/ui/format";
 import { citations, claim, codeRef, hqChecks, lifecycleReports, otherMentions, searchResults, strings } from "@/lib/ui/guards";
 import { isPinnablePath, readRev, withRev } from "@/lib/ui/pin-rules";
 
@@ -82,5 +82,23 @@ describe("loose stored values are read through guards (ui-3)", () => {
     expect(statusLabel(5)).toBe("—");
     expect(statusTone(5)).toBe("plain");
     expect(statusLabel("constructor")).toBe("Constructor");
+  });
+});
+
+describe("a pathway's basis on the screens (L6)", () => {
+  it("a pathway created by proposal is shown as the submitter's claim, never as the commission's example", () => {
+    expect(pathwayBasisDisplay("submitter_claim")).toMatchObject({ tone: "warn", short: "Submitter's claim" });
+    expect(fieldLabel("pathway.basis", "submitter_claim")).toBe("Submitter's claim");
+  });
+
+  it("an imported commission example, and the other bases, keep their own labels", () => {
+    expect(pathwayBasisDisplay("commission_example")).toMatchObject({ tone: "founder", short: "Example given in the commission" });
+    expect(fieldLabel("pathway.basis", "commission_example")).toBe("Example given in the commission");
+    expect(pathwayBasisDisplay("design_intention")).toMatchObject({ tone: "design", short: "Design intention" });
+    expect(pathwayBasisDisplay("reported")).toMatchObject({ short: "Reported in source" });
+  });
+
+  it("a basis outside the pathway's list is not given a label", () => {
+    for (const odd of ["verified", "no_evidence", "Submitter_claim", null, ["submitter_claim"], 3]) expect(pathwayBasisDisplay(odd), String(odd)).toBeNull();
   });
 });

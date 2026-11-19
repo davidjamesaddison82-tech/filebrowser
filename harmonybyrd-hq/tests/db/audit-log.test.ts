@@ -296,7 +296,10 @@ describe("F4 — hq.log_access accepts only what the application logs as allowed
   });
 });
 
-describe("G2 — audit actions are bounded, and none reads like a founder act", () => {
+// Round 3 (0008) bounded the names an audit action may have. It did not make every name that reads
+// like a founder act impossible; ROUND4 H11 replaced its families and word list with an exact list,
+// tested in its own describe block. These cases still hold under that list.
+describe("G2 — audit action names are bounded (the exact list of allowed actions is H11's)", () => {
   // Every action the application records as allowed (grep of src/ for withApi( and audit(…"allowed"):
   // api.index, api.whoami, tools.list, integrations.read, proposal.read, session.sign_in, and
   // tool.<name> / mcp.<name> for every tool in the registry. Taken from the registry itself, so a new
@@ -395,6 +398,87 @@ describe("G2 — audit actions are bounded, and none reads like a founder act", 
       const before = await auditCount();
       await expect(client.query("select hq.log_event($1, null, null, 'denied', null, null)", ["x".repeat(81)])).rejects.toMatchObject({ code: "23514" });
       expect(await auditCount()).toBe(before);
+    } finally {
+      await client.end();
+    }
+  });
+});
+
+describe("H11 (ROUND4) — hq.log_access accepts an exact list, not a word list", () => {
+  // Every name a verifier recorded as "allowed" under 0008's families and word list (rv3-priv/g2.mts,
+  // rv3-docs/probe1.mts). None of them is an action the application logs.
+  const WALKED_ROUND = [
+    "tool.sign_off",
+    "tool.re_view_proposal",
+    "tool.rev_iew",
+    "tool.ac_cept",
+    "tool.approv_e",
+    "tool.ratify_build",
+    "tool.endorse",
+    "tool.authorise_release",
+    "tool.founder_confirmed",
+    "tool.hq_verified",
+    "mcp.confirm_release",
+    "mcp.grant_founder_ok",
+    "api.founder",
+    "api.founder_signed_off",
+    "api.founder_signoff",
+    "api.approval",
+    "api.ratify",
+    "tool.get_record_x",
+    "mcp.list_sources_and_accept",
+    "tool.",
+    "mcp.",
+    "tool.tool.get_record",
+    "tool.GET_RECORD",
+    "tool.get_record ",
+  ];
+
+  it("the names the verifiers walked round the word list with are refused (HQ422) for every caller, and nothing is written", async () => {
+    const before = await auditCount();
+    for (const action of WALKED_ROUND) {
+      for (const who of [w.claude, w.developer, w.reader, w.founder]) {
+        await expect(
+          asAppRole("authenticated", claimsFor(who), (c) => c.query("select hq.log_access($1, 'principal', 'founder', 'srv-h11')", [action])),
+          `${who.handle} ${action}`,
+        ).rejects.toMatchObject({ code: "HQ422", message: expect.stringMatching(/cannot be recorded as allowed here/) });
+      }
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it("a session row may name only the caller's own handle (HQ422 otherwise), and nothing is written", async () => {
+    const before = await auditCount();
+    for (const action of ["session.sign_in", "session.sign_out", "session.end_all"]) {
+      for (const who of [w.reader, w.developer, w.claude]) {
+        await expect(
+          asAppRole("authenticated", claimsFor(who), (c) => c.query("select hq.log_access($1, 'principal', 'founder', 'srv-h11')", [action])),
+          `${who.handle} ${action}`,
+        ).rejects.toMatchObject({ code: "HQ422", message: expect.stringMatching(/a session event can only name the caller's own handle/) });
+      }
+    }
+    expect(await auditCount()).toBe(before);
+    // The caller's own handle, or no object, is recorded.
+    for (const action of ["session.sign_in", "session.end_all"]) {
+      await asAppRole("authenticated", claimsFor(w.reader), (c) => c.query("select hq.log_access($1, 'principal', 'reader', 'srv-h11b')", [action]));
+      expect(await lastAudit()).toMatchObject({ principal_handle: "reader", action, object_id: "reader", outcome: "allowed" });
+    }
+  });
+
+  it("the application's own audit of a sign-in still goes through (it names the signed-in principal)", async () => {
+    await audit(claimsFor(w.founder), { action: "session.sign_in", objectType: "principal", objectId: w.founder.handle, outcome: "allowed", requestId: "app-h11" });
+    expect(await lastAudit()).toMatchObject({ principal_handle: "founder", action: "session.sign_in", object_id: "founder", outcome: "allowed", request_id: "app-h11" });
+  });
+
+  it("hq.tool_names is exactly the registry's tool names, so adding a tool without a migration fails here", async () => {
+    const client = await admin();
+    try {
+      const rows = (await client.query<{ name: string }>('select name from hq.tool_names order by name collate "C"')).rows.map((r) => r.name);
+      expect(rows).toEqual(TOOLS.map((t) => t.name).sort());
+      for (const role of ["anon", "authenticated", "hq_auth", "service_role"]) {
+        const r = await client.query<{ s: boolean; i: boolean }>("select has_table_privilege($1, 'hq.tool_names', 'select') as s, has_table_privilege($1, 'hq.tool_names', 'insert') as i", [role]);
+        expect(r.rows[0], role).toEqual({ s: false, i: false });
+      }
     } finally {
       await client.end();
     }

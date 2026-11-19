@@ -117,3 +117,26 @@ describe("request bodies are capped (api-4)", () => {
     expect(await readBodyText(new Request("http://hq.test/", { method: "POST", body }), 10_000)).toBe(body);
   });
 });
+
+describe("tool errors echo the client's names only in part (H7)", () => {
+  it("every tool cuts an unknown argument name to 80 characters and lists at most 10, with a count", async () => {
+    const long = "k".repeat(1_000_000);
+    const many = Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`x${i}`, 1]));
+    for (const tool of TOOLS) {
+      const one = (await tool.run({} as never, { [long]: 1 }).catch((e: unknown) => e)) as HqError;
+      expect(one.message.length, tool.name).toBeLessThan(200);
+      expect(JSON.stringify(one.detail).length, tool.name).toBeLessThan(3000);
+      expect(one.message, tool.name).toContain(`"${"k".repeat(80)}…"`);
+      const lots = (await tool.run({} as never, many).catch((e: unknown) => e)) as HqError;
+      expect(lots.message, tool.name).toMatch(/ and 4990 more\.$/);
+      expect((lots.detail as string[]).length, tool.name).toBe(11);
+      expect((lots.detail as string[]).at(-1), tool.name).toMatch(/^\(\d+ more problem\(s\) not listed\)$/);
+    }
+  });
+
+  it("a name that is not over the limit is echoed whole", async () => {
+    const name = "n".repeat(80);
+    const error = (await findTool("list_sources")!.run({} as never, { [name]: 1 }).catch((e: unknown) => e)) as HqError;
+    expect(error.message).toBe(`list_sources does not take the argument "${name}".`);
+  });
+});

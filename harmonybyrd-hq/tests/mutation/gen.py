@@ -129,10 +129,10 @@ rep("mq9_deep_citations", QT, "'strict $.** ? (@.type() == \"object\" && @.sourc
 
 # ---- stage 1: HQ-only labels (D1b) ----
 rep("ml1_hq_labels", LBL, "if v_val in ('verified', 'hq_recommendation') then", "if false then")
-rep("ml2_label_needs_citation", LBL, "if v_val in ('reported', 'design_intention', 'source_recommendation', 'founder_statement')", "if false and v_val in ('reported', 'design_intention', 'source_recommendation', 'founder_statement')")
+# (ml2_label_needs_citation and ml5_merged_citation are gone: ROUND4 H1 replaced the rule "a source label
+# needs a citation" with "a source label is set only by an import"; its mutations are mh1* below.)
 rep("ml3_loop_standing", LBL, "v_keys := array_append(v_keys, 'standing');", "null;")
 rep("ml4_check_labels_call", VP, "perform hq._check_labels(v_type, v_doc, v_op = 'create');", "perform 1;")
-rep("ml5_merged_citation", VAT, "if jsonb_typeof(v_set -> v_key) = 'string'", "if false")
 
 # ---- stage 1: protected / build-only / source / evidence fields (D1c, D15) ----
 rep("mb1_build_only_update", VP, "if v_key = any (hq.protected_fields() || hq.build_only_fields(v_type)) then", "if v_key = any (hq.protected_fields()) then")
@@ -144,7 +144,8 @@ rep("ms2_source_create_kind", VP, """if v_doc ->> 'kind' is distinct from 'named
 rep("ms3_source_create_snapshot", VP, "if v_doc ? v_key then", "if false then")
 rep("me1_evidence_type_update", VP, "if v_type = 'evidence' and v_doc ->> 'type' in ('founder_acceptance', 'hq_check') then", "if false then", nth=1, expect=2)
 rep("me1b_evidence_type_create", VP, "if v_type = 'evidence' and v_doc ->> 'type' in ('founder_acceptance', 'hq_check') then", "if false then", nth=2, expect=2)
-rep("me2_evidence_lock", VAT, "and v_set ?| array['type', 'result', 'sha256', 'date', 'build_id'] then", "and false then")
+# (0009, H2) the lock became a freeze of the whole record; the mutation removes the freeze.
+rep("me2_evidence_lock", VAT, "if p_target_type = 'evidence' and p_cur.data ->> 'verification' in ('hq_verified', 'source_reported') then", "if false then")
 rep("me3_evidence_restamp_update", REVIEW, "if v_type = 'evidence' and coalesce(v_cur.data ->> 'verification', '') not in ('hq_verified', 'source_reported') then", "if false then")
 rep("me4_evidence_restamp_create", REVIEW, """if v_type = 'evidence' then
       -- A submission is a claim""", """if false then
@@ -206,13 +207,13 @@ rep("mau6_refusal_request_id", LR, "if v_request is not null and v_request !~ '^
 rep("mau7_refusal_active", LR, "select * into v_p from hq.principals where id = hq.current_principal_id() and active;", "select * into v_p from hq.principals where id = hq.current_principal_id();")
 rep("mau8_access_principal", LA, "if v_p.id is null then", "if false then")
 rep("mau9_access_anon", LA, "if current_setting('role', true) is distinct from 'anon' then", "if true then")
-# (0007, F4) log_access accepts only the action families the application logs; mau10 removes the check.
-# (0008, G2) bounded families and the refused words; LA_ACTIONS is the whole condition as it stands now.
-LA_PATTERN = r"""or p_action !~ '^(api\.[a-z_]{1,40}|mcp\.[a-z_]{1,60}|tool\.[a-z_]{1,60}|tools\.list|integrations\.read|proposal\.read|session\.(sign_in|sign_out|end_all))$'"""
-LA_WORDS = r"""
-     or (p_action ~ '(review|decision|decide|credential|accept|reject|approve|revoke|issue|withdraw|register)'
-         and p_action not in ('tool.get_acceptance_status', 'mcp.get_acceptance_status', 'tool.get_review_items', 'mcp.get_review_items'))"""
-LA_ACTIONS = "if p_action is null\n     " + LA_PATTERN + LA_WORDS + " then"
+# (0007, F4) log_access accepts only the actions the application logs; mau10 removes the check.
+# (0009, H11) an exact list, with tool./mcp. names from hq.tool_names; LA_ACTIONS is the whole condition.
+LA_TOOLS = "or exists (select from hq.tool_names t where p_action in ('tool.' || t.name, 'mcp.' || t.name))"
+LA_ACTIONS = """if p_action is null
+     or not (p_action in ('api.index', 'api.whoami', 'tools.list', 'integrations.read', 'proposal.read',
+                          'session.sign_in', 'session.sign_out', 'session.end_all')
+             """ + LA_TOOLS + """) then"""
 rep("mau10_access_action", LA, LA_ACTIONS, "if false then")
 rep("mau11_access_request_id", LA, "if v_request is not null and v_request !~ '^[A-Za-z0-9._-]{1,64}$' then", "if false then")
 
@@ -265,9 +266,9 @@ rep("mg1c_enum_keys", CFE, "if not (v_key = any (v_row.allowed)) then", "if fals
 sql("mg1c_enum_row_deleted", "delete from hq.field_enums where record_type = 'build' and path = 'standing';")
 sql("mg1c_enum_row_value_added", "update hq.field_enums set allowed = allowed || 'accepted'::text where record_type = 'build' and path = 'standing';")
 
-# ---- 0008 G2: audit actions bounded, no founder-act names ----
-rep("mg2a_access_families_wide", LA, LA_PATTERN, r"""or p_action !~ '^(api\.[a-z_.]+|mcp\.[a-z_.]+|tool\.[a-z_]+|tools\.list|integrations\.read|proposal\.read|session\.(sign_in|sign_out|end_all))$'""")
-rep("mg2b_access_words_removed", LA, LA_WORDS, "")
+# ---- 0008 G2: audit actions bounded ----
+# (mg2a_access_families_wide and mg2b_access_words_removed are gone: ROUND4 H11 replaced 0008's families
+# and word list with an exact list; its mutations are mh11* below.)
 rep("mg2c_refusal_length", LR, "if length(p_action) > 80 then", "if false then")
 sql("mg2d_action_size_constraint", "alter table hq.audit_log drop constraint audit_log_action_size;")
 
@@ -289,6 +290,50 @@ rep("mse5_end_sessions_other", ES, "update hq.principals set session_epoch = ses
 rep("m07_expiry", "hq.auth_find_credential(text)", "and (c.expires_at is null or c.expires_at > clock_timestamp())", "")
 rep("m11_revoked", "hq.auth_find_credential(text)", "and c.revoked_at is null", "")
 rep("m22_records_at", "hq.records_at(bigint)", "where rev <= p_rev", "where true")
+
+# ---- 0009 (ROUND4) ----
+CPC = "hq._check_proposal_claims(text,jsonb,hq.record_versions)"
+SLP = "hq._source_label_path(jsonb,jsonb,text,text[])"
+# H1: a source label is set only by an import.
+rep("mh1a_source_label_removed", CPC, "  if v_path is not null then", "  if false then")
+rep("mh1b_source_label_compares_label_only", SLP, "      if p_new is distinct from p_old then",
+    "      if (p_new -> 'epistemic') is distinct from (p_old -> 'epistemic') or (p_new -> 'basis') is distinct from (p_old -> 'basis') then")
+rep("mh1c_source_label_top_level_fields", SLP, "and (p_new -> v_key) is distinct from (p_old -> v_key) then", "and false then")
+rep("mh1d_source_label_lists_skipped", SLP, "  elsif jsonb_typeof(p_new) = 'array' then", "  elsif false then")
+rep("mh1e_source_label_any_position", SLP, "case when jsonb_typeof(p_old) = 'array' then p_old -> v_i end",
+    "case when jsonb_typeof(p_old) = 'array' then (select e from jsonb_array_elements(p_old) e where e = p_new -> v_i limit 1) end")
+# L6: a pathway's commission_example is a source label too (only an import sets it).
+rep("mh1j_commission_example_settable", SLP, "'founder_statement', 'commission_example']", "'founder_statement']")
+rep("mh1f_submit_update_call", SUBMIT, "    perform hq._check_proposal_claims(p_target_type, p_payload, v_cur);", "    perform 1;")
+rep("mh1g_submit_create_call", SUBMIT, "    perform hq._check_proposal_claims(p_payload ->> 'record_type', p_payload, null::hq.record_versions);", "    perform 1;")
+rep("mh1h_review_update_call", REVIEW, "      perform hq._check_proposal_claims(v_prop.target_type, v_prop.payload, v_cur);", "      perform 1;")
+rep("mh1i_review_create_call", REVIEW, "    perform hq._check_proposal_claims(v_prop.payload ->> 'record_type', v_prop.payload, null::hq.record_versions);", "    perform 1;")
+# H2: records HQ did not write are frozen (the evidence freeze is me2_evidence_lock above).
+rep("mh2a_source_freeze_removed", VAT, "  if p_target_type = 'source'\n     and (coalesce(", "  if false\n     and (coalesce(")
+rep("mh2b_source_freeze_access_only", VAT, """(coalesce(jsonb_typeof(p_cur.data -> 'text_snapshot'), 'null') <> 'null'
+          or (p_cur.data ->> 'access') is distinct from 'not_accessible'
+          or exists (select from hq.source_texts t where t.source_id = p_cur.record_id))""", "((p_cur.data ->> 'access') is distinct from 'not_accessible')")
+rep("mh2c_source_freeze_no_stored_text", VAT, "\n          or exists (select from hq.source_texts t where t.source_id = p_cur.record_id)", "")
+# H3: implemented and tested.
+rep("mh3a_tested_state", CPC, "    if (v_after -> 'implementation_state') = '\"implemented_tested\"'::jsonb\n       and", "    if false\n       and")
+rep("mh3b_tested_links", CPC, "        if v_doc ? v_key and (v_doc -> v_key) is distinct from (v_before -> v_key) then", "        if false then")
+# H4: only declared fields.
+rep("mh4a_declared_fields_removed", CPC, "  if v_key is not null then", "  if false then")
+sql("mh4b_declared_field_added", "insert into hq.record_fields (record_type, field) values ('build', 'Standing');")
+# H5: clearing needs something to clear.
+rep("mh5_clear_nothing", FD, "      if v_eff ->> 'state' = 'none'\n         and coalesce(", "      if false\n         and coalesce(")
+# H6c: the marker of an unreadable value is never written back.
+rep("mh6c_marker", CPC, """  if jsonb_path_exists(v_doc, 'strict $.** ? (@ == "Not a valid value")') then""", "  if false then")
+# H11: an exact list of audit actions.
+rep("mh11a_tool_names_any", LA, LA_TOOLS, "or p_action ~ '^(tool|mcp)\\.[a-z_]{1,60}$'")
+rep("mh11b_session_any_object", LA, "if p_action like 'session.%' and p_object_id is not null and p_object_id is distinct from v_p.handle then", "if false then")
+sql("mh11c_tool_name_added", "insert into hq.tool_names (name) values ('sign_off');")
+# H12: the tests the verifiers showed missing, and a bounded echo.
+rep("mh12a_freeze_any_string", RAC, """
+          or not exists (select from hq.field_enums e
+                          where e.record_type = 'build' and e.path = 'standing' and (v_after ->> 'standing') = any (e.allowed))""", "")
+rep("mh12b_epistemic_one_level", CFE, "'strict $.** ? (@.type() == \"object\")'", "'strict $.* ? (@.type() == \"object\")'")
+rep("mh12c_record_type_unbounded", VP, "left(coalesce(v_type, ''), 40)", "coalesce(v_type, '')")
 
 sql("noop", "select 1;")
 
@@ -324,6 +369,11 @@ def q(s):
     return tag + s + tag
 
 os.makedirs(MUT, exist_ok=True)
+# A file this script no longer generates (a mutation retired with the rule it broke) is removed, so the
+# runner never picks up a stale one.
+for f in os.listdir(MUT):
+    if f.endswith(".sql") and f[:-4] not in M:
+        os.remove(os.path.join(MUT, f))
 for name, steps in M.items():
     out = [HELPER]
     for st in steps:

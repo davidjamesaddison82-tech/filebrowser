@@ -2,6 +2,7 @@ import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, InboxOriginChip, InvalidRecordNotice, KnownLink, Notice, PageHead, RecordLink } from "@/components/ui";
+import { unreadableFields } from "@/lib/domain/conform";
 import { stageCoverage } from "@/lib/domain/derive";
 import { STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
 import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
@@ -64,11 +65,12 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
         }
       />
       <AcceptanceLock data={l} />
-      {ctx.warnings.some((w) => w.type === "loop" && w.id === loop.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/loop/${encodeURIComponent(loop.meta.id)}`, rev)} /> : null}
+      {ctx.warnings.some((w) => w.type === "loop" && w.id === loop.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/loop/${encodeURIComponent(loop.meta.id)}`, rev)} unreadableFields={unreadableFields(ctx.ds, loop)} /> : null}
       {l.standing !== "reported" ? (
         <Notice tone="warn">
-          This loop is recorded as a {l.standing === "design_intention" ? "design" : "recommendation"}. Nothing here says it has been built or tried
-          with learners.
+          {l.standing === "submitter_claim"
+            ? "This loop is the submitter's own account, proposed through the inbox. No source is shown as reporting it, and nothing here says it has been built or tried with learners."
+            : `This loop is recorded as ${l.standing === "design_intention" ? "a design" : l.standing === "source_recommendation" || l.standing === "hq_recommendation" ? "a recommendation" : "something no source reports"}. Nothing here says it has been built or tried with learners.`}
         </Notice>
       ) : null}
       {l.variant_of ? (
@@ -110,7 +112,7 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
                         {step.module_id ? <span className="muted small">{ds.moduleName(step.module_id)}</span> : null}
                       </div>
                       {step.description ? <div className="small">{step.description}</div> : null}
-                      <Citations ds={ds} citations={step.citations} />
+                      <Citations ds={ds} citations={step.citations} by={l.standing} />
                     </div>
                   </li>
                 ))}
@@ -196,7 +198,7 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
             </Card>
           ) : null}
           <Card title="Sources">
-            <Citations ds={ds} citations={l.citations} label={`${l.citations.length} general quotations`} />
+            <Citations ds={ds} citations={l.citations} label={`${l.citations.length} general quotations`} by={l.standing} />
             {l.citations.length === 0 ? <p className="muted small">Quotations are attached to the individual statements and steps.</p> : null}
           </Card>
         </div>

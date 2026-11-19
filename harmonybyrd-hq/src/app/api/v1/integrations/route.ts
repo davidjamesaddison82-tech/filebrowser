@@ -2,7 +2,7 @@ import { DriveAdapter, driveConfigFromEnv } from "@/lib/integrations/drive";
 import { GitHubAdapter, githubConfigFromEnv } from "@/lib/integrations/github";
 import type { Principal } from "@/lib/auth/principal";
 import type { IntegrationResult } from "@/lib/integrations/http";
-import { withApi } from "@/lib/server/http";
+import { otherMethods, withApi } from "@/lib/server/http";
 
 /**
  * A live look-up makes HQ send a request to GitHub or Drive with HQ's own credentials, so only a person
@@ -53,3 +53,6 @@ export async function GET(request: Request) {
     return out;
   });
 }
+
+/** The methods this route does not implement: 405 (OPTIONS 204) with Allow and a request id. */
+export const { POST, PUT, PATCH, DELETE, OPTIONS } = otherMethods(["GET"]);

@@ -200,6 +200,8 @@ describe("the name and the passphrase have a maximum length (G7, round 3)", () =
       await client.end();
     }
   }
+  /** Milliseconds until a few seconds into the next minute (the audit limiter counts by minute). */
+  const untilNextMinute = () => 60_000 - (Date.now() % 60_000) + 3_000;
   /** The test server's resident memory in MB, or null when it cannot be read (not Linux, no pid). */
   function serverRssMb(): number | null {
     try {
@@ -228,14 +230,20 @@ describe("the name and the passphrase have a maximum length (G7, round 3)", () =
   it("500 sign-ins with 900 KB names are refused at once, create no lane, and are audited with the length only", async () => {
     // Warm the server up first, so that the measurement below is not its first use of the sign-in page.
     await longNames(50, 900_000, "warm");
+    // H7: refusals of callers without a valid identity are written in full up to 120 a minute per action
+    // and reason, then summed up in one row for the minute. Start in a fresh minute, so that every row
+    // and every count below belongs to these 500.
+    await new Promise((r) => setTimeout(r, untilNextMinute()));
     const from = await lastAuditId();
     const before = serverRssMb();
     const answers = await longNames(500, 900_000, "n");
     const after = serverRssMb();
     expect(new Set(answers)).toEqual(new Set([WRONG]));
-    const rows = await signInRowsAfter(from);
-    expect(rows).toHaveLength(500);
-    for (const row of rows) {
+    // A summary row can already be among them if the 500 ran into a second minute.
+    const during = (await signInRowsAfter(from)).filter((row) => row.detail?.summary !== true);
+    expect(during.length).toBeGreaterThanOrEqual(120);
+    expect(during.length).toBeLessThanOrEqual(240); // 120 a minute; the 500 take a few seconds, at most two minutes
+    for (const row of during) {
       expect(row.outcome).toBe("denied");
       expect(row.object_id).toBeNull();
       // No lane: the throttle's rows carry "failures" and "lane"; these carry the reason and the length.
@@ -243,6 +251,14 @@ describe("the name and the passphrase have a maximum length (G7, round 3)", () =
       expect(row.detail!.name_length).toBeGreaterThan(900_000);
       expect(row.size).toBeLessThan(100);
     }
+    // When the minute is over, a summary row says how many were not written one by one: none is lost.
+    await new Promise((r) => setTimeout(r, untilNextMinute()));
+    const all = await signInRowsAfter(from);
+    const summaries = all.filter((row) => row.detail?.summary === true);
+    expect(all.length - summaries.length).toBe(during.length);
+    expect(summaries.length).toBeGreaterThanOrEqual(1);
+    for (const row of summaries) expect(row.detail).toMatchObject({ reason: "name_too_long", not_written: expect.any(Number) });
+    expect(during.length + summaries.reduce((n, row) => n + Number(row.detail!.not_written), 0)).toBe(500);
     // Kept as lanes, the names alone would be 450 MB (the re-check measured +536 MB for 500 of them
     // before the fix). The resident size of a Node server also moves with garbage it has not yet
     // returned (up to about 65 MB in a full api run), so the bound is wide; what it rules out is
@@ -250,7 +266,7 @@ describe("the name and the passphrase have a maximum length (G7, round 3)", () =
     if (before !== null && after !== null) expect(after - before).toBeLessThan(200);
     // The right passphrase still works at once afterwards.
     expect((await postSignIn("reader", w.passphrases.reader)).status).toBe(303);
-  }, 180_000);
+  }, 240_000);
 
   it("a 2,000-character passphrase is refused without a passphrase check: the name's failure count does not move", async () => {
     const from = await lastAuditId();

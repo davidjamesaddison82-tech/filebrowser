@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import pg from "pg";
 import { adminClient, describeUrl } from "./lib/admin";
 import { loadEnv, projectRoot, requireEnv } from "./lib/env";
 
@@ -22,6 +23,8 @@ export async function migrate(options: { reset?: boolean; adminUrl?: string; app
   };
   const client = await adminClient(adminUrl);
   try {
+    // Before anything is applied: an existing application role with another password stops here.
+    await checkExistingAppRole(client, appUrl);
     const dbName = (await client.query<{ db: string }>("select current_database() as db")).rows[0].db;
     if (options.reset) {
       const resettable = /^hq_(dev|test)(_[a-z0-9_]+)?$/.test(dbName) || process.env.HQ_ALLOW_RESET === "1";
@@ -81,31 +84,79 @@ export async function migrate(options: { reset?: boolean; adminUrl?: string; app
   }
 }
 
-/** The web application signs in as a NOINHERIT login role that can only assume the API roles. */
-async function ensureAppLoginRole(client: import("pg").Client, appUrl: string, log: (l: string) => void) {
+/** What DATABASE_URL names as the application login role, checked before anything is changed. */
+function appLogin(appUrl: string): { role: string; password: string } {
   const u = new URL(appUrl);
   const role = decodeURIComponent(u.username);
   const password = decodeURIComponent(u.password);
-  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) throw new Error(`Unsupported application role name "${role}"`);
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) throw new Error(`Unsupported application role name "${role.slice(0, 80)}"`);
   if (!password) throw new Error("DATABASE_URL must include a password for the application role");
   // The placeholder is published in .env.example: it must never become a real password.
   if (/__GENERATED_[A-Z_]*__/.test(password)) {
     throw new Error("DATABASE_URL still contains the placeholder password from .env.example. Run `npm run setup` (it fills it in) or set a long random password.");
   }
+  return { role, password };
+}
+
+/**
+ * Whether the password in DATABASE_URL signs in as the role. A refusal of the password (or of the role
+ * signing in at all: SQLSTATE class 28) is "no". A refusal that comes only after the password was
+ * accepted, such as no CONNECT privilege on this database yet (42501), is "yes".
+ */
+async function passwordSignsIn(appUrl: string): Promise<boolean> {
+  const client = new pg.Client({ connectionString: appUrl, connectionTimeoutMillis: 10_000 });
+  try {
+    await client.connect();
+    return true;
+  } catch (error) {
+    const code = (error as { code?: string }).code ?? "";
+    if (code === "42501") return true;
+    if (code.startsWith("28")) return false;
+    throw error;
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+const roleExists = async (client: pg.Client, role: string) => ((await client.query("select 1 from pg_roles where rolname = $1", [role])).rowCount ?? 0) > 0;
+
+/**
+ * Roles belong to the whole server, so the role may belong to another HQ installation on it (Y8). An
+ * existing role keeps its password unless HQ_ALLOW_ROLE_PASSWORD_CHANGE=1. Returns whether the
+ * password is to be changed.
+ */
+async function checkExistingAppRole(client: pg.Client, appUrl: string): Promise<boolean> {
+  const { role } = appLogin(appUrl);
+  if (!(await roleExists(client, role))) return false;
+  if (await passwordSignsIn(appUrl)) return false;
+  if (process.env.HQ_ALLOW_ROLE_PASSWORD_CHANGE === "1") return true;
+  throw new Error(
+    `role ${role} already exists on this server with a different password. It may belong to another HQ installation: ` +
+      "use a different role name in DATABASE_URL, or set HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 to change its password.",
+  );
+}
+
+/**
+ * The web application signs in as a NOINHERIT login role that can only assume the API roles. A role
+ * that does not exist is created. One that exists is left as it is, apart from the grants, when the
+ * password in DATABASE_URL signs in as it; otherwise it is changed only with
+ * HQ_ALLOW_ROLE_PASSWORD_CHANGE=1 (checkExistingAppRole stops migration before anything is applied).
+ */
+async function ensureAppLoginRole(client: pg.Client, appUrl: string, log: (l: string) => void) {
+  const { role, password } = appLogin(appUrl);
   const literal = (await client.query<{ q: string }>("select quote_literal($1) as q", [password])).rows[0].q;
   const dbName = (await client.query<{ db: string }>("select current_database() as db")).rows[0].db;
-  // Roles belong to the whole server, not to one database. Two migrations running at the same
-  // moment against different databases (for example two test databases) both touch this role, and
-  // PostgreSQL then refuses one of them ("tuple concurrently updated"). The statements are
-  // idempotent, so a refused attempt is simply tried again.
+  // Two migrations running at the same moment against different databases (for example two test
+  // databases) both touch this role, and PostgreSQL then refuses one of them ("tuple concurrently
+  // updated", or "already exists" for two creations). Each attempt checks again from the start.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      const exists = (await client.query("select 1 from pg_roles where rolname = $1", [role])).rowCount;
-      if (!exists) {
+      if (!(await roleExists(client, role))) {
         await client.query(`create role ${role} login noinherit password ${literal}`);
         log(`created application login role ${role}`);
-      } else {
+      } else if (await checkExistingAppRole(client, appUrl)) {
         await client.query(`alter role ${role} login noinherit password ${literal}`);
+        log(`changed the password of application login role ${role} (HQ_ALLOW_ROLE_PASSWORD_CHANGE=1)`);
       }
       await client.query(`grant anon, authenticated, hq_auth to ${role}`);
       await client.query(`grant connect on database "${dbName}" to ${role}`);

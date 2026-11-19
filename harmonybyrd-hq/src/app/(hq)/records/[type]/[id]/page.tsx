@@ -16,8 +16,10 @@ import {
   InvalidRecordNotice,
   isReportedAcceptance,
   KnownLink,
+  NotValidChip,
   Notice,
   PageHead,
+  PathwayBasisChip,
   RecordLink,
   ReportedAcceptanceNotice,
   BuildStandingChip,
@@ -25,7 +27,7 @@ import {
   ListedText,
   StatusChip,
 } from "@/components/ui";
-import type { DatasetView } from "@/lib/domain/conform";
+import { type DatasetView, isReadable, NOT_VALID, UNREADABLE_LIST, unreadableFields } from "@/lib/domain/conform";
 import type { Dataset, Envelope } from "@/lib/domain/dataset";
 import { acceptanceStatus, dependencies, lineage, recordTitle } from "@/lib/domain/derive";
 import {
@@ -46,7 +48,7 @@ import {
 } from "@/lib/domain/schemas";
 import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
 import { recordHistory } from "@/lib/server/store";
-import { humanise, isoDate, isoDateTime, plural, shortHash, statusLabel } from "@/lib/ui/format";
+import { humanise, isoDate, isoDateTime, plural, recommendationMaker, shortHash, statusLabel } from "@/lib/ui/format";
 import { codeRef, hqChecks, isObject, otherMentions, searchResults, str, strings, type SafeSearchResult } from "@/lib/ui/guards";
 import { recordHref, refHref, withRev } from "@/lib/ui/links";
 
@@ -71,9 +73,13 @@ const LIST_PAGE: Record<string, { label: string; href: string }> = {
 const plainList = (children: ReactNode[]) => <ul className="plain">{children}</ul>;
 const listWrap = (children: ReactNode[]) => <ul className="list">{children}</ul>;
 
-/** A list of record links that folds when long. Same output as the shared RefList for short lists. */
-function RefList({ ds, ids, empty = "None recorded.", noun = "records" }: { ds: DatasetView; ids: string[]; empty?: string; noun?: string }) {
-  if (ids.length === 0) return <span className="muted small">{empty}</span>;
+/**
+ * A list of record links that folds when long. Same output as the shared RefList for short lists.
+ * `unreadable`: the list is empty only because HQ cannot read what is stored there (L8), so it says so
+ * instead of "None recorded".
+ */
+function RefList({ ds, ids, empty = "None recorded.", noun = "records", unreadable = false }: { ds: DatasetView; ids: string[]; empty?: string; noun?: string; unreadable?: boolean }) {
+  if (ids.length === 0) return <UnreadableOr unreadable={unreadable} empty={empty} />;
   return (
     <Fold
       items={ids.map((id) => (
@@ -86,6 +92,21 @@ function RefList({ ds, ids, empty = "None recorded.", noun = "records" }: { ds: 
       wrap={plainList}
     />
   );
+}
+
+/** The fields of a record that dependencies() reads its own dependencies and blockers from. */
+const DEPENDENCY_FIELDS: readonly string[] = ["depends_on", "prerequisite_ids", "blocked_by", "connections", "blockers"];
+
+/** L8: what an empty list says. One HQ cannot read says so, and points at the stored record; never "nothing". */
+function UnreadableOr({ unreadable, empty }: { unreadable: boolean; empty: string }) {
+  if (unreadable) {
+    return (
+      <span className="small unreadable-list" data-testid="unreadable-list">
+        {UNREADABLE_LIST}
+      </span>
+    );
+  }
+  return <span className="muted small">{empty}</span>;
 }
 
 /** Group references by record type, largest group first, keeping each group's id order. */
@@ -194,7 +215,46 @@ function SearchResults({ ds, results }: { ds: DatasetView; results: SafeSearchRe
   );
 }
 
+/**
+ * "Checked by HQ's build" (H6e): a tick only for a check whose result HQ can read, on a record that passes
+ * validation. A result that is not valid shows the not-valid chip; a check on a record HQ cannot read in
+ * full is shown as not counted.
+ */
+function HqChecks({ checks, readable }: { checks: { check: string; result: string }[]; readable: boolean }) {
+  return (
+    <ul className="plain small">
+      {checks.map((c, i) => (
+        <li key={i}>
+          {c.result === NOT_VALID ? (
+            <NotValidChip value={c.result} />
+          ) : readable ? (
+            <Chip tone="ok" glyph="✓">
+              Checked
+            </Chip>
+          ) : (
+            <Chip tone="ghost" title="This record cannot be read in full, so HQ counts none of its checks">
+              Not counted
+            </Chip>
+          )}{" "}
+          {c.check}: <span className="break">{c.result}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The heading over a build's statement: a source's words only when a source label says so (ROUND4 H1). */
+function statementHeading(statement: unknown): string {
+  const label = isObject(statement) ? statement.epistemic : undefined;
+  if (label === "submitter_claim") return "What the submitter says";
+  return typeof label === "string" && ["reported", "design_intention", "source_recommendation", "founder_statement"].includes(label) ? "What the source says" : "Statement";
+}
+
 function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<AnyRecord>; rev: number | null }) {
+  const readable = isReadable(envelope);
+  // L8: the lists conforming emptied on a record that fails validation; shown as not readable, never as nothing.
+  const emptied = new Set(unreadableFields(ds, envelope));
+  const gone = (field: string) => emptied.has(field);
   const type = envelope.meta.type;
   if (type === "source") {
     const s = envelope.data as SourceRecord;
@@ -243,7 +303,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
           <dt>Scope (the document's own words)</dt>
           <dd>{s.product_scope || "—"}</dd>
           <dt>Commission codes</dt>
-          <dd>{s.commission_codes.length ? s.commission_codes.join(" · ") : "—"}</dd>
+          <dd>{s.commission_codes.length ? s.commission_codes.join(" · ") : gone("commission_codes") ? <UnreadableOr unreadable empty="" /> : "—"}</dd>
           <dt>Summary</dt>
           <dd>{s.summary || <span className="muted">—</span>}</dd>
           {strings(s.other_names).length ? (
@@ -299,16 +359,15 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
             <>
               <dt>Checked by HQ&apos;s build</dt>
               <dd>
-                <ul className="plain small">
-                  {hqChecks(s.hq_checks).map((c, i) => (
-                    <li key={i}>
-                      <Chip tone="ok" glyph="✓">
-                        Checked
-                      </Chip>{" "}
-                      {c.check}: <span className="break">{c.result}</span>
-                    </li>
-                  ))}
-                </ul>
+                <HqChecks checks={hqChecks(s.hq_checks)} readable={readable} />
+              </dd>
+            </>
+          ) : null}
+          {gone("named_in") ? (
+            <>
+              <dt>Named in</dt>
+              <dd>
+                <UnreadableOr unreadable empty="" />
               </dd>
             </>
           ) : null}
@@ -364,26 +423,24 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
             ) : null}
             <dt>Modules</dt>
             <dd>
-              <RefList ds={ds} ids={d.module_ids} />
+              <RefList ds={ds} ids={d.module_ids} unreadable={gone("module_ids")} />
             </dd>
             <dt>Requirements</dt>
             <dd>
-              <RefList ds={ds} ids={d.requirement_ids} />
+              <RefList ds={ds} ids={d.requirement_ids} unreadable={gone("requirement_ids")} />
             </dd>
-            {d.resolves.length ? (
+            {d.resolves.length || gone("resolves") ? (
               <>
                 <dt>Resolves</dt>
                 <dd>
-                  <RefList ds={ds} ids={d.resolves} />
+                  <RefList ds={ds} ids={d.resolves} unreadable={gone("resolves")} />
                 </dd>
               </>
             ) : null}
-            {d.effects.length ? (
+            {d.effects.length || gone("effects") ? (
               <>
                 <dt>Effects applied</dt>
-                <dd>
-                  <pre className="json">{JSON.stringify(d.effects, null, 2)}</pre>
-                </dd>
+                <dd>{d.effects.length ? <pre className="json">{JSON.stringify(d.effects, null, 2)}</pre> : <UnreadableOr unreadable empty="" />}</dd>
               </>
             ) : null}
           </dl>
@@ -410,11 +467,11 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
           </dd>
           <dt>Modules</dt>
           <dd>
-            <RefList ds={ds} ids={c.module_ids} />
+            <RefList ds={ds} ids={c.module_ids} unreadable={gone("module_ids")} />
           </dd>
           <dt>Outputs HQ holds</dt>
           <dd>
-            <RefList ds={ds} ids={c.output_source_ids} empty="No output document is held." />
+            <RefList ds={ds} ids={c.output_source_ids} empty="No output document is held." unreadable={gone("output_source_ids")} />
           </dd>
         </dl>
       </Card>
@@ -437,7 +494,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
           <dd className="mono small break">{b.sha256 ?? "No hash on record"}</dd>
           <dt>Size</dt>
           <dd>{b.bytes ?? "—"}</dd>
-          <dt>What the source says</dt>
+          <dt>{statementHeading(b.statement)}</dt>
           <dd>
             <ClaimView ds={ds} claim={b.statement} />
           </dd>
@@ -452,11 +509,11 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
               </>
             ) : null;
           })()}
-          {strings(b.possibly_same_as).length ? (
+          {strings(b.possibly_same_as).length || gone("possibly_same_as") ? (
             <>
               <dt>May be the same build as</dt>
               <dd>
-                <RefList ds={ds} ids={strings(b.possibly_same_as)} noun="builds" />
+                <RefList ds={ds} ids={strings(b.possibly_same_as)} noun="builds" unreadable={gone("possibly_same_as")} />
               </dd>
             </>
           ) : null}
@@ -472,16 +529,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
             <>
               <dt>Checked by HQ&apos;s build</dt>
               <dd>
-                <ul className="plain small">
-                  {hqChecks(b.hq_checks).map((c, i) => (
-                    <li key={i}>
-                      <Chip tone="ok" glyph="✓">
-                        Checked
-                      </Chip>{" "}
-                      {c.check}: <span className="break">{c.result}</span>
-                    </li>
-                  ))}
-                </ul>
+                <HqChecks checks={hqChecks(b.hq_checks)} readable={readable} />
               </dd>
             </>
           ) : null}
@@ -549,7 +597,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
             <dd>{e.build_id ? <RecordLink ds={ds} id={e.build_id} /> : <span className="muted">—</span>}</dd>
             <dt>Modules</dt>
             <dd>
-              <RefList ds={ds} ids={e.module_ids} />
+              <RefList ds={ds} ids={e.module_ids} unreadable={gone("module_ids")} />
             </dd>
           </dl>
         </div>
@@ -575,7 +623,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
           </dd>
           <dt>Modules</dt>
           <dd>
-            <RefList ds={ds} ids={d.module_ids} />
+            <RefList ds={ds} ids={d.module_ids} unreadable={gone("module_ids")} />
           </dd>
           <dt>Build</dt>
           <dd>{d.build_id ? <RecordLink ds={ds} id={d.build_id} /> : <span className="muted">—</span>}</dd>
@@ -598,7 +646,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
           </dd>
           <dt>Modules</dt>
           <dd>
-            <RefList ds={ds} ids={o.module_ids} />
+            <RefList ds={ds} ids={o.module_ids} unreadable={gone("module_ids")} />
           </dd>
           <dt>Decision</dt>
           <dd>{o.decision_id ? <RecordLink ds={ds} id={o.decision_id} /> : <span className="muted">—</span>}</dd>
@@ -611,7 +659,10 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
     return (
       <Card title="Recommendation">
         <div className="stack-sm">
-          <Notice tone="info">This is a recommendation by {r.made_by}. It is not approved work. Approval is a founder decision.</Notice>
+          <Notice tone="info">
+            {recommendationMaker(r.made_by)}{" "}
+            It is not approved work. Approval is a founder decision.
+          </Notice>
           <dl className="facts">
             <dt>Rank</dt>
             <dd>{r.rank}</dd>
@@ -619,15 +670,15 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
             <dd>{r.rationale}</dd>
             <dt>Modules</dt>
             <dd>
-              <RefList ds={ds} ids={r.module_ids} />
+              <RefList ds={ds} ids={r.module_ids} unreadable={gone("module_ids")} />
             </dd>
             <dt>Requires first</dt>
             <dd>
-              <RefList ds={ds} ids={r.prerequisite_ids} empty="No prerequisite." />
+              <RefList ds={ds} ids={r.prerequisite_ids} empty="No prerequisite." unreadable={gone("prerequisite_ids")} />
             </dd>
             <dt>Blocked by</dt>
             <dd>
-              <RefList ds={ds} ids={r.blocked_by} empty="Nothing recorded as blocking." />
+              <RefList ds={ds} ids={r.blocked_by} empty="Nothing recorded as blocking." unreadable={gone("blocked_by")} />
             </dd>
           </dl>
         </div>
@@ -640,13 +691,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
       <Card title="Cross-module pathway">
         <div className="stack-sm">
           <div className="row" style={{ gap: 8 }}>
-            {p.basis === "commission_example" ? (
-              <Chip tone="founder" glyph="★">
-                Example given in the commission
-              </Chip>
-            ) : (
-              <EpistemicChip value={p.basis as Epistemic} />
-            )}
+            <PathwayBasisChip value={p.basis} />
           </div>
           {p.description ? <p>{p.description}</p> : null}
           <ol className="steps">
@@ -662,7 +707,7 @@ function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<An
                       {step.shared_stage !== "none" ? <Chip tone="accent">{STAGE_LABEL[step.shared_stage]}</Chip> : null}
                     </div>
                     <div className="small">{step.role}</div>
-                    <Citations ds={ds} citations={step.citations} />
+                    <Citations ds={ds} citations={step.citations} by={p.basis} />
                   </div>
                 </li>
               ))}
@@ -716,7 +761,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
       />
       {canPropose ? <AcceptanceLock data={envelope.data} /> : null}
       {canPropose && !lockedByAcceptance && isReportedAcceptance(type, envelope.data) ? <ReportedAcceptanceNotice /> : null}
-      {invalid ? <InvalidRecordNotice /> : null}
+      {invalid ? <InvalidRecordNotice unreadableFields={unreadableFields(ds, envelope)} /> : null}
 
       <div className="split">
         <div className="stack">
@@ -832,9 +877,11 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
                       ? "ok"
                       : acceptance.recorded_in_hq?.state === "rejected"
                         ? "bad"
-                        : acceptance.headline === "build_acceptance_claimed"
-                          ? "warn"
-                          : "outline"
+                        : acceptance.headline === "not_reliable"
+                          ? "bad"
+                          : acceptance.headline === "build_acceptance_claimed"
+                            ? "warn"
+                            : "outline"
                   }
                 >
                   {acceptance.label}
@@ -845,7 +892,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
                     <RecordLink ds={ds} id={acceptance.recorded_in_hq.decision_id} />
                     {acceptance.recorded_in_hq.scope_note ? ` — ${acceptance.recorded_in_hq.scope_note}` : ""}
                   </p>
-                ) : (
+                ) : acceptance.headline === "not_reliable" ? null : (
                   <p className="small muted">No founder acceptance has been recorded in HQ for this record.</p>
                 )}
                 {acceptance.caution ? <p className="small">{acceptance.caution}</p> : null}
@@ -863,7 +910,13 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
             flush
           >
             {deps.depends_on.length + deps.blockers.length === 0 ? (
-              <Empty>No dependency or blocker is recorded.</Empty>
+              Object.keys(deps.unreadable_fields ?? {}).some((f) => DEPENDENCY_FIELDS.includes(f)) ? (
+                <Empty>
+                  <span data-testid="unreadable-list">{UNREADABLE_LIST}</span>
+                </Empty>
+              ) : (
+                <Empty>No dependency or blocker is recorded.</Empty>
+              )
             ) : (
               <Fold
                 items={[

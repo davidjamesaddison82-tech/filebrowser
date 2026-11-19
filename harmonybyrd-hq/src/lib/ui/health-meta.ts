@@ -46,6 +46,12 @@ export const HEALTH_META: Record<keyof DevelopmentHealth, { title: string; descr
     tone: "warn",
   },
   unresolved_dependencies: { title: "Unresolved dependencies", description: "Dependencies the sources record as unresolved.", tone: "warn" },
+  unreadable_records: {
+    title: "Records HQ cannot read",
+    description:
+      "Records stored in a form that does not pass validation. Nothing in them counts in HQ's figures, so the figures of every module they name may be incomplete. Each page shows the record exactly as stored.",
+    tone: "bad",
+  },
 };
 
 export type MissingKey = Exclude<keyof MissingWork, "not_in_recent_sources"> | "not_in_recent_sources";

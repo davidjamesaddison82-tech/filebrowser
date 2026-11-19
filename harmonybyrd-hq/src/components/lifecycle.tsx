@@ -124,7 +124,7 @@ export function LifecycleDetail({ ds, module }: { ds: DatasetView; module: Modul
               {entry.note ? <div className="small">{entry.note}</div> : null}
               <div className="row" style={{ gap: 8 }}>
                 <EpistemicChip value={entry.basis} />
-                <Citations ds={ds} citations={entry.citations} />
+                <Citations ds={ds} citations={entry.citations} by={entry.basis} />
               </div>
               {alt.map((o, i) => (
                 <div className="lc-other" key={i}>
@@ -134,7 +134,7 @@ export function LifecycleDetail({ ds, module }: { ds: DatasetView; module: Modul
                   </div>
                   <div className="row" style={{ gap: 8 }}>
                     {o.basis ? <EpistemicChip value={o.basis} /> : null}
-                    <Citations ds={ds} citations={o.citations} />
+                    <Citations ds={ds} citations={o.citations} by={o.basis} />
                   </div>
                 </div>
               ))}

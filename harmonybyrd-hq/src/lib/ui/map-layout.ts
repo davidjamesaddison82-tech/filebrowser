@@ -47,6 +47,7 @@ export const STANDING_SHORT: Record<StandingHeadline, string> = {
   designed_only: "Designed only",
   documented_only: "Documented only",
   named_only: "Named only",
+  not_reliable: "Not reliable",
 };
 
 export function layoutMap(overview: EcosystemOverview): MapLayout {

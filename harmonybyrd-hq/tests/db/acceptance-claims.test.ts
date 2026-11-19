@@ -616,7 +616,8 @@ describe("G1 — what still goes through", () => {
     const lifecycle = structuredClone((await recordData("module", "MOD-FX-BETA")).lifecycle) as Record<string, Record<string, unknown>>;
     expect(canonicalJson(lifecycle.founder_accepted)).toBe(entry);
     // And again with the whole lifecycle resent, another dimension changed, the entry identical.
-    lifecycle.designed = { state: "yes", basis: "reported", note: "Designed", citations: [BETA] };
+    // (ROUND4 H1: the changed entry is the submitter's claim; it may still quote the source.)
+    lifecycle.designed = { state: "yes", basis: "submitter_claim", note: "Designed", citations: [BETA] };
     const direct = await dbSubmit(w.claude, { target: { type: "module", id: "MOD-FX-BETA" }, set: { lifecycle } });
     await dbReview(direct);
     const after = (await recordData("module", "MOD-FX-BETA")).lifecycle as Record<string, Record<string, unknown>>;

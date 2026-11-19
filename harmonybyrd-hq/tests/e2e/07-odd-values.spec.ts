@@ -15,7 +15,7 @@ import { expect, headRevision, SCREENS, signIn, test } from "./support";
 
 const ROOT = path.resolve(__dirname, "..", "..");
 
-function plant(which: "named" | "fuzz"): { type: string; id: string }[] {
+function plant(which: "named" | "fuzz" | "screens"): { type: string; id: string }[] {
   const run = spawnSync("npx", ["tsx", "tests/e2e/plant-odd-values.ts", which], { cwd: ROOT, encoding: "utf8", env: process.env });
   expect(run.status, run.stderr).toBe(0);
   const lines = run.stdout.trim().split("\n");
@@ -93,14 +93,16 @@ test.describe("screens show odd stored values as not valid (G1f)", () => {
     const facts = page.locator(".card", { has: page.getByRole("heading", { name: "Build", exact: true }) });
     await expect(facts).toContainText("Not a valid value");
     await expect(facts).not.toContainText("Acceptance reported in source");
-    await expect(page.locator(".card", { has: page.getByRole("heading", { name: "Acceptance status" }) })).toContainText(/not a valid value/i);
+    // ROUND4 H6a: a record that fails validation counts for no acceptance; its status says it is not reliable.
+    await expect(page.locator(".card", { has: page.getByRole("heading", { name: "Acceptance status" }) })).toContainText("Not reliable — this record cannot be read in full");
     await expect(page.locator("main")).toContainText("This record as stored does not pass validation.");
     await expect(page.locator("pre.json")).toContainText('"standing": [');
     await check("/records/build/BLD-ODD-STRING");
     await expect(facts).toContainText("Not a valid value");
     await expect(facts).not.toContainText("Accepted");
     await check("/modules/MOD-FX-ALPHA");
-    await expect(page.locator("li", { hasText: "odd-standing-build" }).first()).toContainText("Not a valid value");
+    // (In the module's builds; since ROUND4 H6b the record is also listed, as one HQ cannot read, at the top of the page.)
+    await expect(page.locator("#builds li", { hasText: "odd-standing-build" }).first()).toContainText("Not a valid value");
     await check("/evidence?tab=builds");
     await expect(page.locator("tr", { hasText: "odd-standing-build" }).first()).toContainText("Not a valid value");
     await expect(page.locator("tr", { hasText: "odd-word-build" }).first()).toContainText("Not a valid value");
@@ -199,5 +201,114 @@ test.describe("screens show odd stored values as not valid (G1f)", () => {
       const rows = url.startsWith("/modules") ? page.locator("tr", { hasText: "-ODD-" }).locator(".lc-yes") : page.locator("main li", { hasText: "-ODD-" });
       expect(await rows.count(), `${url}: no odd record counts as accepted`).toBe(0);
     }
+  });
+});
+
+test.describe("ROUND4 H6 and H1: the screens verifier's records", () => {
+  test.describe.configure({ timeout: 120_000 });
+  let planted: { type: string; id: string }[] = [];
+  const pageErrors: string[] = [];
+  test.beforeAll(() => {
+    planted = plant("screens");
+  });
+  test.beforeEach(async ({ page }) => {
+    page.on("pageerror", (e) => pageErrors.push(e.message));
+    await page.context().clearCookies();
+    await signIn(page, "developer");
+  });
+  test.afterEach(() => {
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("H6c (Y16): the propose form prefills from the record as stored, offers only declared fields, and says what a proposal may say", async ({ page }) => {
+    expect(planted.map((p) => p.id)).toEqual(expect.arrayContaining(["MOD-RV3-CA", "MOD-RV3-BLK", "DEF-RV3-MODSTR", "BLD-RV3-CHK", "BLD-R4-SUBQ"]));
+    const valueBox = page.getByLabel(/Proposed new value/);
+    const fieldBox = page.getByLabel("Field to change");
+    await page.goto("/proposals/new?type=module&id=MOD-RV3-CA");
+    await fieldBox.selectOption("summary");
+    await expect(valueBox).toHaveValue("7");
+    await page.goto("/proposals/new?type=module&id=MOD-RV3-BLK");
+    await fieldBox.selectOption("blockers");
+    await expect(valueBox).toHaveValue(/RV3 BLOCKER: MIDI input is broken, do not ship/);
+    await expect(valueBox).toHaveValue(/"Reported"/);
+    await page.goto("/proposals/new?type=defect&id=DEF-RV3-MODSTR");
+    await fieldBox.selectOption("module_ids");
+    await expect(valueBox).toHaveValue('"MOD-FX-GAMMA"');
+    // H1: one plain sentence on what a proposal may say.
+    await expect(page.getByTestId("submitter-claim-sentence")).toContainText("Whatever you propose is recorded as your own claim");
+    // H4: only the fields a record type declares are offered; a stored key it does not declare is not.
+    await page.goto("/proposals/new?type=open_item&id=OPEN-R4-KEY");
+    expect(await fieldBox.locator("option").allInnerTexts()).not.toContain("by_module");
+    // H2: evidence a source reports is frozen: there is no form.
+    await page.goto("/proposals/new?type=evidence&id=EV-FX-01");
+    await expect(page.locator("main")).toContainText("Proposals cannot change this record.");
+    await expect(page.locator("form textarea[name=value]")).toHaveCount(0);
+  });
+
+  test("H6b (Y15): Gamma's page, the register, the dashboard and development health say what HQ cannot read, in the API's words", async ({ page }) => {
+    const brief = (await (await page.request.get("/api/v1/tools/get_module_brief?module=MOD-FX-GAMMA")).json()) as { data: { unreadable_note: string; unreadable_records: { id: string }[] } };
+    expect(brief.data.unreadable_records.map((r) => r.id)).toEqual(expect.arrayContaining(["DEF-RV3-MODSTR", "OPEN-RV3-STR"]));
+    await page.goto("/modules/MOD-FX-GAMMA");
+    const notice = page.getByTestId("unreadable-records");
+    await expect(notice).toBeVisible();
+    await expect(notice.locator("strong")).toHaveText(brief.data.unreadable_note);
+    await expect(notice).toContainText("DEF-RV3-MODSTR");
+    await expect(notice).toContainText("OPEN-RV3-STR");
+    await page.goto("/modules");
+    await expect(page.getByTestId("unreadable-register")).toBeVisible();
+    await expect(page.locator("tr", { hasText: "Gamma" }).first().getByTestId("unreadable-note")).toContainText(brief.data.unreadable_note);
+    await expect(page.locator("tr", { hasText: "rv3 blocker module" }).first()).toContainText("Not reliable");
+    await page.goto("/modules/MOD-RV3-BLK");
+    await expect(page.getByTestId("unreadable-records")).toContainText("This module's own record cannot be read in full: its figures are not reliable.");
+    await page.goto("/");
+    await expect(page.getByTestId("unreadable-dashboard")).toBeVisible();
+    await page.goto("/health/unreadable_records");
+    await expect(page.locator("main h1")).toHaveText("Records HQ cannot read");
+    // The list can be long (with the fuzz set stored too): it has as many items as the API's list, which holds the planted records.
+    const overview = (await (await page.request.get("/api/v1/tools/get_ecosystem_overview")).json()) as { data: { health: { unreadable_records: { count: number; items: { id: string }[] } } } };
+    const unreadable = overview.data.health.unreadable_records;
+    for (const id of ["DEF-RV3-MODSTR", "EV-RV3-FA", "MOD-RV3-BLK"]) expect(unreadable.items.map((i) => i.id)).toContain(id);
+    await expect(page.getByRole("heading", { name: `${unreadable.count} items` })).toBeVisible();
+    // Y14: Beta build 2 keeps its review item.
+    await page.goto("/review");
+    await expect(page.locator("main")).toContainText("Beta build 2 is reported as accepted");
+  });
+
+  test("H6e (Y18) and H6d (Y17): a check whose result is not valid has no tick, and no attribution is made up", async ({ page }) => {
+    await page.goto("/records/build/BLD-RV3-CHK");
+    const failed = page.locator("li", { hasText: "opens in a browser" });
+    await expect(failed).toContainText("Not a valid value");
+    await expect(failed).not.toContainText("Checked");
+    // On a record HQ cannot read in full, no check is counted.
+    await expect(page.locator("li", { hasText: "sha256 matches" })).toContainText("Not counted");
+    await page.goto("/records/recommendation/REC-RV3-BLK");
+    await expect(page.locator("main")).toContainText("This recommendation names no maker HQ can read.");
+    await expect(page.locator("main")).not.toContainText("This is a recommendation by HQ builder");
+  });
+
+  test("L8 (Y15): an invalid record's own page never says a list it cannot read holds nothing", async ({ page }) => {
+    await page.goto("/records/recommendation/REC-RV3-BLK");
+    const main = page.locator("main");
+    // blocked_by is stored as a string: the view's list is empty, and the page says it cannot read it.
+    const blocked = page.locator("dt", { hasText: "Blocked by" }).locator("xpath=following-sibling::dd[1]");
+    await expect(blocked).toHaveText("Not readable — see the stored record");
+    await expect(main).not.toContainText("Nothing recorded as blocking");
+    await expect(page.getByTestId("unreadable-fields")).toContainText("blocked_by");
+    // Control: a valid recommendation with nothing blocking it still says so.
+    await page.goto("/records/recommendation/REC-FX-01");
+    await expect(page.locator("dt", { hasText: "Blocked by" }).locator("xpath=following-sibling::dd[1]")).toHaveText("Nothing recorded as blocking.");
+  });
+
+  test("H1: a submitter's claim is never headed as what a source says, and its quotation is the submitter's", async ({ page }) => {
+    await page.goto("/records/build/BLD-R4-SUBQ");
+    const build = page.locator(".card", { has: page.getByRole("heading", { name: "Build", exact: true }) });
+    await expect(build).toContainText("What the submitter says");
+    await expect(build).not.toContainText("What the source says");
+    await expect(build.locator("details.cites summary")).toHaveText("1 quotation quoted by the submitter — HQ checked the words are in the source, not that they support this");
+    // Control: a build a source reports keeps its heading and its plain quotation label.
+    await page.goto("/records/build/BLD-FX-01");
+    const control = page.locator(".card", { has: page.getByRole("heading", { name: "Build", exact: true }) });
+    await expect(control).toContainText("What the source says");
+    await expect(control.locator("details.cites summary").first()).toHaveText(/source quotation/);
   });
 });

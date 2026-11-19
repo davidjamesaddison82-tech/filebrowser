@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { coveringsTopAndEnd, measureLayout, middlePositions } from "./layout-measure";
+import { coveringsTopAndEnd, measureLayout, middlePositions, stickyPositions } from "./layout-measure";
 import { expect, test } from "./support";
 
 /**
@@ -286,6 +286,74 @@ test.describe("the layout detector looks part-way down a long page and ignores w
     const { middle, coverings } = await coveringsTopAndEnd(page);
     expect(middle.length, "it was measured part-way down").toBeGreaterThanOrEqual(3);
     expect(coverings).toEqual([]);
+  });
+});
+
+/**
+ * ROUND4 H10 (X6, X7, Y19, Y20): a box cut away entirely by a clip-path or the legacy clip covers
+ * nothing, whatever its size, and is not reported by check 2 or check 1; a sticky element that is stuck
+ * only over a short scroll range, between two of the regular middle positions, is measured where it is stuck.
+ */
+test.describe("the layout detector: clipped boxes, and sticky elements stuck over a short range (ROUND4 H10)", () => {
+  const clipped: [string, string][] = [
+    ["a fixed box 900×500 with clip-path: inset(50%)", `<div class="cut" style="position:fixed; left:300px; top:100px; width:900px; height:500px; background:#fff; z-index:9; clip-path:inset(50%)"></div>`],
+    ["a fixed box 900×500 with clip: rect(0 0 0 0)", `<div class="cut" style="position:fixed; left:300px; top:100px; width:900px; height:500px; background:#fff; z-index:9; clip:rect(0 0 0 0)"></div>`],
+    ["an absolute box shifted over the text, with clip-path: inset(50%)", `<div style="position:absolute; left:300px; top:200px; width:900px; height:500px; background:#fff; z-index:5; clip-path:inset(50%)">clipped away</div>`],
+    ["an absolute box shifted over the text, with clip: rect(0 0 0 0)", `<div style="position:absolute; left:300px; top:200px; width:900px; height:500px; background:#fff; z-index:5; clip:rect(0 0 0 0)">clipped away</div>`],
+    ["a fixed box inside a wrapper whose clip-path cuts it away", `<div style="clip-path:inset(50%)"><div style="position:fixed; left:300px; top:100px; width:900px; height:500px; background:#fff; z-index:9"></div></div>`],
+  ];
+  for (const [name, html] of clipped) {
+    test(`${name} hides nothing and is not reported`, async ({ page }) => {
+      const doc = SHELL("", "", html);
+      await page.setContent(doc);
+      expect(await hiddenParagraphs(page), "nothing is hidden").toBe(0);
+      expect(await coveringsAnywhere(page, doc)).toEqual([]);
+    });
+  }
+
+  test("controls: a box that a clip-path cuts only in part, over the text, is still reported, and so is one with no clip", async ({ page }) => {
+    const half = SHELL("", "", `<div class="half-cut" style="position:fixed; left:300px; top:100px; width:900px; height:500px; background:#fff; z-index:9; clip-path:inset(0 0 50% 0)"></div>`);
+    expect((await coveringsAnywhere(page, half)).join("\n")).toMatch(/div\.half-cut \(fixed, 900×500 at 300,100\)/);
+    const plain = SHELL("", "", `<div class="whole" style="position:fixed; left:300px; top:100px; width:900px; height:500px; background:transparent; z-index:9"></div>`);
+    expect((await coveringsAnywhere(page, plain)).join("\n")).toMatch(/div\.whole \(fixed, 900×500 at 300,100\)/);
+  });
+
+  // The verifier's case: a three-window page whose middle positions are 614 and 1228 px, with a sticky
+  // top:0 block in a short section that hides text only between about 750 and 850 px of scroll.
+  const SHORT_STICKY = SHELL().replace(
+    /<p>1\. [\s\S]*?(<table>)/,
+    `${Array.from({ length: 9 }, (_, i) => `<p>${i + 1}. ${words.repeat(3)}</p>`).join("")}<section><div class="stuck-briefly" style="position:sticky; top:0; height:120px; background:#fff; z-index:5">Sticky short</div>${Array.from({ length: 2 }, (_, i) => `<p>${900 + i}. ${words.repeat(3)}</p>`).join("")}</section>${Array.from({ length: 20 }, (_, i) => `<p>${20 + i}. ${words.repeat(3)}</p>`).join("")}$1`,
+  );
+
+  test("a sticky block stuck only between two regular middle positions is measured where it is stuck, and reported", async ({ page }) => {
+    await page.setContent(SHORT_STICKY);
+    // It really hides text, but only over a short range, and not at the regular positions.
+    const hiddenAt = async (y: number) => {
+      await page.evaluate((to) => window.scrollTo(0, to), y);
+      return hiddenParagraphs(page);
+    };
+    const { maxScroll, vh } = await page.evaluate(() => ({ maxScroll: document.documentElement.scrollHeight - window.innerHeight, vh: window.innerHeight }));
+    const regular = middlePositions(maxScroll, vh);
+    expect(regular.length, "two or three regular middle positions").toBeGreaterThanOrEqual(2);
+    let hiddenSomewhere = 0;
+    for (let y = 0; y <= maxScroll; y += 25) hiddenSomewhere = Math.max(hiddenSomewhere, await hiddenAt(y));
+    expect(hiddenSomewhere, "somewhere along the page it hides text").toBeGreaterThan(0);
+    for (const y of [0, ...regular, maxScroll]) expect(await hiddenAt(y), `at the regular position ${y} it hides nothing`).toBe(0);
+
+    const stuck = await stickyPositions(page);
+    expect(stuck.length).toBeGreaterThan(0);
+    const { middle, coverings } = await coveringsTopAndEnd(page);
+    expect(middle.some((m) => m.where.startsWith("where a sticky element is stuck")), "measured where it is stuck").toBe(true);
+    expect(coverings.join("\n")).toMatch(/where a sticky element is stuck, at \d+ px: div\.stuck-briefly \(sticky/);
+  });
+
+  test("control: the same page with the block not sticky reports nothing, at no more positions than needed", async ({ page }) => {
+    const html = SHORT_STICKY.replace("position:sticky; top:0; height:120px", "height:120px");
+    await page.setContent(html);
+    const { coverings } = await coveringsTopAndEnd(page);
+    expect(coverings).toEqual([]);
+    // Only the side navigation is sticky here, stuck for the whole page.
+    expect((await stickyPositions(page)).length).toBeLessThanOrEqual(3);
   });
 });
 

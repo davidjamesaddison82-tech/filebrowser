@@ -7,6 +7,7 @@
  * and SECURITY DEFINER functions govern access whether HQ runs on plain PostgreSQL or Supabase.
  */
 import pg from "pg";
+import { admitAudit, RefusalLimiter, summaryDetail } from "./audit-limit";
 import { fromDatabaseError, unavailable } from "./errors";
 
 export interface DbClaims {
@@ -26,6 +27,8 @@ export interface Queryer {
 declare global {
   // eslint-disable-next-line no-var
   var __hqPool: pg.Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __hqRefusalLimiter: RefusalLimiter | undefined;
 }
 
 function pool(): pg.Pool {
@@ -101,11 +104,33 @@ export function auditDetailJson(detail: unknown): string | null {
 }
 
 /**
+ * The per-process bound on refusal rows from callers without a valid identity (see audit-limit.ts):
+ * at most 120 a minute per action and reason in full, then one summary row for the minute.
+ */
+function refusalLimiter(): RefusalLimiter {
+  globalThis.__hqRefusalLimiter ??= new RefusalLimiter({
+    onSummary: async (summary) => {
+      try {
+        await run("anon", null, false, (q) =>
+          q.query("select hq.log_refusal($1, null, null, 'denied', $2::jsonb, null)", [summary.action, auditDetailJson(summaryDetail(summary))]),
+        );
+      } catch {
+        /* a lost summary must never become an error elsewhere */
+      }
+    },
+  });
+  return globalThis.__hqRefusalLimiter;
+}
+
+/**
  * Append an audit event in its own transaction, so that denials are recorded even though the request failed.
  * Refusals go through hq.log_refusal and allowed uses through hq.log_access: the database decides who the
  * caller is from the claims, and an allowed use is recorded only for an active principal. An allowed row
  * takes no detail from the caller; the one thing kept beside the server's request id is the id the
  * client sent for its own correlation (clientRequestId), which the database stores apart.
+ *
+ * Refusals of callers without a valid identity (claims null) are bounded per process: past 120 a
+ * minute for one action and reason they are counted and summed up in one row (refusalLimiter).
  */
 export async function audit(
   claims: DbClaims | null,
@@ -119,6 +144,7 @@ export async function audit(
     clientRequestId?: string | null;
   },
 ): Promise<void> {
+  if (!admitAudit(refusalLimiter(), claims, event)) return;
   try {
     await run(claims ? "authenticated" : "anon", claims, false, (q) =>
       event.outcome === "allowed"

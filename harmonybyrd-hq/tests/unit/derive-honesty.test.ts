@@ -48,7 +48,9 @@ describe("a lifecycle flag counts only when a source supports it (honesty-2, evi
     expect(standing.headline).toBe("designed_only");
     expect(standing.flags.acceptance_reported).toBe(false);
     expect(standing.claimed_only).toEqual(["founder_accepted"]);
-    expect(acceptanceStatus(ds, "module", "MOD-FX-GAMMA")!.headline).toBe("designed_only");
+    // The record fails validation (a founder acceptance on a basis no source can give), so HQ reads it as
+    // not reliable and counts nothing in it (ROUND4 H6a); its positive state is listed as a claim.
+    expect(acceptanceStatus(ds, "module", "MOD-FX-GAMMA")!.headline).toBe("not_reliable");
     const health = developmentHealth(ds);
     expect(ids(health.acceptance_reported_only)).toEqual(["BLD-FX-02", "MOD-FX-BETA"]);
     expect(ids(health.unverified_claims)).toContain("MOD-FX-GAMMA");
@@ -245,8 +247,10 @@ describe("a stored value of the wrong kind never breaks a derived figure (G1f, a
         find("BLD-FX-01").standing = standing;
       });
       const status = acceptanceStatus(ds, "build", "BLD-FX-01")!;
-      expect(status.headline, JSON.stringify(standing)).toBe("build_development");
-      expect(status.label).toBe("Build standing: Not a valid value");
+      // ROUND4 H6a: a record that fails validation counts for no acceptance; its status says it is not reliable.
+      expect(status.headline, JSON.stringify(standing)).toBe("not_reliable");
+      expect(status.label).toBe("Not reliable — this record cannot be read in full");
+      expect(status.reported_in_sources).toBeNull();
       expect(() => reviewItems(ds)).not.toThrow();
       expect(() => developmentHealth(ds)).not.toThrow();
     }
@@ -276,10 +280,17 @@ describe("a build marked as accepted counts as reported only when its statement 
     it(`${name} is shown as "Acceptance claimed — no source quoted" and listed as an unverified claim`, () => {
       const ds = dataset((_, add) => add("build", claimedBuild(statement as Data)));
       const status = acceptanceStatus(ds, "build", "BLD-HQ-0001")!;
-      expect(status.headline).toBe("build_acceptance_claimed");
-      expect(status.label).toBe("Acceptance claimed — no source quoted");
+      if (name.startsWith("a report with no citation")) {
+        // This one fails validation (a source label with no quotation), so its status says it is not
+        // reliable rather than what it claims (ROUND4 H6a). It is still a claim and a review item below.
+        expect(status.headline).toBe("not_reliable");
+        expect(status.caution).toMatch(/cannot read this record in full/);
+      } else {
+        expect(status.headline).toBe("build_acceptance_claimed");
+        expect(status.label).toBe("Acceptance claimed — no source quoted");
+        expect(status.caution).toMatch(/quotes no source/);
+      }
       expect(status.reported_in_sources).toBeNull();
-      expect(status.caution).toMatch(/quotes no source/);
       const health = developmentHealth(ds);
       expect(ids(health.acceptance_reported_only)).toEqual(["BLD-FX-02", "MOD-FX-BETA"]);
       expect(health.unverified_claims.find((c) => c.id === "BLD-HQ-0001")?.note).toMatch(/Acceptance claimed — no source quoted/);
@@ -452,7 +463,7 @@ describe("test evidence counts only when it exists and is verified (honesty-6)",
 
   it("a dangling id is a review item and is named in the missing-work note", () => {
     const ds = withLinks(["EV-NOPE-1"]);
-    expect(requirementTestEvidence(ds, ds.get("requirement", "FR-FX-002")!.data)).toEqual({ verified: [], unverified: [], missing: ["EV-NOPE-1"] });
+    expect(requirementTestEvidence(ds, ds.get("requirement", "FR-FX-002")!.data)).toEqual({ verified: [], unverified: [], missing: ["EV-NOPE-1"], unreadable: [] });
     expect(reviewItems(ds).map((i) => i.key)).toContain("tnoev:FR-FX-002");
     expect(missingWork(ds).requirements_without_test_evidence.find((i) => i.id === "FR-FX-002")!.note).toMatch(/EV-NOPE-1/);
   });

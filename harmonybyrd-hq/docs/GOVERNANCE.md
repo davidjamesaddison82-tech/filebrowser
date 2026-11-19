@@ -54,24 +54,64 @@ the records, and it changes nothing until the founder accepts it.
 ## What a proposal may assert
 
 The inbox is where developers and AI clients make claims. A proposal can never make HQ show its
-submitter's words as source-verified, as checked by HQ, as made by HQ, or as an acceptance. Each rule is checked when
-the proposal is submitted and again when the founder accepts it.
+submitter's words as reported by a source, as checked by HQ, as made by HQ, or as an acceptance.
+Each rule is checked when the proposal is submitted and again when the founder accepts it, against
+the record as it stands then.
 
-**Quotations are verified on the proposal path too.** Every object anywhere in a proposal that has
-both a `source_id` and a `quote` must quote that source verbatim: at least twelve characters once
-spacing is normalised, found in the text snapshot HQ stored when it imported the source
-(`hq.source_texts`). A new requirement's `exact_wording` must likewise occur verbatim in its source,
-with at least eight non-space characters. A source with no stored text — for example a document that
-is named but was not accessible — cannot be cited. A citation without a `source_id` and a `quote` is
-refused.
+**What enters through the inbox is the submitter's claim.** HQ checks that a quotation's words are
+in the source. It cannot check that they are about the thing the proposal attaches them to: a
+verbatim sentence about one module can be attached to another. So only an import can label
+something as reported by a source. In the record a proposal would leave, every object at any depth
+whose `epistemic` or `basis` is `reported`, `design_intention`, `source_recommendation`,
+`founder_statement` or `commission_example` (a pathway's basis: the commission gives this pathway as
+an example, which is also a claim about a source) must be identical, as a whole object, to the object at the same place in the
+record as stored (list positions count: moving a claim to another place in a list is a change). A
+loop's `standing` and a pathway's `basis` may hold such a label only if they already hold that very
+value. Otherwise the proposal is refused (403, rule `source_label`): “a proposal's claim is the
+submitter's own: label it submitter_claim (it may carry quotations). Labels that say a source
+reports something are set only by an import.” So a created record carries no source label at all,
+and an update can leave an imported claim exactly as it is, remove it, or replace it with the
+submitter's own claim (`submitter_claim`) or `no_evidence`. A pathway created by proposal has the
+basis `submitter_claim` and is shown as the submitter's claim. A submitter's claim never raises a
+module's standing and is never counted as an acceptance; the screens show it as the submitter's
+claim.
+
+**Quotations are still verified.** Every object anywhere in a proposal that has both a `source_id`
+and a `quote` must quote that source verbatim: at least twelve characters once spacing is
+normalised, found in the text snapshot HQ stored when it imported the source (`hq.source_texts`).
+This holds for a submitter's claim too, and it proves only that the words are in the source, not
+that they support what they are attached to. A new requirement's `exact_wording` must likewise occur
+verbatim in its source, with at least eight non-space characters. A source with no stored text — for
+example a document that is named but was not accessible — cannot be cited. A citation without a
+`source_id` and a `quote` is refused.
 
 **Labels.**
 
 | Label | In a proposal |
 | --- | --- |
 | `verified`, `hq_recommendation` | Never. They are HQ's own (field `epistemic` or `basis` anywhere, and a loop's top-level `standing`) |
-| `reported`, `design_intention`, `source_recommendation`, `founder_statement` | Only with at least one citation, which is then verified |
-| `submitter_claim`, `no_evidence` | Always |
+| `reported`, `design_intention`, `source_recommendation`, `founder_statement`, and a pathway's `commission_example` | Never, unless the record as stored already holds that very object at the same place (an imported claim left exactly as it is) |
+| `submitter_claim`, `no_evidence` | Always. A submitter's claim may carry quotations, which are verified |
+
+**Only the fields its record type has.** A proposal's `set` (an update) or `record` (a create) may
+contain only the top-level fields its record type declares in `src/lib/domain/schemas.ts`. The
+database holds the same list (`hq.record_fields`; `tests/db/record-fields.test.ts` compares the two).
+Any other key, a look-alike such as `"hq_acceptance "` or `Standing` included, is refused (422, rule
+`unknown_field`, naming the key in at most 60 characters). An import still keeps keys it does not
+know, so that an older application can read a newer pack.
+
+**Never the text HQ shows for a value it cannot read.** A proposal in which any text, at any depth,
+is exactly “Not a valid value” is refused (422, rule `not_a_valid_value`). The *Propose a change*
+form fills its fields from the record as stored, so it never offers that text.
+
+**“Implemented and tested” is not a proposal's to say.** A proposal cannot set a requirement's
+`implementation_state` to `implemented_tested` unless it already is, and cannot change the
+`linked_evidence_ids` or `linked_build_ids` of a requirement that is (403, rule `tested_claim`). A
+proposal can still say `implemented_unverified` and link evidence; the requirement then stays
+outstanding. Only an import sets `implemented_tested`, and the refusal says so: “record the tests
+as evidence; only an import marks a requirement as implemented and tested (the founder can record it
+as satisfied by a decision)”. A founder decision sets no implementation state; it can set the
+requirement's standing, for example to *satisfied*, which takes it off the outstanding list.
 
 **Fields a proposal cannot set on any record:**
 
@@ -84,13 +124,31 @@ refused.
 | `recorded_in`, `decided_by`, `decided_at` | A decision “recorded in HQ” can only be made by the founder |
 | `verification`, `submitted_by` | Evidence cannot upgrade its own verification status |
 | `hq_checks` | Checks HQ's build made are written only by that build |
-| `made_by` | A recommendation created through the inbox is stored as “Proposed through the inbox by *handle*”, never as HQ's |
+| `made_by` | A recommendation created through the inbox is stored as “Proposed through the inbox by *handle*”, never as HQ's. An imported recommendation that names nobody reads “Not stated” (its page: “This recommendation does not say who made it.”), never HQ's |
 | `recorded_from_cluster` | Written only by HQ's build |
 
 **Fields only HQ's build writes**, refused in a proposal for the record type named:
 module `addenda_from_clusters`, `commission_entry`, `lifecycle_other_reports`; decision and build
 `other_mentions`; build `possibly_same_as`, `code_ref`; evidence `search_results`; requirement
 `linked_tests`; source `doc_kind`, `content_kind`, `importance`, `identifiers`, `other_names`.
+
+**Records HQ did not write are not rewritten by proposal.** Two kinds of record are frozen for
+proposals: any change is refused (403, rule `frozen_record`).
+
+- Evidence whose `verification` is `source_reported` or `hq_verified`: “evidence that a source
+  reports or HQ's build checked is changed only by an import; submit new evidence instead”.
+- A source HQ has read: one with a text snapshot, one whose `access` is anything but
+  `not_accessible`, or one whose text the database stores: “a source HQ has read is changed only by
+  an import; a proposal can change a source that is only named”. The application cannot read the
+  stored texts, so a source known to be read only through them is refused by the database, with
+  its message and no `detail.rule`.
+
+A source that is only named can still be changed, apart from what it says about a snapshot
+(`sha256`, `bytes`, `text_snapshot`, `access`, `kind`, `authority`, `retrieved_at`, `parts`,
+`version`, `location`). A proposal can add only a source that is named but not accessible (kind
+`named_not_accessible`, access `not_accessible`, authority `referenced_only`, with no checksum or
+snapshot). A change to an unverified evidence submission keeps it unverified and attributes it to
+whoever proposed the change.
 
 **A proposal can never assert acceptance, or reshape one a source reports.** A verbatim quotation
 proves that words are in a source, not that they report an acceptance, so a citation is not enough.
@@ -103,7 +161,9 @@ refuses first, with the same words):
   valid standings. Statement, module, label, artifact, checksum and every other field are covered at
   once. The message is “a build reported as accepted is changed only by an import or a founder
   decision; a proposal may only withdraw the reported acceptance”. A proposal that does withdraw it
-  may change the other fields too: withdrawing a claim is not asserting one;
+  may change the other fields too: withdrawing a claim is not asserting one. The rest of the record
+  it leaves must still keep the rules above, so a withdrawal may relabel the build's statement as the
+  submitter's claim but may not rewrite it as a report;
 - a build whose standing would become `accepted_reported`, when the record did not already have it;
 - a module whose `lifecycle.founder_accepted` would be **positive**, unless the whole entry is
   identical to the record's current one. Positive means anything other than an object whose `state`
@@ -122,29 +182,30 @@ target a build reported as accepted, accepting a proposal written before that is
 **The database checks the values that drive labels itself.** For each record type it holds the
 fields whose value must come from a fixed list, and the lists (`hq.field_enums`, the same lists as
 `FIELD_ENUMS` in `src/lib/domain/schemas.ts`: `tests/db/field-enums.test.ts` compares the table with
-`FIELD_ENUMS`, and `tests/unit/schemas.test.ts` compares `FIELD_ENUMS` with the record schemas). Among them: a build's `standing`; a module's `kind`, `evidence_level`, the dimension names in
-`lifecycle` and each entry's `state` and `basis`; evidence `type` and `verification`; the status-like
-fields of every other type; and `epistemic` in any object at any depth. A value must be a JSON string
-on its list; anything else is refused with 422 (`detail.field` names the field, `detail.rule` is
+`FIELD_ENUMS`, and `tests/unit/schemas.test.ts` compares `FIELD_ENUMS` with the record schemas). They
+are: a build's `standing`; a module's `kind`, `evidence_level`, the dimension names in `lifecycle`
+and each entry's `state` and `basis`; evidence `type` and `verification`; a commission's and a
+decision's `status` and a decision's `recorded_in`; a defect's `severity` and `status`; an open
+item's `kind`; a loop's `standing`; a pathway's `basis`; a recommendation's `status`; a requirement's
+`attribution`, `category`, `disposition` and `implementation_state`; a source's `kind`, `access` and
+`authority`; and `epistemic` in any object at any depth. A value must be a JSON string on its list;
+anything else is refused with 422 (`detail.field` names the field, `detail.rule` is
 `allowed_values`). A created record is checked in full. For an update, the fields the proposal sets
 are checked as they would stand, and the fields that drive acceptance (build `standing`, module
 `lifecycle`, evidence `type`) are always checked in the whole resulting record. So an odd value
 imported before this rule does not block an unrelated change, except in those fields: a build with an
 odd standing can only be changed by a proposal that gives it a valid one. The check runs at
-submission and again at acceptance.
+submission and again at acceptance. **What it does not cover:** a listed value inside a list other
+than an `epistemic` label — a module capability's `state`, a loop or pathway step's `shared_stage`.
+Accepting a proposal through the application still refuses such a value, because the whole record
+is then checked against its schema (above); a founder act made straight in the database with the
+founder's identity is not.
 
 **Rules for particular record types:**
 
 - Decision records cannot be created or changed by proposal: they are written only by a founder decision.
-- A source HQ has read keeps what it says about the snapshot: a proposal cannot change its `sha256`,
-  `bytes`, `text_snapshot`, `access`, `kind`, `authority`, `retrieved_at`, `parts`, `version` or
-  `location`. A proposal can add only a source that is named but not accessible (kind
-  `named_not_accessible`, access `not_accessible`, authority `referenced_only`, with no checksum or snapshot).
 - Evidence of type `founder_acceptance` or `hq_check` is never accepted from a proposal or from
   `record_test_evidence`.
-- Evidence that a source reports, or that HQ's build checked, cannot have its `type`, `result`,
-  `sha256`, `date` or `build_id` changed by proposal; submit new evidence instead. A change to an
-  unverified submission keeps it unverified and attributes it to whoever proposed the change.
 - A proposal that sets `linked_evidence_ids`, `linked_build_ids` or `decision_ids` must name existing
   evidence, build and decision records. *This rule is checked by the application only, not by the database.*
 
@@ -156,16 +217,41 @@ stale. The database also refuses any write to such a record other than a founder
 
 ### How a refusal is answered
 
-| Refusal | HTTP status | Error code |
+When a proposal breaks more than one rule, the first refusal answers. The database's order is: the
+shape of the proposal (protected and build-only fields, decision records, HQ-only labels, quotations,
+a created record's allowed values); then, for an update, a founder acceptance or rejection on the
+target, the frozen records and the allowed values; then the acceptance claims; then what a proposal
+may say (the “Not a valid value” text, undeclared fields, “implemented and tested”, source labels);
+then, for an update, the stale check. The application checks the same rules before the database is
+asked, and two of its own: linked ids, and the whole record against its schema (last). Its order
+differs in one way: for an update it checks a founder acceptance on the target, the frozen records,
+the base version and the linked ids before the labels and quotations, so a stale proposal is
+answered as stale (409) by the application where the database would name another rule first.
+
+| Refusal | HTTP status | Error code and detail |
 | --- | --- | --- |
-| A protected or build-only field, an HQ-only label, a forbidden evidence type, a source or evidence integrity rule, a decision record | 403 | `forbidden` (`detail.protected_fields` lists the fields, where there are any) |
+| A protected or build-only field, an HQ-only label, a forbidden evidence type, a source a proposal may not create, a decision record | 403 | `forbidden` (`detail.protected_fields` lists the fields, where there are any; for an HQ-only label, `detail.field` and `detail.label`) |
+| A record HQ did not write: evidence a source reports or HQ's build checked, a source HQ has read | 403 | `forbidden` (`detail.rule` is `frozen_record`) |
 | A claim of acceptance: a build standing `accepted_reported`, any change to a build reported as accepted that does not withdraw it, a positive module `lifecycle.founder_accepted` that is not identical to the current one, or a `founder_accepted` field | 403 | `forbidden` (`detail.rule` is `acceptance_claim`; `detail.field` names the field: `standing` for a build) |
-| A quotation or wording that cannot be verified, a source label without a citation, a malformed citation | 422 | `invalid_request` (`detail.unverified_quotations` lists every quotation that failed) |
+| “Implemented and tested” set by proposal, or the links of a tested requirement changed | 403 | `forbidden` (`detail.rule` is `tested_claim`; `detail.field` is `implementation_state`, `linked_evidence_ids` or `linked_build_ids`) |
+| A source label the record does not already hold at that place | 403 | `forbidden` (`detail.rule` is `source_label`; `detail.field` is the place, such as `statement`, `lifecycle.prototyped`, `capabilities[2]` or `standing`, in at most 80 characters) |
+| A quotation or wording that cannot be verified, a malformed citation | 422 | `invalid_request` (`detail.unverified_quotations` lists the quotations that failed, at most 50; a malformed citation has no detail) |
 | A value outside its field's list | 422 | `invalid_request` (`detail.field`; `detail.rule` is `allowed_values`) |
-| At acceptance, a record that would no longer pass its schema | 422 | `invalid_request` (`detail` lists the problems; the proposal stays *submitted*) |
+| A field the record type does not declare | 422 | `invalid_request` (`detail.rule` is `unknown_field`; `detail.field` names the key, in at most 60 characters) |
+| The text “Not a valid value” anywhere in the proposal | 422 | `invalid_request` (`detail.rule` is `not_a_valid_value`) |
+| A record that would not pass its schema: at submission, and at acceptance as it would then stand | 422 | `invalid_request` (`detail` lists the problems, at most 10 and a count of the rest; at acceptance the proposal stays *submitted*) |
 | A linked id that does not exist | 422 | `invalid_request` (`detail.unknown_links`) |
 | A target carrying a founder acceptance or rejection recorded in HQ | 409 | `conflict` (`detail.acceptance`; the message says “acceptance” or “rejection”, whichever it is) |
 | A target that changed since `base_version` | 409 | `conflict` |
+
+**At acceptance the answer is the same as at submission.** Before the founder's acceptance reaches
+the database, the application runs its own copies of the frozen-record, allowed-values,
+acceptance-claim and what-a-proposal-may-say rules against the record as stored, in the database's
+order, so the refusal carries the same status, `detail.rule` and `detail.field` as it would have at
+submission. A proposal the database refuses earlier in its order (a protected field, an HQ-only
+label, a quotation, an acceptance recorded in HQ) is left to the database, and the answer carries
+the database's message and status. A caller that goes straight to the database gets the database's
+SQLSTATE (`HQ403`, `HQ409`, `HQ422`) and message, with no `detail.rule`.
 
 The application writes these refusals to the audit log (see “History and audit”), whether they
 come through the API or the browser form. A refused acceptance is logged as `proposal.review`
@@ -182,11 +268,11 @@ An agent's evidence never counts as an acceptance instrument. For a build marked
 things count:
 
 - evidence of type `founder_acceptance` that a source reports or HQ's build checked, whose `build_id`
-  is that build; or
+  is that build and whose record passes validation; or
 - an issued decision recorded in HQ whose effects include a `set_acceptance` that accepts that build,
   and only while the build's current HQ acceptance has the state *accepted* and names that decision.
   An acceptance the founder later cleared, or replaced by a rejection, is no instrument: the review
-  item comes back.
+  item comes back. A decision or build record that fails validation is no instrument either.
 
 Nothing else counts: not a decision that only names the build's module, not a decision a source
 reports (those carry no reference to a build), and never a link the build itself carries, such as
@@ -197,8 +283,12 @@ claimed as accepted with no source quoted, the item says that instead.) This is 
 cautious reading, and it lists more builds for review than the earlier rule did.
 
 A requirement counts as outstanding unless it is recorded as implemented and tested **and** at least
-one linked evidence record exists that a source reports or HQ's build checked. A requirement whose
-implementation state claims tests but has no linked evidence record is listed under *Review items*.
+one linked evidence record exists that a source reports or HQ's build checked and that passes
+validation (or the founder has given it a closed standing such as *satisfied*). A requirement whose
+own record fails validation is always outstanding. A requirement whose implementation state claims
+tests but has no linked evidence record is listed under *Review items*. A proposal cannot make a
+requirement implemented and tested, nor change what a tested one links to (see “What a proposal may
+assert”).
 
 ## Founder decisions
 
@@ -209,7 +299,11 @@ Only the founder, in a signed-in session, can:
   - set the standing of a requirement: `unreviewed`, `active`, `satisfied`, `deferred`, `superseded`,
     `conflicted` or `withdrawn`; or
   - record acceptance or rejection of a build, module, loop, piece of evidence or commission, with a
-    scope note, or clear an earlier acceptance or rejection. The decision API
+    scope note, or clear an earlier acceptance or rejection. Clearing needs something to clear: an
+    effect with the state `none` on a record that has no acceptance or rejection recorded in HQ is
+    refused (422: “there is no acceptance or rejection recorded in HQ on <id> to clear”), and nothing
+    is recorded. The effects are applied in order, so one decision can record an acceptance and then
+    clear it. The decision API
     (`POST /api/v1/decisions`) also accepts a requirement as the target; the screen does not offer it.
     The acceptance stores the record version it was written at (`accepted_version`);
 - resolve a pending decision or open item by naming it in the decision;
@@ -248,7 +342,12 @@ While a record's current version comes from an accepted proposal, it is marked o
 in the defect, evidence and open-item lists: “Entered through the proposal inbox”, with the proposal
 id, for a record's first version, and “Last changed through the proposal inbox” for a later one. Such
 records are counted under *Unverified claims*, and their notes say “Reported through the inbox”,
-unless the founder has accepted them in HQ.
+unless the founder has accepted them in HQ. What a proposal adds to a record is its submitter's
+claim; only the imported claims it left exactly as they were keep their source's label (see “What a
+proposal may assert”). The screens label a submitter's claim *Submitter's claim*, head a build's statement
+with that label “What the submitter says” (never “What the source says”), and mark its quotations
+as quoted by the submitter: HQ checked that the words are in the source, not that they support the
+statement.
 
 ## History and audit
 
@@ -258,7 +357,9 @@ unless the founder has accepted them in HQ.
   the records exactly as they stood. The proposal inbox, proposal pages, the decision centre, *Changes*
   and *AI & API access* always show the latest, and say so when an address names a revision.
 - The audit log records sign-ins, sign-outs, token use, writes and refusals. It is append-only and
-  visible only to the founder. Refusals are recorded by the application, in a transaction of their
+  visible only to the founder. Refusals of callers without a valid identity are bounded: per server
+  process, at most 120 a minute for each action and reason are written in full, and the rest are
+  counted in one summary row for that minute (docs/SECURITY.md). Refusals are recorded by the application, in a transaction of their
   own. A refusal raised inside a database function cannot record itself (the refusal rolls its own
   write back), so a caller that goes round the application leaves no record of being refused.
 

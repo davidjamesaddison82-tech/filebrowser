@@ -1,5 +1,5 @@
 import { invalid } from "@/lib/server/errors";
-import { readJson, withApi } from "@/lib/server/http";
+import { otherMethods, readJson, withApi } from "@/lib/server/http";
 import { reviewProposal } from "@/lib/server/services";
 
 type Params = { params: Promise<{ id: string }> };
@@ -17,3 +17,6 @@ export async function POST(request: Request, { params }: Params) {
     return { result: await reviewProposal(principal, id, decision as "accept", typeof body.note === "string" ? body.note : undefined) };
   });
 }
+
+/** The methods this route does not implement: 405 (OPTIONS 204) with Allow and a request id. */
+export const { GET, HEAD, PUT, PATCH, DELETE, OPTIONS } = otherMethods(["POST"]);

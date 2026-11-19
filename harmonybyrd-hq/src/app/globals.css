@@ -913,6 +913,10 @@ svg.map .dim {
   fill: var(--surface);
   stroke-dasharray: 4 3;
 }
+.st-not_reliable {
+  fill: var(--bad-wash);
+  stroke-dasharray: 2 2;
+}
 .sw.st-accepted_in_hq {
   background: var(--ok-wash);
 }
@@ -937,6 +941,10 @@ svg.map .dim {
 .sw.st-named_only {
   background: var(--surface);
   border-style: dashed;
+}
+.sw.st-not_reliable {
+  background: var(--bad-wash);
+  border-style: dotted;
 }
 
 /* ---------- Lifecycle matrix ---------- */
@@ -1464,6 +1472,10 @@ body {
 }
 .mn.st-named_only {
   border-style: dashed;
+}
+.mn.st-not_reliable {
+  background: var(--bad-wash);
+  border-style: dotted;
 }
 .map .mn:hover,
 .map .mn:focus-visible {

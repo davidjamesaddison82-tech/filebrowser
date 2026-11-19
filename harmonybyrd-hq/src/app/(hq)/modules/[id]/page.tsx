@@ -24,7 +24,9 @@ import {
   PageHead,
   RecordLink,
   StatusChip,
+  UnreadableNotice,
 } from "@/components/ui";
+import { unreadableFields } from "@/lib/domain/conform";
 import { moduleBrief } from "@/lib/domain/derive";
 import type { Claim, ModuleRecord } from "@/lib/domain/schemas";
 
@@ -86,7 +88,7 @@ function CapabilityItem({ ds, c }: { ds: Parameters<typeof ClaimView>[0]["ds"]; 
         <EpistemicChip value={c.epistemic} />
       </div>
       {c.detail ? <div className="li-note">{c.detail}</div> : null}
-      <Citations ds={ds} citations={c.citations} />
+      <Citations ds={ds} citations={c.citations} by={c.epistemic} />
     </li>
   );
 }
@@ -202,7 +204,9 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                     ? "bad"
                     : brief.standing.headline === "acceptance_reported"
                       ? "founder"
-                      : "info"
+                      : brief.standing.headline === "not_reliable"
+                        ? "bad"
+                        : "info"
               }
             >
               {brief.standing.label}
@@ -228,18 +232,20 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
         }
       />
 
+      <UnreadableNotice ds={ds} note={brief.unreadable_note} refs={brief.unreadable_records} rev={rev} />
+
       <nav className="toc" aria-label="On this page">
         <span className="muted small">On this page:</span>
         {index.map(([anchor, label, n]) => (
           <a key={anchor} href={`#${anchor}`}>
             {label}
-            {n != null ? <span className="toc-n">{n}</span> : null}
+            {n != null ? <span className="toc-n">{brief.reliable ? n : "?"}</span> : null}
           </a>
         ))}
       </nav>
 
       <AcceptanceLock data={m} />
-      {ctx.warnings.some((w) => w.type === "module" && w.id === brief.module.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/module/${encodeURIComponent(brief.module.meta.id)}`, rev)} /> : null}
+      {ctx.warnings.some((w) => w.type === "module" && w.id === brief.module.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/module/${encodeURIComponent(brief.module.meta.id)}`, rev)} unreadableFields={unreadableFields(ctx.ds, brief.module)} /> : null}
       {brief.standing.caution ? <Notice tone="warn">{brief.standing.caution}</Notice> : null}
       {m.evidence_level === "commission_list_only" ? (
         <Notice tone="warn">
@@ -466,8 +472,8 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                 <ul className="plain">
                   {brief.recommendations.map((r) => (
                     <li key={r.id}>
-                      <Chip tone="accent" glyph="➜">
-                        HQ recommendation
+                      <Chip tone="accent" glyph="➜" title="Not approved work. Its record says who made it.">
+                        Recommendation
                       </Chip>{" "}
                       <Link href={withRev(recordHref("recommendation", r.id), rev)}>{r.title}</Link>
                     </li>

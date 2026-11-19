@@ -1,6 +1,8 @@
 # Known gaps, blocked integrations and limits
 
-Nothing here is hidden elsewhere. If something is not listed as working in docs/TEST-RESULTS.md, assume it is not proven.
+Nothing here is hidden elsewhere. docs/TEST-RESULTS.md is a generated report of one run, made on the
+commit it names; it is not a report on later code. Assume nothing is proven that a test named in
+docs/TESTING.md does not show.
 
 ## Standing
 
@@ -71,12 +73,25 @@ remain, by design or because fixing them was out of scope:
   a caller that goes round it (for example straight to the database) is refused without a trace. If
   writing an audit entry fails, the entry is lost and the request is answered anyway.
 - **A direct caller can still write some audit rows that did not happen.** The audit wrappers are
-  granted to the API roles, because the application writes through them. Someone who reaches the
-  database directly with a valid identity can therefore record, under their own name, that they used
-  a read or propose tool they did not use (`tool.…`, `mcp.…`, `api.…` within the allowed families).
-  Anyone who reaches it, anonymous included, can record a refusal (outcome *denied* or *error*) that
-  did not happen. No one can record as allowed a founder act or a proposal without doing it, nor
-  any other name that reads like one; and no new row can have an action longer than 80 characters.
+  granted to the API roles, because the application writes through them. `hq.log_access` now accepts
+  only the exact actions the application logs as allowed (docs/SECURITY.md), so no one can record as
+  allowed a founder act, a proposal, or any name outside that list, however it is spelt. But someone who reaches
+  the database directly with a valid identity can still record, under their own name, that they used
+  one of those exact actions when they did not: `api.index`, `api.whoami`, `tools.list`,
+  `integrations.read`, `proposal.read`, `tool.<name>` or `mcp.<name>` for any of the 18 tools — a tool
+  their role or token may not call included, such as `tool.submit_change_proposal` by a reader — with
+  any object; and `session.sign_in`, `session.sign_out` or `session.end_all` naming no one or
+  themselves. `hq.log_refusal` stays open, because a refusal names what was attempted: anyone who
+  reaches the database, anonymous included, can record a refusal (outcome *denied* or *error*) that
+  did not happen, under any lower-case dotted action of at most 80 characters, with a detail of up to
+  8,192 bytes, as many times as they like. No new row can have an action longer than 80 characters.
+- **The bound on refusal rows is the application's, and per process.** Refusals of callers without a
+  valid identity are written in full up to 120 a minute for each action and reason, then counted in
+  one summary row a minute (docs/SECURITY.md). Several server processes each keep their own count;
+  counts are lost if the process stops before the minute ends; and once a minute's 120 are written,
+  the row of a particular refused request may be missing when someone looks it up by its request id.
+  Refusals of signed-in callers are not bounded, and nor is a caller that writes through
+  `hq.log_refusal` directly.
 - **A caller that reaches the database directly chooses the request id it records.** The request id
   is the application server's; the database cannot know it. A caller who reaches the database as
   `authenticated` or `anon` (the application's login role, or an API layer such as Supabase's) passes
@@ -87,6 +102,14 @@ remain, by design or because fixing them was out of scope:
   it when reviewing.
 - **A defect created through `submit_change_proposal`** can still set its own `reported_by` and
   `reported_via`; `submit_defect_report` sets them from the caller.
+- **A proposal can remove what an import said.** An update may leave an imported claim exactly as it
+  is, remove it, or replace it with the submitter's own claim. Removing or replacing a claim a source
+  reports is allowed (withdrawing a claim is not asserting one), so the founder has to notice it when
+  reviewing the proposal; the review screen shows the stored value beside the proposed one.
+- **A submitter's quotations prove only that the words are in the source.** A submitter's claim may
+  quote any sentence of a source HQ holds, related or not. HQ verifies the words, labels the claim
+  as the submitter's, says on the screen that it checked the words and not that they support the
+  claim, and never counts it towards a module's standing or as an acceptance.
 - **A pack** (not a proposal) can give a lifecycle dimension other than founder acceptance the basis
   `verified` with no citation, and it counts towards the module's standing. Packs are built outside
   the application and checked by the builder.
@@ -129,15 +152,27 @@ remain, by design or because fixing them was out of scope:
   `tests/e2e/layout-measure.ts` see only what is on screen when they measure. `coveringsTopAndEnd`
   measures at the top of the page, every 0.8 window heights part-way down it, and at its end; on a
   page that would need more than ten positions in between, it takes ten, evenly spread, so parts of a
-  very long page are never on screen during a measure, and a covering seen only there is missed.
-  Check 4, which looks at what is drawn at each point over text, samples a 40-pixel grid, so a
-  covering smaller than the grid and away from any fixed, sticky or absolute element (checks 1–3) can
-  be missed. It skips points within 1.5 pixels of a line's edge (the browser's hit test rounds there;
-  this rule has no self-test), text the browser does not draw (an element at opacity 0, itself or
-  through an ancestor, is looked through) or clips, text in form controls, a sticky table cell over
-  its own table, and an element shifted over text of an element that contains it. Text under an
-  ancestor with a `clip-path` counts as clipped wherever the browser's hit test does not return that
-  ancestor or something inside it at that point.
+  very long page are never on screen during a measure, and a covering seen only there is missed. For
+  each sticky element it also measures where the element is stuck (the middle of that scroll range,
+  its last stuck position, and one more), so a sticky element that covers text only over a short
+  range is seen. That range is worked out from the element's parent, taken as its containing block,
+  and from the window's scroll only; a sticky element inside another scroll container, or one whose
+  containing block is not its parent, can still be missed, and at most 24 such positions are taken on
+  a page. A covering that appears over only part of the scroll range for any other reason — shown by a
+  script while the page is scrolled, or by a scroll-driven animation — is missed when it falls between
+  two positions. Text inside an `iframe` or a shadow root is not checked at all: the detector does not
+  look inside them (an overlay drawn over the page from inside one is still found). Check 4, which
+  looks at what is drawn at each point over text, samples a 40-pixel grid, so a covering smaller than
+  the grid and away from any fixed, sticky or absolute element (checks 1–3) can be missed. It skips
+  points within 1.5 pixels of a line's edge (the browser's hit test rounds there; this rule has no
+  self-test), text the browser does not draw (an element at opacity 0, itself or through an ancestor,
+  is looked through) or clips, text in form controls, a sticky table cell over its own table, and an
+  element shifted over text of an element that contains it. Text under an ancestor with a `clip-path`
+  counts as clipped wherever the browser's hit test does not return that ancestor or something inside
+  it at that point. Checks 1 and 2 leave out a fixed, sticky or absolute box under a `clip-path` or the
+  legacy `clip` (its own or an ancestor's) when the hit test returns it at none of 7 × 7 points spread
+  over it; a box clipped down to a sliver that falls between those points is left out too, and is
+  then found only if check 4 sees it over text.
 - **`verify_chain` called with no identity** sees no rows and so reports nothing. The application
   always calls it as a signed-in principal.
 - **The automated suites exercise the tighter pack rules on the synthetic fixture only** (minimum
@@ -146,29 +181,63 @@ remain, by design or because fixing them was out of scope:
   repository holds no record of a run of the second round's pack rule (a build reported as accepted
   must quote its source) against the real pack. A stored record that fails the schema still loads,
   with an integrity warning.
-- **What an owner-level import can still store.** An import made with the owner connection that
-  skips the pack validator (`hq.admin_put_records` called directly) can store a record of any shape:
-  a list where a status should be, a number as a lifecycle state. It cannot store an HQ acceptance, a
-  decision recorded in HQ or an id HQ issues (the database refuses those). Every reader — screens,
-  REST and MCP — computes on such a record conformed to its schema, so none fails on it and none of
-  it reads as accepted, tested, checked or linked because of a value that is not valid; every answer
-  that names it says it is not valid and gives it as stored. What conforming does not do: a field the
-  record does not declare at its top level is passed on as stored (records keep keys they do not
-  know, so an older application can read a newer pack), and the screens do not show it but `get_record`
-  returns it; a rule across the fields of an object (a lifecycle “yes” with no quotation, a claim
-  labelled `reported` that quotes nothing) is not undone, but the derivations never count such a
-  statement, and list a lifecycle one as an unverified claim; and a record that passes its schema is
-  taken as it is, whatever an import that skipped the quotation check put in it.
+- **What an owner-level import can still store, and what HQ does with it.** An import made with the
+  owner connection that skips the pack validator (`hq.admin_put_records` called directly) can store
+  a record of any shape: a list where a status should be, a number as a lifecycle state. It cannot
+  store an HQ acceptance, a decision recorded in HQ or an id HQ issues (the database refuses those).
+  A proposal can no longer leave such a record: the database checks the values that drive labels and
+  the fields a record type has, and accepting through the application checks the whole record.
+  - What HQ does with a record that fails validation. Every reader — screens, REST and MCP —
+    computes on it conformed to its schema, so none fails on it, and every answer that names it says
+    it is not valid and gives it as stored. It **never counts as proof** of anything: not as an
+    acceptance instrument, an acceptance or rejection recorded in HQ (only a rejection is kept), a
+    lifecycle entry towards a standing, test evidence for a requirement, an HQ check, a decision that
+    resolves something, or a link that settles missing work (`src/lib/domain/derive.ts`, the list at
+    its top). A defect HQ cannot read counts as open, and a requirement HQ cannot read as live and
+    outstanding. It is **flagged on every module it names**: on each module whose id occurs anywhere
+    in its stored data, standing on its own rather than as part of a longer id, the register, overview, brief, module page and API carry
+    `unreadable_records` and the words “N record(s) that name this module cannot be read in full; its
+    figures may be incomplete.”, and development health lists every such record under *Records HQ
+    cannot read*. A module whose own record fails validation reads *Not reliable* instead of figures.
+    Search still finds such a record by its stored words. A missing field takes its default only
+    when the default says nothing (an empty list or object, null, false, or a value such as `unknown`
+    or `none`); any other default, a recommendation's `made_by` among them, reads “Not a valid
+    value”. A check whose stored result is not valid is shown without a tick. **The marker cannot be
+    stored:** the *Propose a change* form fills its fields from the record as stored, and a proposal
+    containing “Not a valid value” is refused.
+  - What it does not do. A record that names a module only by its name or an alias, not its id, is
+    not flagged on that module; and only modules are flagged, not the other records it names. A
+    field the record does not declare at its top level is passed on as stored (an import keeps keys
+    it does not know, so an older application can read a newer pack): the screens do not show it, but
+    `get_record` returns it. A rule across the fields of an object (a lifecycle “yes” with no
+    quotation, a claim labelled `reported` that quotes nothing) is not undone, but the derivations
+    never count such a statement, and list a lifecycle one as an unverified claim. A record that
+    passes its schema is taken as it is, whatever an import that skipped the quotation check put in
+    it. A list conforming emptied is marked as not readable (“Not readable — see the stored record”,
+    `unreadable_fields`) only where it is a field of the record or of an object in it, not inside
+    a list element, and only when it is left wholly empty: a list that lost some of its elements is
+    shown with those that remain. The record's own page marks each such list where it shows it as a
+    list of records; the module, loop and requirement pages, and every other list on a record's page,
+    name the lists HQ cannot read in the notice at the top of the page rather than beside each list.
 - **The whole-record check at acceptance is the application's.** Accepting a proposal through HQ
   checks the record as it would then stand against its full schema. The database checks its own rules
-  at acceptance (labels, quotations, protected fields, allowed values, acceptance claims), but not the
-  full schema, so a founder act made straight in the database with the founder's identity is not
+  at acceptance (protected fields, labels, quotations, frozen records, allowed values, acceptance
+  claims, declared fields, “implemented and tested”, source labels), but not the full schema, so a founder act made straight in the database with the founder's identity is not
   checked against it.
 - **Allowed values are checked on the proposal path only.** `hq.field_enums` is applied to proposals,
   at submission and at acceptance. A pack import is checked by the application's schemas instead, and
   the database owner can store anything. For an update, a field that does not drive acceptance is
   checked only where the proposal sets it, so an odd value already stored elsewhere in the record
   stays until someone changes it.
+- **The database's check of allowed values does not reach into lists**, apart from `epistemic`
+  labels, which it checks at any depth. A module capability's `state` and a loop or pathway step's
+  `shared_stage` are not checked by the database. A proposal accepted through the application is
+  still refused if such a value is not on its list, because the whole record is checked against its
+  schema then; a proposal submitted straight to the database and accepted by a founder act made
+  straight in the database could store one.
+- **The application cannot see which sources the database holds a text for.** A source frozen only
+  because the database stores its text (it has no text snapshot and is marked `not_accessible`) is
+  refused by the database alone, with the database's message and no `detail.rule`.
 
 ## Quality of the evidence pack
 
