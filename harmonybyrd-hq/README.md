@@ -28,7 +28,7 @@ Three rules are enforced by the database, not by convention:
 
 1. **Nothing without a source.** A record gets in only if every quotation in it is found, verbatim, in the snapshot of the document it cites. This is checked when a pack is imported and again for every proposal, when it is submitted and when the founder accepts it. A quotation must be at least twelve characters long once spacing is normalised.
 2. **Nothing is overwritten.** Every change is a new version; any earlier revision can be read exactly as it stood.
-3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing. No proposal can even claim an acceptance: acceptance is recorded only by a founder decision in HQ, or reported by an imported source.
+3. **No one approves their own work.** No API token — of an AI client, a developer or anyone — can review a proposal, record an acceptance or change a requirement's standing. No proposal can even claim an acceptance, or change a build a source reports as accepted except to withdraw that report: acceptance is recorded only by a founder decision in HQ, or reported by an imported source. The database checks the values that drive these labels itself, so a proposal that goes round the application cannot store a build standing such as `accepted` or a founder-acceptance state such as `Yes` either.
 
 ## Quick start
 
@@ -58,12 +58,19 @@ npm run test:repeat    # run the suites twice from a clean database and compare 
 npm run test:mutation  # remove one database protection at a time and check that a test notices
 ```
 
-Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md). An adversarial
-review, by reviewers who had not written the code, confirmed 71 defects by reproduction. Every
-original attack was then re-run against the fixes, and a second round fixed what was only partly
-closed. Each finding, and what was done about it, is in [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md)
-(generated); what remains is in [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). None of this satisfies an
-acceptance gate.
+Actual results of the last run are in [docs/TEST-RESULTS.md](docs/TEST-RESULTS.md), which names the
+commit it was made on. An adversarial review, by reviewers who had not written the code, confirmed 71
+defects by reproduction. Every original attack was then re-run against the fixes, and a second round
+fixed what was only partly closed. A re-check of the second round found ways round some of its
+rules, mostly by calling the database directly, and one serious sign-in defect; a third round
+(migration 0008) fixed those and has not yet been re-checked. Each finding, and what was done about
+it, is in [docs/REVIEW-FINDINGS.md](docs/REVIEW-FINDINGS.md) (generated) and
+[docs/PROGRESS-REGISTER.md](docs/PROGRESS-REGISTER.md); what remains is in
+[docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). None of this satisfies an acceptance gate.
+
+Every file the application needs is in the repository, `next.config.mjs` and the mutation runner
+included, although the repository around this folder ignores `*.mjs`; `tests/unit/repository-files.test.ts`
+fails if git would ignore one.
 
 ## Documents
 

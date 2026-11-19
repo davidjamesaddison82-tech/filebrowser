@@ -86,10 +86,16 @@ describe("AC6 — stale and conflicting writes are rejected explicitly", () => {
 
   it("a proposal that would make the record invalid is refused before it reaches the inbox", async () => {
     const err = await expectStatus(
-      submitChangeProposal(w.claude, { title: "Bad category", rationale: "x x x", base_rev: 3, target: { type: "requirement", id: "FR-FX-002", base_version: 3 }, set: { category: "astrology" } }),
+      submitChangeProposal(w.claude, { title: "Empty title", rationale: "x x x", base_rev: 3, target: { type: "requirement", id: "FR-FX-002", base_version: 3 }, set: { title: "" } }),
       422,
     );
     expect(err.message).toMatch(/would make FR-FX-002 invalid/);
+    // A value outside a field's list is named by the allowed-values check (G1c), which answers first.
+    const odd = await expectStatus(
+      submitChangeProposal(w.claude, { title: "Bad category", rationale: "x x x", base_rev: 3, target: { type: "requirement", id: "FR-FX-002", base_version: 3 }, set: { category: "astrology" } }),
+      422,
+    );
+    expect(odd.message).toMatch(/Field "category" holds "astrology", which is not one of its allowed values/);
   });
 
   it("revision numbers are gapless and every revision is sealed with a hash", async () => {

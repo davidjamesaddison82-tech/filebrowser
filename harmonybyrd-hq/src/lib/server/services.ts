@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { canPropose, claimsFor, isFounderSession, type Principal, publicPrincipal } from "@/lib/auth/principal";
+import type { DatasetView } from "@/lib/domain/conform";
 import { citedSourceIds, type Dataset } from "@/lib/domain/dataset";
 import { canonicalJson } from "@/lib/domain/pack";
 import {
@@ -33,8 +34,10 @@ import {
 } from "@/lib/domain/derive";
 import {
   type AnyRecord,
+  BUILD_STANDINGS,
   CREATABLE_TYPES,
   EVIDENCE_TYPES,
+  fieldEnumProblem,
   isRecordType,
   PROTECTED_FIELDS,
   RECORD_TYPES,
@@ -43,7 +46,7 @@ import {
 } from "@/lib/domain/schemas";
 import { audit, readAs, writeAs } from "./db";
 import { conflict, forbidden, HqError, invalid, notFound } from "./errors";
-import { type DatasetContext, getDataset, listChanges, recordHistory, recordVersion } from "./store";
+import { type DatasetContext, getDataset, type IntegrityWarning, listChanges, recordHistory, recordVersion } from "./store";
 
 export const HQ_NOTICE =
   "HarmonyByrd HQ is a NON-AUTHORITATIVE PROTOTYPE built under commission HB-HQ-P02-R1. " +
@@ -73,10 +76,56 @@ export interface ServiceEnvelope<T> {
     sources: ReturnType<typeof sourceSummary>[];
     note?: string;
   };
+  /** Present only when the answer names a stored record that fails validation (G11a). */
+  integrity?: AnswerIntegrity;
+}
+
+export const INTEGRITY_NOTICE =
+  "This answer names records that are stored in a form that does not pass validation. Everything in `data` is computed on them conformed to their schema: " +
+  'a value of the wrong kind reads "Not a valid value", a reference of the wrong kind is null, and an element of the wrong kind is left out, so none of them reads as accepted, tested, checked or linked because of a value that is not valid. ' +
+  "Each is listed here with its validation problems and exactly as stored (`stored`).";
+
+export interface AnswerIntegrity {
+  notice: string;
+  records: { type: string; id: string; valid: false; problems: string[]; stored: unknown }[];
+}
+
+/**
+ * G11a: the stored records that fail validation which an answer names anywhere in its data (as a record,
+ * a reference or a hit), each with its problems and its stored form. Null when it names none.
+ */
+function integrityOf(ctx: DatasetContext, data: unknown): AnswerIntegrity | null {
+  if (ctx.warnings.length === 0) return null;
+  const invalid = new Map<string, IntegrityWarning>(ctx.warnings.map((w) => [w.id, w]));
+  const named = new Map<string, IntegrityWarning>();
+  const walk = (value: unknown, key: string) => {
+    // A stored form is the record as stored: what it names is not what the answer says.
+    if (key === "stored") return;
+    if (typeof value === "string") {
+      const warning = invalid.get(value);
+      if (warning) named.set(value, warning);
+    } else if (Array.isArray(value)) {
+      for (const item of value) walk(item, key);
+    } else if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) walk(v, k);
+    }
+  };
+  walk(data, "");
+  if (named.size === 0) return null;
+  const records = [...named.values()]
+    .sort((a, b) => (a.type === b.type ? a.id.localeCompare(b.id) : a.type.localeCompare(b.type)))
+    .map((w) => ({ type: w.type, id: w.id, valid: false as const, problems: w.issues, stored: storedData(ctx, w.type, w.id) }));
+  return { notice: INTEGRITY_NOTICE, records };
+}
+
+/** A record's data exactly as stored at the answer's revision. */
+function storedData(ctx: DatasetContext, type: string, id: string): unknown {
+  return isRecordType(type) ? (ctx.stored.get(type, id)?.data ?? null) : null;
 }
 
 function envelope<T>(principal: Principal, ctx: DatasetContext, data: T, sourceIds: string[] | null, note?: string): ServiceEnvelope<T> {
   const r = ctx.ds.revision;
+  const integrity = integrityOf(ctx, data);
   return {
     hq: { authority: "prototype_non_authoritative", notice: HQ_NOTICE },
     revision: {
@@ -95,6 +144,7 @@ function envelope<T>(principal: Principal, ctx: DatasetContext, data: T, sourceI
       sources: (sourceIds ?? []).sort().map((id) => sourceSummary(ctx.ds, id)),
       ...(note ? { note } : {}),
     },
+    ...(integrity ? { integrity } : {}),
   };
 }
 
@@ -107,6 +157,10 @@ function requireType(type: string): RecordType {
 
 // ---------------------------------------------------------------------------
 // Read operations (each runs against one immutable Dataset; none can write)
+//
+// Every read computes on the conformed view, `ctx.ds` (G11a): a stored record of the wrong shape can
+// make no answer fail, and reads as nothing it does not validly hold. An answer that names such a
+// record says so (`integrity`, above), and get_record returns its stored form beside it.
 // ---------------------------------------------------------------------------
 
 export async function getEcosystemOverview(principal: Principal, options: ServiceOptions = {}) {
@@ -186,7 +240,7 @@ export async function getModuleBrief(principal: Principal, id: string, options: 
 }
 
 /** Accept a module id, or an exact name or alias (case-insensitive). */
-function resolveModule(ds: Dataset, idOrName: string) {
+function resolveModule(ds: DatasetView, idOrName: string) {
   let brief = moduleBrief(ds, idOrName);
   if (!brief) {
     const wanted = idOrName.trim().toLowerCase();
@@ -337,10 +391,21 @@ export async function getRecord(principal: Principal, type: string, id: string, 
   const record = ctx.ds.get(t, id);
   if (!record) throw notFound(`No ${t} "${id}" at dataset revision ${ctx.ds.revision.rev}.`);
   const history = await recordHistory(principal, t, id, ctx.ds.revision.rev);
+  // G11a: a record that fails validation is returned conformed, says so, and comes with its stored form.
+  const warning = ctx.warnings.find((w) => w.type === t && w.id === id);
   return envelope(
     principal,
     ctx,
-    { type: t, id, title: recordTitle(t, record.data), meta: record.meta, record: record.data, history },
+    {
+      type: t,
+      id,
+      title: recordTitle(t, record.data),
+      meta: record.meta,
+      record: record.data,
+      valid: !warning,
+      ...(warning ? { validation_problems: warning.issues, stored: storedData(ctx, t, id) } : {}),
+      history,
+    },
     citedSourceIds(record.data),
   );
 }
@@ -391,7 +456,9 @@ export const SEARCH_LIMIT = 60;
 export async function searchRecords(principal: Principal, query: string, types: string[] | undefined, options: ServiceOptions = {}) {
   const ctx = await getDataset(principal, options.rev);
   const all = search(ctx.ds, query, { types: types?.map(requireType), limit: Number.POSITIVE_INFINITY });
-  const hits = all.slice(0, SEARCH_LIMIT);
+  const invalid = new Set(ctx.warnings.map((w) => `${w.type}:${w.id}`));
+  // Each hit says whether its record passes validation (G11a); the answer's `integrity` lists those that do not.
+  const hits = all.slice(0, SEARCH_LIMIT).map((hit) => ({ ...hit, valid: !invalid.has(`${hit.type}:${hit.id}`) }));
   return envelope(principal, ctx, { query, total: all.length, returned: hits.length, truncated: all.length > hits.length, hits }, null);
 }
 
@@ -654,40 +721,59 @@ export function acceptanceBlock(type: string, id: string, data: unknown): HqErro
 
 /** F1: why a proposal may not claim acceptance. The same words as the database's HQ403. */
 export const ACCEPTANCE_CLAIM_RULE = "acceptance is recorded only by a founder decision in HQ or by an import; a proposal cannot assert it";
+/** G1a: why a build reported as accepted cannot be changed by proposal. The same words as the database's HQ403. */
+export const REPORTED_BUILD_FROZEN_RULE =
+  "a build reported as accepted is changed only by an import or a founder decision; a proposal may only withdraw the reported acceptance";
+/** G1b: the founder_accepted states that do not claim an acceptance. Anything else counts as positive. */
+const NOT_ACCEPTED_STATES: readonly string[] = ["no", "unknown", "not_applicable"];
 
-const lifecycleEntryKey = (entry: unknown) =>
-  isObject(entry) ? canonicalJson([entry.state ?? null, entry.basis ?? null, entry.note ?? null, entry.citations ?? null]) : null;
+const sentence = (rule: string) => `${rule.charAt(0).toUpperCase()}${rule.slice(1)}.`;
 
 /**
- * F1: a proposal can never introduce a claim of acceptance (mirrors hq._refuse_acceptance_claims).
- * `doc` is the update's "set" or the created record; `current` is the target's data for an update and
- * null for a create. Refused (403):
+ * F1, G1a, G1b: a proposal can never introduce or reshape a claim of acceptance (mirrors
+ * hq._refuse_acceptance_claims, in the same order). `doc` is the update's "set" or the created record;
+ * `current` is the target's data for an update and null for a create. Refused (403, rule acceptance_claim):
  *   - on any record type, a top-level founder_accepted field (also as a dotted path);
+ *   - a build whose current standing is "accepted_reported": every change, unless the resulting
+ *     standing is another valid standing (withdrawing the claim is not asserting one);
  *   - a build whose resulting standing is "accepted_reported", unless the target already had it;
- *   - a module whose resulting lifecycle.founder_accepted is "yes" or "partial", unless the target's
- *     current entry is identical (state, basis, note, citations).
+ *   - a module whose resulting lifecycle.founder_accepted is anything but an object whose state is
+ *     exactly no, unknown or not_applicable, unless the whole entry is identical to the current one
+ *     (an added key such as scope is a change).
  * A citation does not make it acceptable: a quotation proves the words are in a source, not that they
  * report an acceptance.
  */
 export function acceptanceClaimProblem(type: RecordType, doc: Json, current: Json | null): HqError | null {
-  const refuse = (field: string, what: string) =>
-    forbidden(`${what}: ${ACCEPTANCE_CLAIM_RULE.charAt(0).toUpperCase()}${ACCEPTANCE_CLAIM_RULE.slice(1)}.`, { field, rule: "acceptance_claim" });
+  const refuse = (field: string, what: string, rule = ACCEPTANCE_CLAIM_RULE) => forbidden(`${what}: ${sentence(rule)}`, { field, rule: "acceptance_claim" });
   const named = Object.keys(doc).find((key) => key === "founder_accepted" || key.endsWith(".founder_accepted"));
   if (named) return refuse(named, `Field "${named}"`);
   const after: Json = current ? { ...current, ...doc } : doc;
+  if (type === "build" && current?.standing === "accepted_reported") {
+    const standing = after.standing;
+    const withdraws = typeof standing === "string" && standing !== "accepted_reported" && (BUILD_STANDINGS as readonly string[]).includes(standing);
+    if (!withdraws) return refuse("standing", `Build ${String(current.id)}`, REPORTED_BUILD_FROZEN_RULE);
+  }
   if (type === "build" && after.standing === "accepted_reported" && current?.standing !== "accepted_reported") {
     return refuse("standing", 'Build standing "accepted_reported"');
   }
   if (type === "module") {
     const entry = isObject(after.lifecycle) ? after.lifecycle.founder_accepted : undefined;
-    if (isObject(entry) && (entry.state === "yes" || entry.state === "partial")) {
+    const negative = isObject(entry) && typeof entry.state === "string" && NOT_ACCEPTED_STATES.includes(entry.state);
+    if (entry !== undefined && !negative) {
       const before = current && isObject(current.lifecycle) ? current.lifecycle.founder_accepted : undefined;
-      if (lifecycleEntryKey(before) === null || lifecycleEntryKey(before) !== lifecycleEntryKey(entry)) {
-        return refuse("lifecycle.founder_accepted", `lifecycle.founder_accepted "${String(entry.state)}"`);
+      if (before === undefined || canonicalJson(before) !== canonicalJson(entry)) {
+        const state = isObject(entry) && typeof entry.state === "string" ? entry.state : "";
+        return refuse("lifecycle.founder_accepted", `lifecycle.founder_accepted "${state}"`);
       }
     }
   }
   return null;
+}
+
+/** G1c: a value outside its field's list (mirrors hq._check_field_enums). 422, naming the field. */
+function fieldEnumRefusal(type: RecordType, doc: Json, current: Json | null): HqError | null {
+  const problem = fieldEnumProblem(type, doc, current);
+  return problem ? invalid(problem.message, { field: problem.field, rule: "allowed_values" }) : null;
 }
 
 /** The standard answer envelope for an inbox tool, at the current head (proposals change no revision). */
@@ -780,7 +866,9 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
     if (type === "evidence" && typeof body.set.type === "string" && HQ_EVIDENCE_TYPES.includes(body.set.type)) {
       await refuse(principal, target, forbidden(`Evidence of type "${body.set.type}" cannot be made by proposal: it is recorded by the founder or by HQ's build.`));
     }
-    const current = ctx.ds.get(type, body.target.id);
+    // Every check of a change is made against the record as stored (G11a): the acceptance rules, the
+    // base version, the merged record that must validate. The database makes the same comparisons.
+    const current = ctx.stored.get(type, body.target.id);
     if (!current) throw notFound(`No ${type} "${body.target.id}" to change.`);
     const currentData = current.data as Json;
     const accepted = acceptanceBlock(type, body.target.id, currentData);
@@ -812,10 +900,12 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
       );
     }
     const merged = { ...currentData, ...body.set };
-    const links = linkProblem(ctx.ds, body.set);
+    const links = linkProblem(ctx.stored, body.set);
     if (links) await refuse(principal, target, links);
     await checkAssertions(principal, type, body.set, merged, target);
-    // After the label and quotation checks, as in the database (hq._refuse_acceptance_claims).
+    // After the label and quotation checks, in the database's order: allowed values, then acceptance claims.
+    const values = fieldEnumRefusal(type, body.set, currentData);
+    if (values) await refuse(principal, target, values);
     const claim = acceptanceClaimProblem(type, body.set, currentData);
     if (claim) await refuse(principal, target, claim);
     const check = safeParseRecord(type, merged);
@@ -865,9 +955,11 @@ export async function submitChangeProposal(principal: Principal, input: unknown)
   if (type === "evidence" && typeof create.record.type === "string" && HQ_EVIDENCE_TYPES.includes(create.record.type)) {
     await refuse(principal, target, forbidden(`Evidence of type "${create.record.type}" cannot be made by proposal: it is recorded by the founder or by HQ's build.`));
   }
-  const links = linkProblem(ctx.ds, create.record);
+  const links = linkProblem(ctx.stored, create.record);
   if (links) await refuse(principal, target, links);
   await checkAssertions(principal, type, create.record, null, target);
+  const values = fieldEnumRefusal(type, create.record, null);
+  if (values) await refuse(principal, target, values);
   const claim = acceptanceClaimProblem(type, create.record, null);
   if (claim) await refuse(principal, target, claim);
   const candidate = withPlaceholders(type, create.record);
@@ -944,8 +1036,9 @@ export async function submitDefectReport(principal: Principal, input: unknown) {
   await requireProposer(principal, "defect.report");
   const body = parseInput(DefectReportInput, input);
   const ctx = await getDataset(principal);
-  assertModulesExist(ctx.ds, body.module_ids);
-  if (body.build_id && !ctx.ds.get("build", body.build_id)) throw invalid(`Unknown build id: ${body.build_id}.`);
+  // Existence checks on the write path, against the records as stored (the view holds the same ids).
+  assertModulesExist(ctx.stored, body.module_ids);
+  if (body.build_id && !ctx.stored.get("build", body.build_id)) throw invalid(`Unknown build id: ${body.build_id}.`);
   const record = {
     title: body.title,
     module_ids: body.module_ids,
@@ -981,8 +1074,9 @@ export async function recordTestEvidence(principal: Principal, input: unknown) {
     await refuse(principal, { type: "evidence" }, forbidden(`Evidence of type "${body.type}" cannot be submitted: it is recorded by the founder or by HQ's build.`));
   }
   const ctx = await getDataset(principal);
-  assertModulesExist(ctx.ds, body.module_ids);
-  if (body.build_id && !ctx.ds.get("build", body.build_id)) throw invalid(`Unknown build id: ${body.build_id}.`);
+  // Existence checks on the write path, against the records as stored (the view holds the same ids).
+  assertModulesExist(ctx.stored, body.module_ids);
+  if (body.build_id && !ctx.stored.get("build", body.build_id)) throw invalid(`Unknown build id: ${body.build_id}.`);
   const record = {
     type: body.type,
     title: body.title,
@@ -1120,18 +1214,72 @@ async function requireFounder(principal: Principal, action: string, objectType: 
   }
 }
 
+/**
+ * G1d: accepting a proposal validates the record as it would then stand, with the schema a pack import
+ * uses (the same check submitChangeProposal makes), so a proposal planted in the inbox with a value the
+ * application would never have submitted cannot be accepted from the screens.
+ */
+function resultingRecordRefusal(id: string, type: string, data: unknown): HqError | null {
+  if (!isRecordType(type)) return null;
+  const check = safeParseRecord(type, data);
+  return check.ok ? null : invalid(`Accepting ${id} would make the record invalid. It stays in the inbox; you can reject it or ask for changes.`, check.issues);
+}
+
+/**
+ * G1d for an update whose target has moved on since it was written. The database would mark it stale;
+ * a proposal that would leave an invalid record is refused instead, and is not marked stale. (Every
+ * other proposal is checked inside the acceptance's own transaction, after the database's rules, so
+ * their more specific refusals still answer first.)
+ */
+async function staleResultRefusal(principal: Principal, id: string): Promise<HqError | null> {
+  let proposal: ProposalView;
+  try {
+    proposal = await getProposal(principal, id);
+  } catch {
+    return null;
+  }
+  const payload = proposal.payload as { op?: unknown; set?: unknown };
+  if (proposal.status !== "submitted" || payload.op !== "update" || !isObject(payload.set)) return null;
+  if (!proposal.target_type || !proposal.target_id || !isRecordType(proposal.target_type)) return null;
+  // The record as it would stand is the stored record merged with the change: that is what the database writes.
+  const current = (await getDataset(principal)).stored.get(proposal.target_type, proposal.target_id);
+  if (!current || current.meta.version === proposal.base_version) return null;
+  return resultingRecordRefusal(id, proposal.target_type, { ...(current.data as Json), ...payload.set });
+}
+
 export async function reviewProposal(principal: Principal, id: string, decision: "accept" | "reject" | "needs_changes", note?: string) {
   await requireFounder(principal, "proposal.review", "proposal", id);
   const claims = claimsFor(principal);
   let result: Record<string, unknown>;
   try {
+    if (decision === "accept") {
+      const stale = await staleResultRefusal(principal, id);
+      if (stale) throw stale;
+    }
     result = await writeAs(claims, async (q) => {
       const row = await q.query<{ r: Record<string, unknown> }>("select hq.review_proposal($1, $2, $3) as r", [id, decision, note ?? null]);
-      return row.rows[0].r;
+      const r = row.rows[0].r;
+      if (decision === "accept" && !r.conflict && typeof r.record_type === "string") {
+        // G1d: the record exactly as the database wrote it. Throwing here rolls the acceptance back.
+        const written = await q.query<{ data: unknown }>("select data from hq.record_versions where record_type = $1 and record_id = $2 and version = $3", [
+          r.record_type,
+          r.record_id,
+          r.version,
+        ]);
+        const refusal = resultingRecordRefusal(id, r.record_type, written.rows[0]?.data);
+        if (refusal) throw refusal;
+      }
+      return r;
     });
   } catch (error) {
-    if (error instanceof HqError && error.status === 403) {
-      await audit(claims, { action: "proposal.review", objectType: "proposal", objectId: id, outcome: "denied", detail: { message: error.message } });
+    if (error instanceof HqError && (error.status === 403 || error.status === 409 || error.status === 422)) {
+      await audit(claims, {
+        action: "proposal.review",
+        objectType: "proposal",
+        objectId: id,
+        outcome: "denied",
+        detail: { status: error.status, code: error.code, message: error.message, ...(error.status === 422 ? { detail: error.detail } : {}) },
+      });
     }
     throw error;
   }
@@ -1202,7 +1350,7 @@ export async function recordFounderDecision(principal: Principal, input: unknown
   await requireFounder(principal, "decision.record", "decision", null);
   const body = parseInput(DecisionInput, input);
   const claims = claimsFor(principal);
-  const problems = decisionReferenceProblems((await getDataset(principal)).ds, body);
+  const problems = decisionReferenceProblems((await getDataset(principal)).stored, body);
   if (problems.length > 0) {
     throw invalid(`The decision names records that are not in HQ: ${problems.join("; ")}.`, { problems });
   }
@@ -1230,18 +1378,31 @@ export async function recordFounderDecision(principal: Principal, input: unknown
   }
 }
 
-/** What accepting a proposal would do: current vs proposed values, and what else refers to the target. */
-export async function proposalImpact(principal: Principal, proposal: ProposalView) {
-  const ctx = await getDataset(principal);
-  const payload = proposal.payload as { op?: string; set?: Record<string, unknown>; record_type?: string; record?: Record<string, unknown> };
+const isLoose = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * What accepting a proposal would do: current against proposed values, and what else refers to the
+ * target. One function for the review screen and the tests (G11b); pass the page's loaded dataset to
+ * save reading it again.
+ *
+ * Two forms of the dataset, deliberately: what the target refers to and what refers to it (affected,
+ * depends_on, sources, the target's title) is worked out on the conformed view, because it follows
+ * references through every record and one stored record of the wrong shape made it throw; the "before"
+ * values and the target's founder acceptance are the record as stored, because that is what the
+ * change replaces and what the acceptance rules compare. The page shows a stored value of any kind as JSON.
+ */
+export async function proposalImpact(principal: Principal, proposal: ProposalView, loaded?: DatasetContext) {
+  const ctx = loaded ?? (await getDataset(principal));
+  const payload = (isLoose(proposal.payload) ? proposal.payload : {}) as { op?: unknown; set?: unknown; record_type?: unknown; record?: unknown };
   if (payload.op === "update" && proposal.target_type && proposal.target_id && isRecordType(proposal.target_type)) {
-    const current = ctx.ds.get(proposal.target_type, proposal.target_id);
+    const current = ctx.stored.get(proposal.target_type, proposal.target_id);
     // While a proposal is open, "before" is the record as it stands now. Once it is closed, "before" is the
     // version the proposal was written against — otherwise an accepted proposal would show its own result as "before".
     const closed = proposal.status !== "submitted";
     const base = closed && proposal.base_version ? await recordVersion(principal, proposal.target_type, proposal.target_id, proposal.base_version) : null;
-    const data = ((base as Record<string, unknown> | null) ?? current?.data ?? {}) as Record<string, unknown>;
-    const changes = Object.entries(payload.set ?? {}).map(([field, value]) => ({ field, before: data[field] ?? null, after: value }));
+    const data = ((isLoose(base) ? base : null) ?? current?.data ?? {}) as Record<string, unknown>;
+    const set = isLoose(payload.set) ? payload.set : {};
+    const changes = Object.entries(set).map(([field, value]) => ({ field, before: data[field] ?? null, after: value }));
     const deps = current ? dependencies(ctx.ds, proposal.target_type, proposal.target_id) : null;
     const lin = current ? lineage(ctx.ds, proposal.target_type, proposal.target_id) : null;
     return {
@@ -1257,11 +1418,11 @@ export async function proposalImpact(principal: Principal, proposal: ProposalVie
       target_acceptance: targetAcceptance(current?.data),
     };
   }
-  const record = (payload.record ?? {}) as Record<string, unknown>;
-  const moduleIds = Array.isArray(record.module_ids) ? (record.module_ids as string[]) : [];
+  const record = isLoose(payload.record) ? payload.record : {};
+  const moduleIds = Array.isArray(record.module_ids) ? record.module_ids.filter((id): id is string => typeof id === "string") : [];
   return {
     op: "create" as const,
-    record_type: payload.record_type ?? "unknown",
+    record_type: typeof payload.record_type === "string" ? payload.record_type : "unknown",
     record,
     affected: moduleIds.map((id) => describeRef(ctx.ds, id)),
     stale: false,

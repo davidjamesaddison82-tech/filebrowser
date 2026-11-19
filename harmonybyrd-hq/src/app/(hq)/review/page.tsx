@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { Card, Chip, Empty, IdTag, Notice, PageHead, Pager } from "@/components/ui";
-import type { Dataset } from "@/lib/domain/dataset";
+
+import type { DatasetView } from "@/lib/domain/conform";
 import { REVIEW_KIND_LABEL, type ReviewKind, reviewItems } from "@/lib/domain/derive";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
 import { chainProblems, headSeal } from "@/lib/server/store";
@@ -11,7 +12,7 @@ import { recordHref, withRev } from "@/lib/ui/links";
 export const metadata: Metadata = { title: "Review items" };
 
 /** The modules a record belongs to (a module belongs to itself). */
-function modulesOf(ds: Dataset, id: string): string[] {
+function modulesOf(ds: DatasetView, id: string): string[] {
   const e = ds.byId(id);
   if (!e) return [];
   if (e.meta.type === "module") return [id];
@@ -86,7 +87,8 @@ export default async function ReviewPage({ searchParams }: { searchParams: Searc
       )}
       {ctx.warnings.length ? (
         <Notice tone="warn">
-          {plural(ctx.warnings.length, "stored record")} did not pass validation and are shown as stored:{" "}
+          {plural(ctx.warnings.length, "stored record")} did not pass validation. Each is shown with every value of the wrong kind marked “Not a valid
+          value”, and its page shows it as stored:{" "}
           {ctx.warnings
             .slice(0, 6)
             .map((w) => w.id)

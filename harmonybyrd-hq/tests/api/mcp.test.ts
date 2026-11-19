@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { freshWorld, type TestWorld } from "../helpers/db";
+import { admin, freshWorld, type TestWorld } from "../helpers/db";
 import { TEST_BASE_URL } from "../helpers/env";
 import { api, sessionCookie } from "../helpers/http";
 
@@ -262,5 +262,79 @@ describe("MCP — protocol details (raw HTTP)", () => {
     });
     expect(cross.status).toBe(403);
     expect((await fetch(`${TEST_BASE_URL}/api/mcp`, { headers: { authorization: `Bearer ${w.tokens.claude}` } })).status).toBe(405);
+  });
+});
+
+describe("MCP — every answer carries the request id (G9, round 3)", () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const mcp = (init: RequestInit) => fetch(`${TEST_BASE_URL}/api/mcp`, init);
+  const listBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+  /** The audit rows written with a request id, read as the owner. */
+  async function rowsFor(requestId: string) {
+    const client = await admin();
+    try {
+      return (await client.query<{ action: string; outcome: string; detail: Record<string, unknown> | null }>("select action, outcome, detail from hq.audit_log where request_id = $1", [requestId])).rows;
+    } finally {
+      await client.end();
+    }
+  }
+
+  it("the 401 answer (no credential, or a bad one) carries the id of its audit row", async () => {
+    for (const authorization of [undefined, "Bearer hbq_deadbeef_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "Basic x"]) {
+      const res = await mcp({ method: "POST", headers: { "content-type": "application/json", "x-request-id": "client-own-id", ...(authorization ? { authorization } : {}) }, body: listBody });
+      expect(res.status).toBe(401);
+      const id = res.headers.get("x-request-id");
+      expect(id).toMatch(UUID);
+      expect(await rowsFor(id!)).toEqual([{ action: "mcp.connect", outcome: "denied", detail: { reason: "missing or invalid credential" } }]);
+    }
+  });
+
+  it("the parse-error answer, the unsupported-version answer and the empty-batch answer carry an id", async () => {
+    const headers = { "content-type": "application/json", authorization: `Bearer ${w.tokens.claude}` };
+    const parse = await mcp({ method: "POST", headers, body: "{bad" });
+    expect(parse.status).toBe(400);
+    expect((await parse.json()).error.code).toBe(-32700);
+    expect(parse.headers.get("x-request-id")).toMatch(UUID);
+    const version = await mcp({ method: "POST", headers: { ...headers, "mcp-protocol-version": "1999-01-01" }, body: listBody });
+    expect(version.status).toBe(400);
+    expect(version.headers.get("x-request-id")).toMatch(UUID);
+    const empty = await mcp({ method: "POST", headers, body: "[]" });
+    expect(empty.status).toBe(400);
+    expect(empty.headers.get("x-request-id")).toMatch(UUID);
+  });
+
+  it("the cross-origin refusal carries the id of its audit row", async () => {
+    const res = await mcp({
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://evil.example", cookie: await sessionCookie(w.founder.id) },
+      body: listBody,
+    });
+    expect(res.status).toBe(403);
+    const id = res.headers.get("x-request-id");
+    expect(id).toMatch(UUID);
+    expect(await rowsFor(id!)).toEqual([{ action: "mcp.connect", outcome: "denied", detail: { reason: "cross_origin" } }]);
+  });
+
+  it("the 405 answers to GET and DELETE carry an id, and every one is new", async () => {
+    const ids = new Set<string>();
+    for (const method of ["GET", "DELETE", "GET"]) {
+      const res = await mcp({ method, headers: { authorization: `Bearer ${w.tokens.claude}` } });
+      expect(res.status).toBe(405);
+      const id = res.headers.get("x-request-id");
+      expect(id).toMatch(UUID);
+      ids.add(id!);
+    }
+    expect(ids.size).toBe(3);
+  });
+
+  it("an unknown tool or method is echoed back only in part", async () => {
+    const headers = { "content-type": "application/json", authorization: `Bearer ${w.tokens.claude}` };
+    const long = "x".repeat(5000);
+    const tool = await (await mcp({ method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: long } }) })).json();
+    expect(tool.error.code).toBe(-32602);
+    expect(tool.error.message.length).toBeLessThan(200);
+    const method = await (await mcp({ method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: long }) })).json();
+    expect(method.error.code).toBe(-32601);
+    expect(method.error.message.length).toBeLessThan(200);
   });
 });

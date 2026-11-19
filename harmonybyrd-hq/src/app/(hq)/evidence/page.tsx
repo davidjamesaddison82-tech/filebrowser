@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { BuildStandingChip, Card, Chip, Empty, IdTag, InboxOriginChip, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
-import type { Dataset } from "@/lib/domain/dataset";
+import { BuildStandingChip, Card, Chip, Empty, IdTag, InboxOriginChip, KnownLink, ListedText, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+
+import type { DatasetView } from "@/lib/domain/conform";
 import { resolvedByHqDecisions } from "@/lib/domain/derive";
 import { type Page, loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
 import { humanise, isoDate, plural, shortHash } from "@/lib/ui/format";
@@ -27,7 +28,7 @@ function clip(text: unknown, n: number): string {
   return text.length > n ? `${text.slice(0, n)}…` : text;
 }
 
-function moduleNames(ds: Dataset, ids: string[]): string {
+function moduleNames(ds: DatasetView, ids: string[]): string {
   return ids.length ? ids.map((m) => ds.moduleName(m)).join(", ") : "—";
 }
 
@@ -234,7 +235,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                         </td>
                         <td className="nowrap">{isoDate(c.data.date)}</td>
                         <td>
-                          <StatusChip value={c.data.status} />
+                          <StatusChip value={c.data.status} field="commission.status" />
                         </td>
                         <td className="small">{moduleNames(ds, c.data.module_ids)}</td>
                         <td className="num">{c.data.output_source_ids.length}</td>
@@ -333,9 +334,11 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           <Link href={withRev(recordHref("evidence", e.meta.id), rev)}>{e.data.title}</Link> <IdTag id={e.meta.id} /> <InboxOriginChip envelope={e} />
                           <div className="small muted">{clip(e.data.result?.text, 180)}</div>
                         </td>
-                        <td className="small">{humanise(e.data.type)}</td>
+                        <td className="small">
+                          <ListedText field="evidence.type" value={e.data.type} />
+                        </td>
                         <td>
-                          <StatusChip value={e.data.verification} />
+                          <StatusChip value={e.data.verification} field="evidence.verification" />
                         </td>
                         <td className="small">{moduleNames(ds, e.data.module_ids)}</td>
                         <td className="nowrap">{isoDate(e.data.date)}</td>
@@ -382,12 +385,14 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           </div>
                         </td>
                         <td>
-                          <StatusChip value={d.data.status} />
+                          <StatusChip value={d.data.status} field="defect.status" />
                         </td>
-                        <td className="small">{humanise(d.data.severity)}</td>
+                        <td className="small">
+                          <ListedText field="defect.severity" value={d.data.severity} />
+                        </td>
                         <td className="small">{moduleNames(ds, d.data.module_ids)}</td>
                         <td className="small">
-                          {d.data.build_id ? <Link href={withRev(recordHref("build", d.data.build_id), rev)}>{d.data.build_id}</Link> : "—"}
+                          {d.data.build_id ? <KnownLink ds={ds} type="build" id={d.data.build_id} rev={rev} /> : "—"}
                         </td>
                       </tr>
                     ))}
@@ -430,7 +435,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                           </div>
                         </td>
                         <td>
-                          <Chip tone={resolved.has(o.meta.id) ? "ok" : "warn"}>{resolved.has(o.meta.id) ? "Resolved in HQ" : humanise(o.data.kind)}</Chip>
+                          <Chip tone={resolved.has(o.meta.id) ? "ok" : "warn"}>{resolved.has(o.meta.id) ? "Resolved in HQ" : <ListedText field="open_item.kind" value={o.data.kind} />}</Chip>
                         </td>
                         <td className="small">{moduleNames(ds, o.data.module_ids)}</td>
                       </tr>
@@ -474,7 +479,7 @@ export default async function EvidencePage({ searchParams }: { searchParams: Sea
                             {d.data.code ? <div className="mono xsmall muted">{d.data.code}</div> : null}
                           </td>
                           <td>
-                            <StatusChip value={d.data.status} />
+                            <StatusChip value={d.data.status} field="decision.status" />
                           </td>
                           <td>
                             <Chip tone={d.data.recorded_in === "hq" ? "ok" : "outline"}>{d.data.recorded_in === "hq" ? "In HQ" : "In a source"}</Chip>

@@ -12,9 +12,12 @@ const BASE = "http://hq.invalid";
 // Control characters, whitespace (including the Unicode spaces a URL parser may trim) and backslash.
 const REWRITTEN = /[\u0000-\u0020\u007f-\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff\\]/;
 
+/** Longer than any path in HQ; a longer value would only make an oversized Location header. */
+export const MAX_NEXT_LENGTH = 2048;
+
 export function safeNext(value: unknown): string {
   const raw = typeof value === "string" ? value : "";
-  if (!raw.startsWith("/") || raw.startsWith("//") || REWRITTEN.test(raw)) return "/";
+  if (raw.length > MAX_NEXT_LENGTH || !raw.startsWith("/") || raw.startsWith("//") || REWRITTEN.test(raw)) return "/";
   let url: URL;
   try {
     url = new URL(raw, BASE);

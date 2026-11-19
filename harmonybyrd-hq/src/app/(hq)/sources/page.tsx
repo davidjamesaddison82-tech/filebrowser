@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, Fold, IdTag, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
+import { Card, Empty, Fold, IdTag, ListedChip, ListedText, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
 import type { Dataset } from "@/lib/domain/dataset";
 import { incomingRefs } from "@/lib/domain/derive";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -135,7 +135,7 @@ export default async function SourcesPage({ searchParams }: { searchParams: Sear
                 items={gateItems.map((o) => (
                   <li key={o.meta.id}>
                     <Link href={withRev(recordHref("open_item", o.meta.id), rev)}>{o.data.title}</Link> <IdTag id={o.meta.id} />{" "}
-                    <Chip tone="warn">{humanise(o.data.kind)}</Chip>
+                    <ListedChip field="open_item.kind" value={o.data.kind} tone="warn" />
                   </li>
                 ))}
               />
@@ -253,13 +253,17 @@ export default async function SourcesPage({ searchParams }: { searchParams: Sear
                       <tr key={s.meta.id}>
                         <td className="title-cell" style={{ minWidth: 280 }}>
                           <Link href={withRev(recordHref("source", s.meta.id), rev)}>{s.data.title}</Link> <IdTag id={s.meta.id} />
-                          <div className="muted xsmall">{humanise(s.data.kind)}</div>
+                          <div className="muted xsmall">
+                            <ListedText field="source.kind" value={s.data.kind} />
+                          </div>
                         </td>
                         <td className="nowrap">{isoDate(s.data.doc_date ?? s.data.updated)}</td>
                         <td>
-                          <StatusChip value={s.data.access} />
+                          <StatusChip value={s.data.access} field="source.access" />
                         </td>
-                        <td className="small">{humanise(s.data.authority)}</td>
+                        <td className="small">
+                          <ListedText field="source.authority" value={s.data.authority} />
+                        </td>
                         <td className="mono xsmall">{s.data.version ?? "—"}</td>
                         <td className="mono xsmall" title={s.data.sha256 ?? undefined}>
                           {shortHash(s.data.sha256, 14)}
@@ -312,9 +316,11 @@ export default async function SourcesPage({ searchParams }: { searchParams: Sear
                           </td>
                           <td className="small">{l.importance ? humanise(l.importance) : <span className="muted">Not stated</span>}</td>
                           <td>
-                            <StatusChip value={s.data.access} />
+                            <StatusChip value={s.data.access} field="source.access" />
                           </td>
-                          <td className="small">{humanise(s.data.authority)}</td>
+                          <td className="small">
+                          <ListedText field="source.authority" value={s.data.authority} />
+                        </td>
                           <td className="mono xsmall" style={{ maxWidth: 260 }} title={l.identifiers?.join(" · ")}>
                             {l.identifiers?.length ? <span className="clamp-3 break">{l.identifiers.join(" · ")}</span> : <span className="muted">—</span>}
                           </td>

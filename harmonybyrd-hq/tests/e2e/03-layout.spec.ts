@@ -8,10 +8,12 @@ import { DETAIL_SCREENS, expect, SCREENS, signIn, test } from "./support";
  *   - the page does not scroll sideways (scroll width against the layout viewport, and against the
  *     configured window width: a phone browser widens its viewport to fit overflowing content, F10);
  *   - the heading is on screen and nothing is drawn on top of it;
- *   - nothing is drawn over the content, at the top of the page and scrolled to its end: no fixed,
- *     sticky or absolutely positioned element covers any text (whatever its size) or a large part of
- *     the content, and a grid of points over <main> shows <main> everywhere (see layout-measure.ts,
- *     whose detector is itself tested in 03b-layout-detector.spec.ts);
+ *   - nothing is drawn over the content, at the top of the page, part-way down it (every 0.8 × the
+ *     window height, at most ten positions) and scrolled to its end: no fixed, sticky or absolutely
+ *     positioned element covers any text (whatever its size) or a large part of the content, no
+ *     shifted block or pseudo-element is drawn over text, and a grid of points over <main> shows
+ *     <main> everywhere (see layout-measure.ts, whose detector is itself tested in
+ *     03b-layout-detector.spec.ts);
  *   - the side navigation and the content do not overlap.
  */
 const LAPTOPS = [
@@ -39,10 +41,9 @@ for (const size of LAPTOPS) {
         expect(m.devOverlay, `${path}: no development overlay`).toBe(false);
         expect(m.navRight, `${path}: navigation does not overlap the content`).toBeLessThanOrEqual(m.mainLeft + 1);
 
-        // Nothing covers the content, at the top and scrolled to the end of the page.
-        const { top, end } = await coveringsTopAndEnd(page);
-        expect(top.coverings, `${path}: nothing covers the content`).toEqual([]);
-        expect(end.coverings, `${path}: nothing covers the end of the page`).toEqual([]);
+        // Nothing covers the content, at the top, part-way down and scrolled to the end of the page.
+        const { coverings } = await coveringsTopAndEnd(page);
+        expect(coverings, `${path}: nothing covers the content (each line says where it was seen)`).toEqual([]);
       }
     });
   });
@@ -61,9 +62,8 @@ test.describe("phone 390x844", () => {
       // the configured screen width (F10).
       expect(m.scrollWidth, `${path}: page width against the ${PHONE.width} px screen`).toBeLessThanOrEqual(PHONE.width + 1);
       expect(m.headingUncovered, `${path}: nothing is drawn over the heading`).toBe(true);
-      const { top, end } = await coveringsTopAndEnd(page);
-      expect(top.coverings, `${path}: nothing covers the content`).toEqual([]);
-      expect(end.coverings, `${path}: nothing covers the end of the page`).toEqual([]);
+      const { coverings } = await coveringsTopAndEnd(page);
+      expect(coverings, `${path}: nothing covers the content (each line says where it was seen)`).toEqual([]);
     }
   });
 

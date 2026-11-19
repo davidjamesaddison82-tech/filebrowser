@@ -1,8 +1,10 @@
 import Link from "@/components/pin-link";
-import type { Dataset } from "@/lib/domain/dataset";
+
+import type { DatasetView } from "@/lib/domain/conform";
 import type { LifecycleRow } from "@/lib/domain/derive";
 import { LIFECYCLE_DIMENSIONS, LIFECYCLE_LABEL, type ModuleRecord } from "@/lib/domain/schemas";
 import { isObject, lifecycleReports, type SafeLifecycleReport } from "@/lib/ui/guards";
+import { NOT_VALID } from "@/lib/ui/format";
 import { recordHref } from "@/lib/ui/links";
 import { Citations, EpistemicChip } from "./ui";
 
@@ -14,10 +16,18 @@ const GLYPH: Record<string, { glyph: string; label: string }> = {
   not_applicable: { glyph: "–", label: "Not applicable" },
 };
 
-export function LifecycleDot({ state, title }: { state: string; title?: string }) {
-  const g = GLYPH[state] ?? GLYPH.unknown;
+/** A stored state outside the list (a number, a list, a word the list does not hold): said as such, never read as "unknown" (G1f). */
+const INVALID = { glyph: "!", label: NOT_VALID };
+
+/** The glyph and words for a state, or "Not a valid value" for anything that is not one of the listed states. */
+function glyphOf(state: unknown): { glyph: string; label: string; valid: boolean } {
+  return typeof state === "string" && Object.hasOwn(GLYPH, state) ? { ...GLYPH[state], valid: true } : { ...INVALID, valid: false };
+}
+
+export function LifecycleDot({ state, title }: { state: unknown; title?: string }) {
+  const g = glyphOf(state);
   return (
-    <span className={`lc-dot lc-${state}`} title={title ?? g.label} role="img" aria-label={title ?? g.label}>
+    <span className={`lc-dot lc-${g.valid ? String(state) : "invalid"}`} title={title ?? g.label} role="img" aria-label={title ?? g.label}>
       {g.glyph}
     </span>
   );
@@ -61,7 +71,7 @@ export function LifecycleMatrix({ rows }: { rows: LifecycleRow[] }) {
                 <td key={cell.dimension}>
                   <LifecycleDot
                     state={cell.state}
-                    title={`${LIFECYCLE_LABEL[cell.dimension].label}: ${GLYPH[cell.state]?.label ?? cell.state}${cell.note ? ` — ${cell.note}` : ""}`}
+                    title={`${LIFECYCLE_LABEL[cell.dimension].label}: ${glyphOf(cell.state).label}${typeof cell.note === "string" && cell.note ? ` — ${cell.note}` : ""}`}
                   />
                 </td>
               ))}
@@ -80,16 +90,20 @@ function otherReports(module: ModuleRecord): Partial<Record<string, SafeLifecycl
   return Object.fromEntries(Object.entries(raw).map(([dimension, list]) => [dimension, lifecycleReports(list)]));
 }
 
-/** A dimension's entry, or "unknown" when a stored record lacks it. */
-function entryOf(module: ModuleRecord, dimension: string): { state: string; basis: unknown; note: string; citations: unknown } {
+/**
+ * A dimension's entry: "unknown" when a stored record has no entry for it; when it has one whose state
+ * is not a listed state, that state as stored, which the dot then shows as not valid.
+ */
+function entryOf(module: ModuleRecord, dimension: string): { state: unknown; basis: unknown; note: string; citations: unknown } {
   const lifecycle = (module as Record<string, unknown>).lifecycle;
   const entry = isObject(lifecycle) ? lifecycle[dimension] : undefined;
-  if (!isObject(entry) || typeof entry.state !== "string") return { state: "unknown", basis: "no_evidence", note: "", citations: [] };
+  if (entry === undefined) return { state: "unknown", basis: "no_evidence", note: "", citations: [] };
+  if (!isObject(entry)) return { state: entry, basis: null, note: "", citations: [] };
   return { state: entry.state, basis: entry.basis, note: typeof entry.note === "string" ? entry.note : "", citations: entry.citations };
 }
 
 /** One module's lifecycle, dimension by dimension, with the basis and sources for each. */
-export function LifecycleDetail({ ds, module }: { ds: Dataset; module: ModuleRecord }) {
+export function LifecycleDetail({ ds, module }: { ds: DatasetView; module: ModuleRecord }) {
   const others = otherReports(module);
   return (
     <div>
@@ -104,7 +118,7 @@ export function LifecycleDetail({ ds, module }: { ds: Dataset; module: ModuleRec
             </div>
             <div className="row" style={{ gap: 6 }}>
               <LifecycleDot state={entry.state} />
-              <span className="small">{GLYPH[entry.state]?.label ?? entry.state}</span>
+              <span className="small">{glyphOf(entry.state).label}</span>
             </div>
             <div className="stack-sm" style={{ gap: 4 }}>
               {entry.note ? <div className="small">{entry.note}</div> : null}
@@ -115,7 +129,7 @@ export function LifecycleDetail({ ds, module }: { ds: Dataset; module: ModuleRec
               {alt.map((o, i) => (
                 <div className="lc-other" key={i}>
                   <div className="small">
-                    <strong>Another source reports:</strong> <LifecycleDot state={o.state} /> {GLYPH[o.state]?.label ?? o.state}
+                    <strong>Another source reports:</strong> <LifecycleDot state={o.state} /> {glyphOf(o.state).label}
                     {o.note ? <> — {o.note}</> : null}
                   </div>
                   <div className="row" style={{ gap: 8 }}>

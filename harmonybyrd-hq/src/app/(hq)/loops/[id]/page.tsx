@@ -1,7 +1,7 @@
 import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
-import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, InboxOriginChip, Notice, PageHead, RecordLink } from "@/components/ui";
+import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, EpistemicChip, Fold, IdTag, InboxOriginChip, InvalidRecordNotice, KnownLink, Notice, PageHead, RecordLink } from "@/components/ui";
 import { stageCoverage } from "@/lib/domain/derive";
 import { STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
 import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
@@ -44,9 +44,9 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
             <InboxOriginChip envelope={loop} />
             <EpistemicChip value={l.standing} />
             {l.module_ids.map((m) => (
-              <Link key={m} href={withRev(recordHref("module", m), rev)}>
+              <KnownLink key={m} ds={ds} type="module" id={m} rev={rev}>
                 <Chip tone="outline">{ds.moduleName(m)}</Chip>
-              </Link>
+              </KnownLink>
             ))}
           </>
         }
@@ -64,6 +64,7 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
         }
       />
       <AcceptanceLock data={l} />
+      {ctx.warnings.some((w) => w.type === "loop" && w.id === loop.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/loop/${encodeURIComponent(loop.meta.id)}`, rev)} /> : null}
       {l.standing !== "reported" ? (
         <Notice tone="warn">
           This loop is recorded as a {l.standing === "design_intention" ? "design" : "recommendation"}. Nothing here says it has been built or tried
@@ -163,9 +164,9 @@ export default async function LoopPage({ params, searchParams }: { params: Promi
                   .sort(([a], [b]) => ds.moduleName(a).localeCompare(ds.moduleName(b)))
                   .map(([moduleId, stages]) => (
                     <li key={moduleId}>
-                      <Link className="li-title" href={withRev(`/modules/${moduleId}`, rev)}>
+                      <KnownLink className="li-title" ds={ds} type="module" id={moduleId} rev={rev}>
                         {ds.moduleName(moduleId)}
-                      </Link>
+                      </KnownLink>
                       <div className="li-note">Also covers: {[...new Set(stages)].join(", ")}</div>
                     </li>
                   ))}

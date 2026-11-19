@@ -1,7 +1,8 @@
 /**
  * Derived figures must say only what the records support (design D12). Each case builds an
  * adversarial dataset from the fixture, without parsing it, so it also models records stored
- * before a schema rule existed.
+ * before a schema rule existed, and hands it to the derivations as the store does: conformed
+ * (src/lib/domain/conform.ts), so a value of the wrong kind reaches them as "Not a valid value".
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -9,6 +10,7 @@ import {
   developmentHealth,
   ecosystemOverview,
   filterRequirements,
+  hasAcceptanceInstrument,
   isOutstanding,
   missingWork,
   moduleBrief,
@@ -182,9 +184,50 @@ describe("only a real acceptance instrument silences 'acceptance claimed without
     expect(keys(dataset((_, add) => add("decision", notIssued)))).toContain("acc:BLD-FX-02");
   });
 
-  it("control: an issued HQ decision with a set_acceptance that accepts this build is an instrument (F2)", () => {
-    const ds = dataset((_, add) => add("decision", hqDecision({ type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state: "accepted" })));
-    expect(keys(ds)).not.toContain("acc:BLD-FX-02");
+  const accepting = (id: string, state = "accepted") => ({ ...hqDecision({ type: "set_acceptance", record_type: "build", record_id: "BLD-FX-02", state }), id });
+  const hqAcceptance = (state: string, decisionId: string) => ({ state, decision_id: decisionId, decided_at: "2031-05-01T10:00:00Z", decided_by: "founder", scope_note: null });
+
+  it("control: an issued HQ decision that accepts this build is an instrument while the build's HQ acceptance names it (F2, G1e)", () => {
+    const ds = dataset((find, add) => {
+      add("decision", accepting("FD-HQ-0001"));
+      find("BLD-FX-02").hq_acceptance = hqAcceptance("accepted", "FD-HQ-0001");
+    });
+    expect(hasAcceptanceInstrument(ds, ds.builds.find((b) => b.meta.id === "BLD-FX-02")!)).toBe(true);
+  });
+
+  it("an accepting decision the build's HQ acceptance does not name is no instrument (G1e)", () => {
+    const ds = dataset((_, add) => add("decision", accepting("FD-HQ-0001")));
+    expect(hasAcceptanceInstrument(ds, ds.builds.find((b) => b.meta.id === "BLD-FX-02")!)).toBe(false);
+    expect(keys(ds)).toContain("acc:BLD-FX-02");
+  });
+
+  it("an acceptance the founder later cleared is no instrument: the review item comes back (G1e)", () => {
+    const ds = dataset((find, add) => {
+      add("decision", accepting("FD-HQ-0001"));
+      add("decision", accepting("FD-HQ-0002", "none"));
+      find("BLD-FX-02").hq_acceptance = hqAcceptance("none", "FD-HQ-0002");
+    });
+    expect(hasAcceptanceInstrument(ds, ds.builds.find((b) => b.meta.id === "BLD-FX-02")!)).toBe(false);
+    expect(keys(ds)).toContain("acc:BLD-FX-02");
+  });
+
+  it("accepted, then rejected, then cleared: no instrument, the review item comes back (G1e)", () => {
+    const ds = dataset((find, add) => {
+      add("decision", accepting("FD-HQ-0001"));
+      add("decision", accepting("FD-HQ-0002", "rejected"));
+      add("decision", accepting("FD-HQ-0003", "none"));
+      find("BLD-FX-02").hq_acceptance = hqAcceptance("none", "FD-HQ-0003");
+    });
+    expect(hasAcceptanceInstrument(ds, ds.builds.find((b) => b.meta.id === "BLD-FX-02")!)).toBe(false);
+    expect(keys(ds)).toContain("acc:BLD-FX-02");
+  });
+
+  it("an HQ acceptance that names a decision which does not accept the build is no instrument (G1e)", () => {
+    const ds = dataset((find, add) => {
+      add("decision", accepting("FD-HQ-0001", "rejected"));
+      find("BLD-FX-02").hq_acceptance = hqAcceptance("accepted", "FD-HQ-0001");
+    });
+    expect(hasAcceptanceInstrument(ds, ds.builds.find((b) => b.meta.id === "BLD-FX-02")!)).toBe(false);
   });
 
   it("the review item says what HQ lacks (F2)", () => {
@@ -192,6 +235,21 @@ describe("only a real acceptance instrument silences 'acceptance claimed without
     expect(item.detail).toBe(
       "A source states this build was accepted, but HQ holds no founder-acceptance evidence for it and no founder decision recorded in HQ accepts it.",
     );
+  });
+});
+
+describe("a stored value of the wrong kind never breaks a derived figure (G1f, accept lane)", () => {
+  it("a build whose standing is a list, an object or a number gets an acceptance status that says the value is not valid", () => {
+    for (const standing of [["accepted_reported"], { value: "accepted_reported" }, 7]) {
+      const ds = dataset((find) => {
+        find("BLD-FX-01").standing = standing;
+      });
+      const status = acceptanceStatus(ds, "build", "BLD-FX-01")!;
+      expect(status.headline, JSON.stringify(standing)).toBe("build_development");
+      expect(status.label).toBe("Build standing: Not a valid value");
+      expect(() => reviewItems(ds)).not.toThrow();
+      expect(() => developmentHealth(ds)).not.toThrow();
+    }
   });
 });
 

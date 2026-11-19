@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, Notice, PageHead, Pager } from "@/components/ui";
+import { Card, Chip, Empty, EpistemicChip, Fold, IdTag, KnownLink, Notice, PageHead, Pager } from "@/components/ui";
 import { loopStageMatrix, stageCoverage } from "@/lib/domain/derive";
 import { type Epistemic, EPISTEMIC_LABEL, STAGE_LABEL, STAGES } from "@/lib/domain/schemas";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -63,7 +63,9 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
                   coverage[stage].map((entry, i) => (
                     <span key={entry.module_id}>
                       {i > 0 ? <span className="faint"> · </span> : null}
-                      <Link href={withRev(`/modules/${entry.module_id}`, rev)}>{ds.moduleName(entry.module_id)}</Link>
+                      <KnownLink ds={ds} type="module" id={entry.module_id} rev={rev}>
+                        {ds.moduleName(entry.module_id)}
+                      </KnownLink>
                     </span>
                   ))
                 )}
@@ -106,9 +108,9 @@ export default async function LoopsPage({ searchParams }: { searchParams: Search
                         {group.map((step, j) => (
                           <div key={j}>
                             {j > 0 ? <div className="path-or">or</div> : null}
-                            <Link href={withRev(`/modules/${step.module_id}`, rev)}>
+                            <KnownLink ds={ds} type="module" id={step.module_id} rev={rev}>
                               <strong>{ds.moduleName(step.module_id)}</strong>
-                            </Link>
+                            </KnownLink>
                             <div className="muted" style={{ marginTop: 3 }}>
                               {step.role}
                             </div>

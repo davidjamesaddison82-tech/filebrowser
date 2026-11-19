@@ -43,6 +43,26 @@ Every tool answers with this envelope, the three inbox tools and `list_my_propos
   and, for clients written before the envelope, also at the top level (`proposal`, `status`, `note`;
   `proposals`).
 - `search_records` returns `total` (every match), `returned`, `truncated` and at most 60 `hits`.
+  Each hit says whether its record passes validation (`valid`).
+
+### A record that does not pass validation
+
+A stored record can fail its schema: an owner-level import that skipped the pack validator can store
+a list where a status should be, or a number as a lifecycle state (a proposal cannot: the database
+checks the values that drive labels, and accepting a proposal re-validates the record). Every tool
+computes on such a record **conformed to its schema** (docs/ARCHITECTURE.md): a value of the wrong
+kind reads `"Not a valid value"`, a reference of the wrong kind is `null`, an element of the wrong
+kind is left out of its list. So no tool fails on it, and none of it reads as accepted, tested,
+checked or linked because of a value that is not valid. The answer says so:
+
+- Whenever `data` names such a record anywhere — as a record, a reference or a hit — the envelope
+  carries `integrity`: a plain `notice`, and in `records` each such record's `type`, `id`,
+  `valid: false`, its validation `problems`, and the record exactly as `stored`. An answer that names
+  none has no `integrity`.
+- `get_record` also says it in `data`: `valid` (`true` or `false`); for a record that is not valid,
+  `validation_problems` and `stored`. `record` is the conformed record.
+- `get_ecosystem_overview` and `get_review_items` still list every such record in
+  `integrity_warnings`, with its problems.
 
 ## Errors
 
@@ -54,11 +74,11 @@ Every tool answers with this envelope, the three inbox tools and `list_my_propos
 | --- | --- | --- |
 | 400 | `invalid_json` | The body is not a JSON object |
 | 401 | `unauthenticated` | No valid identity |
-| 403 | `forbidden` | Identity is valid but may not do this. Includes a proposal that sets a protected or build-only field, uses one of HQ's own labels, or tries to change or create a decision record (`detail.protected_fields` lists the fields); a proposal that asserts an acceptance — a build standing `accepted_reported`, a module `lifecycle.founder_accepted` of `yes` or `partial`, or a `founder_accepted` field (`detail.rule` is `acceptance_claim`, `detail.field` names the field); and a cross-site request |
+| 403 | `forbidden` | Identity is valid but may not do this. Includes a proposal that sets a protected or build-only field, uses one of HQ's own labels, or tries to change or create a decision record (`detail.protected_fields` lists the fields); a proposal that asserts or reshapes an acceptance — a build standing `accepted_reported`, any change to a build reported as accepted that does not withdraw that report, a positive module `lifecycle.founder_accepted` that is not identical to the current one, or a `founder_accepted` field (`detail.rule` is `acceptance_claim`, `detail.field` names the field); and a cross-site request |
 | 404 | `not_found` | No such record, tool, revision or proposal — or a proposal that is not yours |
 | 409 | `conflict` | The proposal is stale (its target changed after it was written); its target carries a founder acceptance or rejection recorded in HQ (`detail.acceptance`); or the proposal is already closed |
 | 413 | `payload_too_large` | The body is larger than `HQ_MAX_BODY_BYTES` (default 1,048,576 bytes; `detail.max_bytes`) |
-| 422 | `invalid_request` | The input is invalid. Includes an argument the tool does not take, a quotation that cannot be verified (`detail.unverified_quotations`: `index`, `source_id`, `reason` — `no_text`, `too_short` or `not_found` — and `message`), a linked id that does not exist (`detail.unknown_links`), and a founder decision naming records that do not exist (`detail.problems`) |
+| 422 | `invalid_request` | The input is invalid. Includes an argument the tool does not take, a quotation that cannot be verified (`detail.unverified_quotations`: `index`, `source_id`, `reason` — `no_text`, `too_short` or `not_found` — and `message`), a linked id that does not exist (`detail.unknown_links`), a value outside its field's list (`detail.field`, `detail.rule` `allowed_values`), a founder decision naming records that do not exist (`detail.problems`), and, from `POST /api/v1/proposals/{id}/review` with `accept`, a proposal whose result would not pass its record's schema (`detail` lists the problems; the proposal stays submitted) |
 | 503 | `service_unavailable` | The database is unavailable. HQ does not answer from memory |
 
 The rules behind the 403, 409 and 422 refusals of a proposal are in docs/GOVERNANCE.md.
@@ -66,7 +86,9 @@ The rules behind the 403, 409 and 422 refusals of a proposal are in docs/GOVERNA
 Refusals with 401 and 403, and refused proposals, are written to the audit log.
 
 **Request ids.** HQ generates the id of every request itself (`GET /api/v1/health` has none). It is returned in the `x-request-id`
-header and in an error body's `request_id`, and it is the id the audit log stores. A client may send
+header and in an error body's `request_id`, and it is the id the audit rows written for that call
+store. Every MCP answer carries it, the 401, the cross-origin refusal, a parse error and the 405s
+included. A client may send
 `X-Request-Id` to correlate its own calls: if it is 1–64 characters of letters, digits, `.`, `_` and
 `-`, the REST endpoints echo it in `x-client-request-id` and keep it as `detail.client_request_id`
 in the audit row they write for the call (an allowed call, or a 401 or 403 answer); otherwise it is
@@ -75,6 +97,10 @@ dropped. It never becomes the request id. The MCP endpoint does not read it.
 The two founder routes (`POST /api/v1/proposals/{id}/review` and `POST /api/v1/decisions`) write no
 “allowed” row of their own: a founder act is recorded as allowed only by the database function that
 performs it, and that row carries no request id. A refusal on those routes is logged like any other.
+
+A REST tool call is logged as `tool.<name>` with the real tool's name, or `tool.unknown` when HQ has
+no tool by the name in the address. An unknown tool or method name is echoed in an error message only
+up to 80 characters.
 
 ## REST
 
@@ -141,8 +167,8 @@ the message `<tool> does not take the argument "<name>".` This includes unknown 
 | `get_acceptance_status` | `type`*, `id`* | Proposal / prototype / tested / accepted, kept apart; acceptance reported in a source versus recorded in HQ |
 | `get_source_lineage` | `type`*, `id`* | Sources cited (location, version, checksum, authority), exact quotations, version history with hash chain, what refers to it |
 | `get_development_dependencies` | `type`*, `id`* | What it depends on, what depends on it, what blocks it |
-| `get_record` | `type`*, `id`* | Any record exactly as stored, with its version history |
-| `search_records` | `query`*, `types` | Full-text search across all record types: the true `total`, and at most 60 hits (`truncated` says whether there were more) |
+| `get_record` | `type`*, `id`* | Any record, with its version history and `valid`. A record that does not pass validation is returned conformed, with `validation_problems` and the record exactly as `stored` |
+| `search_records` | `query`*, `types` | Full-text search across all record types: the true `total`, and at most 60 hits (`truncated` says whether there were more), each with `valid` |
 | `list_sources` | — | The source-access inventory, including documents named but not read |
 | `get_review_items` | — | Conflicts, possible duplicates, acceptance without an instrument, unverified claims, dangling references |
 | `get_recent_changes` | `limit` | Dataset revisions: what, when, why, by whom, under which commission. Not pinnable |
@@ -185,6 +211,7 @@ conflicts); issuing or revoking credentials. These exist only in the founder's s
 - Methods: `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`.
 - Protocol versions accepted: `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`.
 - Stateless: no session id, no server-initiated stream. `GET` and `DELETE` return `405`.
+- Every answer carries `x-request-id`. The 401 and the cross-origin refusal are logged with that id.
 - `tools/list` shows a client only the tools its token may call: a read-only token is not shown the three inbox tools.
 - A tool result has `content` (the envelope as JSON text) and `structuredContent` (the envelope as an object).
 - A refusal raised while running a tool the credential may call — invalid arguments, a stale

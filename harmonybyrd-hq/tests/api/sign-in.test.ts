@@ -1,5 +1,6 @@
 import { decodeJwt, SignJWT } from "jose";
-import { beforeAll, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { beforeAll, describe, expect, inject, it } from "vitest";
 import { signSession } from "@/lib/auth/session";
 import { MAX_DELAY_MS } from "@/lib/auth/throttle";
 import { admin, freshWorld, type TestWorld } from "../helpers/db";
@@ -174,4 +175,101 @@ describe("a flood of wrong attempts cannot hold the right passphrase (F5, api-2,
     // The session the founder's browser got is a real one.
     expect((await api<{ role: string }>("/api/v1/whoami", { cookie: cookiePair(withDevice.setCookies.hq_session) })).body.role).toBe("founder");
   }, 90_000);
+});
+
+describe("the name and the passphrase have a maximum length (G7, round 3)", () => {
+  /** The highest audit row id so far, to read only the rows a test writes. */
+  async function lastAuditId(): Promise<number> {
+    const client = await admin();
+    try {
+      return Number((await client.query<{ id: string }>("select coalesce(max(id), 0) as id from hq.audit_log")).rows[0].id);
+    } finally {
+      await client.end();
+    }
+  }
+  async function signInRowsAfter(id: number) {
+    const client = await admin();
+    try {
+      return (
+        await client.query<{ object_id: string | null; outcome: string; detail: Record<string, unknown> | null; size: number }>(
+          "select object_id, outcome, detail, length(coalesce(object_id, '') || coalesce(detail::text, '')) as size from hq.audit_log where action = 'session.sign_in' and id > $1 order by id",
+          [id],
+        )
+      ).rows;
+    } finally {
+      await client.end();
+    }
+  }
+  /** The test server's resident memory in MB, or null when it cannot be read (not Linux, no pid). */
+  function serverRssMb(): number | null {
+    try {
+      const status = readFileSync(`/proc/${inject("serverPid")}/status`, "utf8");
+      return Number(/VmRSS:\s+(\d+)/.exec(status)![1]) / 1024;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Post `count` sign-ins, 8 at a time, with names of `size` characters; the answers' messages. */
+  async function longNames(count: number, size: number, tag: string): Promise<string[]> {
+    let next = 0;
+    const answers: string[] = [];
+    await Promise.all(
+      Array.from({ length: 8 }, async () => {
+        while (next < count) {
+          const i = next++;
+          answers.push((await postSignIn(`${"M".repeat(size)}${tag}${i}`, "anything")).message ?? "none");
+        }
+      }),
+    );
+    return answers;
+  }
+
+  it("500 sign-ins with 900 KB names are refused at once, create no lane, and are audited with the length only", async () => {
+    // Warm the server up first, so that the measurement below is not its first use of the sign-in page.
+    await longNames(50, 900_000, "warm");
+    const from = await lastAuditId();
+    const before = serverRssMb();
+    const answers = await longNames(500, 900_000, "n");
+    const after = serverRssMb();
+    expect(new Set(answers)).toEqual(new Set([WRONG]));
+    const rows = await signInRowsAfter(from);
+    expect(rows).toHaveLength(500);
+    for (const row of rows) {
+      expect(row.outcome).toBe("denied");
+      expect(row.object_id).toBeNull();
+      // No lane: the throttle's rows carry "failures" and "lane"; these carry the reason and the length.
+      expect(row.detail).toEqual({ reason: "name_too_long", name_length: expect.any(Number) });
+      expect(row.detail!.name_length).toBeGreaterThan(900_000);
+      expect(row.size).toBeLessThan(100);
+    }
+    // Kept as lanes, the names alone would be 450 MB (the re-check measured +536 MB for 500 of them
+    // before the fix). The resident size of a Node server also moves with garbage it has not yet
+    // returned (up to about 65 MB in a full api run), so the bound is wide; what it rules out is
+    // keeping the names.
+    if (before !== null && after !== null) expect(after - before).toBeLessThan(200);
+    // The right passphrase still works at once afterwards.
+    expect((await postSignIn("reader", w.passphrases.reader)).status).toBe(303);
+  }, 180_000);
+
+  it("a 2,000-character passphrase is refused without a passphrase check: the name's failure count does not move", async () => {
+    const from = await lastAuditId();
+    const name = "g7-no-such-name";
+    for (let i = 0; i < 10; i += 1) {
+      const reply = await postSignIn(name, `${"p".repeat(2000)}${i}`);
+      expect(reply.message).toBe(WRONG);
+      // No delay either: in a lane, the sixth wrong attempt would wait 200 ms and the tenth 3.2 s.
+      expect(reply.ms).toBeLessThan(1500);
+    }
+    // One ordinary wrong attempt: it is the first failure the lane has seen.
+    expect((await postSignIn(name, "wrong")).message).toBe(WRONG);
+    const rows = await signInRowsAfter(from);
+    expect(rows.slice(0, 10).map((r) => [r.object_id, r.detail])).toEqual(Array.from({ length: 10 }, () => [name, { reason: "passphrase_too_long", passphrase_length: 2001 }]));
+    expect(rows[10]).toMatchObject({ object_id: name, detail: { failures: 1, lane: "anonymous" } });
+    expect(rows).toHaveLength(11);
+  }, 60_000);
+
+  it("a name typed with capitals and spaces round it still signs in", async () => {
+    expect((await postSignIn("  READER  ", w.passphrases.reader)).status).toBe(303);
+  });
 });

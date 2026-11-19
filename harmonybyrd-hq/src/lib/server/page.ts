@@ -2,6 +2,7 @@
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth/current";
 import type { Principal } from "@/lib/auth/principal";
+import type { Dataset } from "@/lib/domain/dataset";
 import { setPagePin } from "@/lib/ui/pin";
 import { readRev } from "@/lib/ui/pin-rules";
 import { HqError } from "./errors";
@@ -22,7 +23,14 @@ export function parseRev(value: string | undefined): number | null {
 
 export interface PageContext {
   principal: Principal;
+  /**
+   * The dataset as every reader reads it: `ctx.ds` is the conformed view, in which a stored record that
+   * fails validation is conformed to its schema field by field (src/lib/domain/conform.ts), so no screen
+   * fails on an odd stored value (G1f).
+   */
   ctx: DatasetContext;
+  /** The dataset exactly as stored, for the screens that show a record as stored. */
+  stored: Dataset;
   /** The pinned revision requested in the URL, if any (always null on a screen that cannot be pinned). */
   rev: number | null;
   params: Record<string, string | string[] | undefined>;
@@ -50,15 +58,15 @@ export async function loadPage(searchParams?: SearchParams, options: LoadOptions
     if (requested === "invalid") notFound();
     rev = requested === "absent" ? null : requested;
   }
-  let ctx: DatasetContext;
+  let loaded: DatasetContext;
   try {
-    ctx = await getDataset(principal, rev);
+    loaded = await getDataset(principal, rev);
   } catch (error) {
     if (error instanceof HqError && error.status === 404) notFound();
     throw error;
   }
-  setPagePin(ctx.pinned ? ctx.ds.revision.rev : null);
-  return { principal, ctx, rev, params };
+  setPagePin(loaded.pinned ? loaded.ds.revision.rev : null);
+  return { principal, ctx: loaded, stored: loaded.stored, rev, params };
 }
 
 /** A dynamic route segment, decoded. Malformed percent-encoding (e.g. %E0%A4%A) is a 404, not a 500. */

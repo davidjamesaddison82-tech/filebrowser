@@ -2,19 +2,20 @@ import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { DecisionForm } from "@/components/gov-forms";
 import { Card, Chip, Empty, Fold, IdTag, Notice, PageHead, Pager, StatusChip } from "@/components/ui";
-import type { Dataset } from "@/lib/domain/dataset";
+
+import type { DatasetView } from "@/lib/domain/conform";
 import { isFounderSession } from "@/lib/auth/principal";
 import { developmentHealth, recordTitle } from "@/lib/domain/derive";
 import { RECORD_TYPE_LABEL } from "@/lib/domain/schemas";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
 import { listProposals } from "@/lib/server/services";
-import { isoDateTime, plural } from "@/lib/ui/format";
+import { humanise, isoDateTime, plural } from "@/lib/ui/format";
 import { recordHref } from "@/lib/ui/links";
 
 export const metadata: Metadata = { title: "Decision centre" };
 
 /** The modules a record belongs to (a module belongs to itself). */
-function modulesOf(ds: Dataset, id: string): string[] {
+function modulesOf(ds: DatasetView, id: string): string[] {
   const e = ds.byId(id);
   if (!e) return [];
   if (e.meta.type === "module") return [id];
@@ -86,7 +87,7 @@ export default async function DecisionsPage({ searchParams }: { searchParams: Se
                   </Chip>
                 </div>
                 <div className="li-note">
-                  {p.kind.replaceAll("_", " ")} · {p.target_id ? `on ${p.target_id} v${p.base_version}` : "new record"} · {isoDateTime(p.submitted_at)}
+                  {humanise(p.kind).toLowerCase()} · {p.target_id ? `on ${p.target_id} v${p.base_version}` : "new record"} · {isoDateTime(p.submitted_at)}
                 </div>
               </li>
             ))}
@@ -201,7 +202,7 @@ export default async function DecisionsPage({ searchParams }: { searchParams: Se
                       <IdTag id={d.meta.id} />
                     </div>
                     <div className="li-note">
-                      {isoDateTime(d.data.decided_at)} · by {d.data.decided_by} <StatusChip value={d.data.status} />
+                      {isoDateTime(d.data.decided_at)} · by {d.data.decided_by} <StatusChip value={d.data.status} field="decision.status" />
                     </div>
                   </li>
                 ))}

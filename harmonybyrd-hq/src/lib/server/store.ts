@@ -7,6 +7,7 @@
  * the cache key must include the role.
  */
 import { claimsFor, type Principal } from "@/lib/auth/principal";
+import { conformDataset, type DatasetView } from "@/lib/domain/conform";
 import { Dataset, type Envelope, type RevisionInfo } from "@/lib/domain/dataset";
 import { type AnyRecord, isRecordType, safeParseRecord } from "@/lib/domain/schemas";
 import { type Queryer, readAs } from "./db";
@@ -23,8 +24,19 @@ export interface IntegrityWarning {
   issues: string[];
 }
 
+/**
+ * One loaded revision, in its two forms (src/lib/domain/conform.ts). Every read and every derivation
+ * uses `ds`, the conformed view, so a stored record of the wrong shape can make no reader fail and can
+ * read as nothing it does not validly hold. The write paths use `stored`: a proposal is compared with,
+ * based on and checked against the record as stored, and an answer that returns a record that fails
+ * validation offers its stored form too. The two are the same object when every record is valid.
+ */
 export interface LoadedDataset {
-  ds: Dataset;
+  /** The conformed view: what every reader computes on. */
+  ds: DatasetView;
+  /** The records exactly as stored (valid ones as parsed, with their defaults). */
+  stored: Dataset;
+  /** Every stored record that fails validation, with its problems. */
   warnings: IntegrityWarning[];
 }
 
@@ -134,7 +146,9 @@ async function loadRevision(q: Queryer, rev: number): Promise<LoadedDataset> {
       data: parsed.ok ? parsed.data : (row.data as AnyRecord),
     });
   }
-  return { ds: new Dataset(revision, envelopes), warnings };
+  const stored = new Dataset(revision, envelopes);
+  // Worked out once per loaded revision; the cache below keeps both forms.
+  return { ds: conformDataset(stored, warnings), stored, warnings };
 }
 
 /**

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import { DefectForm, ProposalForm } from "@/components/gov-forms";
-import { AcceptanceLock, bindingAcceptance, Card, IdTag, Notice, PageHead } from "@/components/ui";
+import { AcceptanceLock, bindingAcceptance, Card, IdTag, isReportedAcceptance, Notice, PageHead, ReportedAcceptanceNotice } from "@/components/ui";
 import { canPropose } from "@/lib/auth/principal";
 import { recordTitle } from "@/lib/domain/derive";
 import { isRecordType, RECORD_SCHEMAS, RECORD_TYPE_LABEL, type RecordType, STRUCTURED_FIELDS } from "@/lib/domain/schemas";
@@ -68,8 +68,14 @@ export default async function NewProposalPage({ searchParams }: { searchParams: 
   const record = ds.get(type, id);
   if (!record) notFound();
   const data = record.data as Record<string, unknown>;
-  const { fields, kinds } = proposableFields(type, data);
+  const proposable = proposableFields(type, data);
   const locked = bindingAcceptance(data) !== null;
+  // A build reported as accepted: the only proposal that can go through withdraws that acceptance, so
+  // the form offers its standing only (G1a). A proposal sent another way with more fields set is
+  // checked by the database the same way.
+  const reported = isReportedAcceptance(type, data);
+  const fields = reported ? proposable.fields.filter((f) => f === "standing") : proposable.fields;
+  const kinds = proposable.kinds;
 
   return (
     <div className="stack">
@@ -90,34 +96,42 @@ export default async function NewProposalPage({ searchParams }: { searchParams: 
       ) : !allowed ? (
         <Notice tone="warn">The reader role cannot submit proposals.</Notice>
       ) : (
-        <div className="split">
-          <Card title="Your proposal">
-            <ProposalForm
-              target={{ type, id, title: recordTitle(type, record.data), version: record.meta.version, data }}
-              fields={fields}
-              fieldKinds={kinds}
-              headRev={ctx.head}
-            />
-          </Card>
-          <Card title="What cannot be proposed">
-            <ul className="plain small">
-              <li>
-                <strong>Original wording and provenance</strong> of a founder requirement never change. A correction is a new requirement that supersedes the
-                old one.
-              </li>
-              <li>
-                <strong>A requirement&apos;s standing</strong> and <strong>acceptance</strong> change only by founder decision, in the decision centre.
-              </li>
-              <li>
-                <strong>Stale proposals are refused.</strong> This form is tied to version {record.meta.version}; if the record changes first, you will be asked
-                to re-read it.
-              </li>
-              <li>
-                Fields a proposal cannot set on this record: <span className="mono xsmall break">{[...lockedFields(type)].sort().join(", ")}</span>
-              </li>
-            </ul>
-          </Card>
-        </div>
+        <>
+          {reported ? <ReportedAcceptanceNotice /> : null}
+          <div className="split">
+            <Card title="Your proposal">
+              <ProposalForm
+                target={{ type, id, title: recordTitle(type, record.data), version: record.meta.version, data }}
+                fields={fields}
+                fieldKinds={kinds}
+                headRev={ctx.head}
+              />
+            </Card>
+            <Card title="What cannot be proposed">
+              <ul className="plain small">
+                <li>
+                  <strong>Original wording and provenance</strong> of a founder requirement never change. A correction is a new requirement that supersedes the
+                  old one.
+                </li>
+                <li>
+                  <strong>A requirement&apos;s standing</strong> and <strong>acceptance</strong> change only by founder decision, in the decision centre.
+                </li>
+                <li>
+                  <strong>Stale proposals are refused.</strong> This form is tied to version {record.meta.version}; if the record changes first, you will be asked
+                  to re-read it.
+                </li>
+                {reported ? (
+                  <li>
+                    <strong>A build a source reports as accepted</strong> can only have that acceptance withdrawn by proposal: this form offers its standing only.
+                  </li>
+                ) : null}
+                <li>
+                  Fields a proposal cannot set on this record: <span className="mono xsmall break">{[...lockedFields(type)].sort().join(", ")}</span>
+                </li>
+              </ul>
+            </Card>
+          </div>
+        </>
       )}
     </div>
   );

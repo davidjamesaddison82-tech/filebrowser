@@ -207,24 +207,69 @@ rep("mau7_refusal_active", LR, "select * into v_p from hq.principals where id = 
 rep("mau8_access_principal", LA, "if v_p.id is null then", "if false then")
 rep("mau9_access_anon", LA, "if current_setting('role', true) is distinct from 'anon' then", "if true then")
 # (0007, F4) log_access accepts only the action families the application logs; mau10 removes the check.
-LA_ACTIONS = r"""if p_action is null
-     or p_action !~ '^(api\.[a-z_.]+|mcp\.[a-z_.]+|tool\.[a-z_]+|tools\.list|integrations\.read|proposal\.read|session\.(sign_in|sign_out|end_all))$' then"""
+# (0008, G2) bounded families and the refused words; LA_ACTIONS is the whole condition as it stands now.
+LA_PATTERN = r"""or p_action !~ '^(api\.[a-z_]{1,40}|mcp\.[a-z_]{1,60}|tool\.[a-z_]{1,60}|tools\.list|integrations\.read|proposal\.read|session\.(sign_in|sign_out|end_all))$'"""
+LA_WORDS = r"""
+     or (p_action ~ '(review|decision|decide|credential|accept|reject|approve|revoke|issue|withdraw|register)'
+         and p_action not in ('tool.get_acceptance_status', 'mcp.get_acceptance_status', 'tool.get_review_items', 'mcp.get_review_items'))"""
+LA_ACTIONS = "if p_action is null\n     " + LA_PATTERN + LA_WORDS + " then"
 rep("mau10_access_action", LA, LA_ACTIONS, "if false then")
 rep("mau11_access_request_id", LA, "if v_request is not null and v_request !~ '^[A-Za-z0-9._-]{1,64}$' then", "if false then")
 
 # ---- 0007 F1: a proposal cannot introduce a claim of acceptance ----
 RAC = "hq._refuse_acceptance_claims(text,jsonb,hq.record_versions)"
 rep("mf1a_build_standing", RAC, "if p_type = 'build' and v_after ->> 'standing' = 'accepted_reported'", "if false and v_after ->> 'standing' = 'accepted_reported'")
-rep("mf1b_build_standing_unless", RAC, "and (v_before ->> 'standing') is distinct from 'accepted_reported' then", "then")
-rep("mf1c_module_lifecycle", RAC, "if jsonb_typeof(v_fa) = 'object' and v_fa ->> 'state' in ('yes', 'partial') then", "if false then")
-rep("mf1d_module_identical_state_only", RAC, "jsonb_build_object('state', v_fa -> 'state', 'basis', v_fa -> 'basis', 'note', v_fa -> 'note', 'citations', v_fa -> 'citations')", "jsonb_build_object('state', v_fa -> 'state')")
-rep("mf1d_module_identical_state_only", RAC, "jsonb_build_object('state', v_was -> 'state', 'basis', v_was -> 'basis', 'note', v_was -> 'note', 'citations', v_was -> 'citations')", "jsonb_build_object('state', v_was -> 'state')")
+# Since 0008 the G1a freeze runs first and refuses every case this clause lets through, so removing the
+# clause alone changes nothing (an equivalent mutant). The 0007 exemption it encoded, "unless the target
+# already had exactly that standing", is now the freeze's own test: mutated there instead.
+rep("mf1b_build_standing_unless", RAC, "or v_after ->> 'standing' = 'accepted_reported'\n", "\n")
+# (0008, G1b replaced the 0007 lines these targeted; the same breakages, against the current text.)
+RAC_POSITIVE = """    if v_fa is not null
+       and not coalesce(jsonb_typeof(v_fa) = 'object' and jsonb_typeof(v_fa -> 'state') = 'string'
+                        and v_fa ->> 'state' in ('no', 'unknown', 'not_applicable'), false) then"""
+RAC_IDENTICAL = "      if v_fa is distinct from v_was then"
+rep("mf1c_module_lifecycle", RAC, RAC_POSITIVE, "    if false then")
+rep("mf1d_module_identical_state_only", RAC, RAC_IDENTICAL, "      if (v_fa -> 'state') is distinct from (v_was -> 'state') then")
 rep("mf1e_top_level_field", RAC, "if v_key = 'founder_accepted' or v_key like '%.founder\\_accepted' then", "if false then")
 # The rule removed from one path at a time: submission (update, create) and acceptance (update, create).
 rep("mf1f_submit_update", SUBMIT, "perform hq._refuse_acceptance_claims(p_target_type, p_payload, v_cur);", "perform 1;")
 rep("mf1g_submit_create", SUBMIT, "perform hq._refuse_acceptance_claims(p_payload ->> 'record_type', p_payload, null::hq.record_versions);", "perform 1;")
 rep("mf1h_review_update", REVIEW, "perform hq._refuse_acceptance_claims(v_prop.target_type, v_prop.payload, v_cur);", "perform 1;")
 rep("mf1i_review_create", REVIEW, "perform hq._refuse_acceptance_claims(v_prop.payload ->> 'record_type', v_prop.payload, null::hq.record_versions);", "perform 1;")
+
+# ---- 0008 G1a: a build a source reports as accepted is frozen for proposals ----
+rep("mg1a_build_freeze_removed", RAC, "if p_type = 'build' and v_update and v_before ->> 'standing' = 'accepted_reported'", "if false and v_before ->> 'standing' = 'accepted_reported'")
+# The first ROUND3 G1 text: the statement of a reported build is bound. Mutated so that a proposal
+# that sets the statement is let through the freeze.
+rep("mf1j_build_statement_binding", RAC, "if p_type = 'build' and v_update and v_before ->> 'standing' = 'accepted_reported'",
+    "if p_type = 'build' and v_update and not (v_doc ? 'statement') and v_before ->> 'standing' = 'accepted_reported'")
+# ---- 0008 G1b: the whole founder_accepted entry; any state but no / unknown / not_applicable is positive ----
+rep("mg1b_four_keys", RAC, RAC_IDENTICAL, """      if jsonb_build_object('state', v_fa -> 'state', 'basis', v_fa -> 'basis', 'note', v_fa -> 'note', 'citations', v_fa -> 'citations')
+         is distinct from jsonb_build_object('state', v_was -> 'state', 'basis', v_was -> 'basis', 'note', v_was -> 'note', 'citations', v_was -> 'citations') then""")
+rep("mg1b_positive_exact", RAC, RAC_POSITIVE, "    if jsonb_typeof(v_fa) = 'object' and v_fa ->> 'state' in ('yes', 'partial') then")
+# ---- 0008 G1c: the database's own check of the values that drive labels ----
+CFE = "hq._check_field_enums(text,jsonb,hq.record_versions)"
+REV = "hq._refuse_enum_value(text,jsonb,text[])"
+rep("mg1c_enum_check_removed", CFE, """  if jsonb_typeof(v_doc) is distinct from 'object' then
+    return;
+  end if;""", "  return;")
+rep("mg1c_enum_value_noop", REV, "if jsonb_typeof(p_value) is distinct from 'string' or not ((p_value #>> '{}') = any (p_allowed)) then", "if false then")
+rep("mg1c_enum_create_call", VP, "perform hq._check_field_enums(v_type, p_payload, null::hq.record_versions);", "perform 1;")
+rep("mg1c_enum_update_call", VAT, "perform hq._check_field_enums(p_target_type, p_payload, p_cur);", "perform 1;")
+rep("mg1c_enum_scope_whole_record", CFE, "v_target := case when v_row.drives_acceptance then v_after else v_scope end;", "v_target := v_after;")
+rep("mg1c_enum_acceptance_only_scope", CFE, "v_target := case when v_row.drives_acceptance then v_after else v_scope end;", "v_target := v_scope;")
+rep("mg1c_enum_not_object", CFE, """    if jsonb_typeof(v_value) is distinct from 'object' then
+      raise exception 'field "%" must be an object', v_parts[1] using errcode = 'HQ422';
+    end if;""", "    continue when jsonb_typeof(v_value) is distinct from 'object';")
+rep("mg1c_enum_keys", CFE, "if not (v_key = any (v_row.allowed)) then", "if false then")
+sql("mg1c_enum_row_deleted", "delete from hq.field_enums where record_type = 'build' and path = 'standing';")
+sql("mg1c_enum_row_value_added", "update hq.field_enums set allowed = allowed || 'accepted'::text where record_type = 'build' and path = 'standing';")
+
+# ---- 0008 G2: audit actions bounded, no founder-act names ----
+rep("mg2a_access_families_wide", LA, LA_PATTERN, r"""or p_action !~ '^(api\.[a-z_.]+|mcp\.[a-z_.]+|tool\.[a-z_]+|tools\.list|integrations\.read|proposal\.read|session\.(sign_in|sign_out|end_all))$'""")
+rep("mg2b_access_words_removed", LA, LA_WORDS, "")
+rep("mg2c_refusal_length", LR, "if length(p_action) > 80 then", "if false then")
+sql("mg2d_action_size_constraint", "alter table hq.audit_log drop constraint audit_log_action_size;")
 
 # ---- 0007 F3: service_role acts as no one ----
 sql("mf3_service_role_founder_decision", "grant execute on function hq.record_founder_decision(text,text,text,jsonb,jsonb,jsonb,text) to service_role;")

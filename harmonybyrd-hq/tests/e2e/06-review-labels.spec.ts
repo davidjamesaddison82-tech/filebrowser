@@ -118,3 +118,89 @@ test.describe("a build claimed as accepted with no source quoted (F1, F2)", () =
     await expect(page.locator("main")).not.toContainText("BLD-FX-03");
   });
 });
+
+test.describe("a build a source reports as accepted can only have that acceptance withdrawn by proposal (G1a)", () => {
+  const ONLY_WITHDRAW = "A proposal can only withdraw this build's reported acceptance.";
+
+  test("its page and the proposal form say so, and the form offers its standing only; a build that is not reported as accepted does not", async ({ page }) => {
+    await signInAs(page, "developer");
+    await page.goto("/records/build/BLD-FX-02");
+    await expect(page.locator("main")).toContainText(ONLY_WITHDRAW);
+    await page.getByRole("link", { name: "Propose a change" }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Propose a change");
+    await expect(page.locator("main")).toContainText(ONLY_WITHDRAW);
+    await expect(page.getByLabel("Field to change").locator("option")).toHaveText(["standing"]);
+    await expect(page.locator(".card", { has: page.getByRole("heading", { name: "What cannot be proposed" }) })).toContainText(
+      "can only have that acceptance withdrawn by proposal",
+    );
+
+    // Control: a build in development (filed through the inbox here, since 05 has accepted the
+    // fixture's candidate in HQ). No such notice, and every proposable field is offered.
+    const create = await submit(page, {
+      title: "File a development build",
+      rationale: "Browser test: a build that is not reported as accepted, as a control.",
+      create: {
+        record_type: "build",
+        record: { label: "control-build (browser test)", module_id: "MOD-FX-ALPHA", standing: "development", statement: { text: "A development build (browser test).", epistemic: "submitter_claim", citations: [] } },
+      },
+    });
+    await signInAs(page, "founder");
+    await page.goto(`/proposals/${create}`);
+    await page.getByRole("button", { name: "Accept and apply" }).click();
+    const applied = page.getByRole("status").filter({ hasText: "Accepted" });
+    await expect(applied).toContainText(/BLD-HQ-\d+ is at version 1/);
+    const control = /BLD-HQ-\d+/.exec(await applied.innerText())![0];
+    await signInAs(page, "developer");
+    await page.goto(`/records/build/${control}`);
+    await expect(page.locator("main")).not.toContainText(ONLY_WITHDRAW);
+    await page.goto(`/proposals/new?type=build&id=${control}`);
+    await expect(page.locator("main")).not.toContainText(ONLY_WITHDRAW);
+    expect(await page.getByLabel("Field to change").locator("option").count()).toBeGreaterThan(3);
+  });
+
+  test("a proposal that withdraws it says so under the risks to weigh, and names the statement it changes", async ({ page }) => {
+    await signInAs(page, "developer");
+    const base = await version(page, "build", "BLD-FX-02");
+    const withdraw = await submit(page, {
+      title: "Withdraw Beta build 2's reported acceptance",
+      rationale: "Browser test: withdrawing a reported acceptance is the one change a proposal may make to such a build.",
+      target: { type: "build", id: "BLD-FX-02", base_version: base },
+      set: {
+        standing: "candidate_not_accepted",
+        statement: { text: "Reported as accepted by the founder for desktop browsers only; withdrawn here pending a recorded decision.", epistemic: "submitter_claim", citations: [] },
+      },
+    });
+    await signInAs(page, "founder");
+    await page.goto(`/proposals/${withdraw}`);
+    const risks = page.locator(".card", { has: page.getByRole("heading", { name: "Known risks to weigh" }) });
+    await expect(risks).toContainText("It withdraws a reported acceptance");
+    await expect(risks).toContainText("It sets where the record stands (standing, statement).");
+    await expect(page.locator("main")).not.toContainText("This proposal cannot be accepted as it stands.");
+    // Nothing is accepted here: later checks rely on Beta build 2 being reported as accepted.
+    expect(await version(page, "build", "BLD-FX-02")).toBe(base);
+  });
+
+  test("a proposal planted past the submission checks that changes it without withdrawing it is marked as refusable, and accepting it is refused", async ({ page }) => {
+    const planted = spawnSync("npx", ["tsx", "tests/e2e/plant-proposal.ts", "PROP-900001", "build", "BLD-FX-02", JSON.stringify({ module_id: "MOD-FX-GAMMA", label: "Gamma build 1" })], {
+      cwd: path.resolve(__dirname, "..", ".."),
+      encoding: "utf8",
+      env: process.env,
+    });
+    expect(planted.status, planted.stderr).toBe(0);
+    await signInAs(page, "founder");
+    const before = await headRevision(page);
+    const baseVersion = await version(page, "build", "BLD-FX-02");
+    await page.goto("/proposals/PROP-900001");
+    await expect(page.locator("main")).toContainText("This proposal cannot be accepted as it stands.");
+    const risks = page.locator(".card", { has: page.getByRole("heading", { name: "Known risks to weigh" }) });
+    await expect(risks).toContainText("It changes a build that a source reports as accepted without withdrawing that acceptance.");
+    await expect(risks).not.toContainText("It withdraws a reported acceptance");
+
+    await page.getByRole("button", { name: "Accept and apply" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "reported as accepted" })).toContainText("a proposal may only withdraw the reported acceptance");
+    expect(await headRevision(page), "nothing was applied").toBe(before);
+    expect(await version(page, "build", "BLD-FX-02")).toBe(baseVersion);
+    await page.goto("/proposals/PROP-900001");
+    await expect(page.locator("main .chip").first()).toHaveText("Submitted");
+  });
+});

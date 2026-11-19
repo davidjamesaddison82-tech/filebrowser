@@ -180,7 +180,8 @@ export const TOOLS: ToolDefinition[] = [
   define({
     name: "get_record",
     title: "Get record",
-    description: "Any single record by type and id, exactly as stored, with its version history. Use the version number when proposing a change.",
+    description:
+      "Any single record by type and id, with its version history. A record that does not pass validation is returned conformed to its schema (a value of the wrong kind reads \"Not a valid value\"), with valid: false, its validation problems and the record exactly as stored (stored). Use the version number when proposing a change.",
     mode: "read",
     input: z.strictObject({ type: recordType, id: z.string().min(1), rev }),
     run: (p, a) => services.getRecord(p, a.type, a.id, { rev: a.rev }),

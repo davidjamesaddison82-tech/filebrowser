@@ -7,11 +7,12 @@ the records are invented and a banner says so.
 Sign in at `http://localhost:3210` as **founder** with the passphrase that `npm run setup` printed.
 
 Sign in from a browser you have used before when you can. After a successful sign-in HQ leaves a
-small cookie in that browser that says “this person has signed in here”. If someone floods the
-sign-in page with wrong passphrases, a browser without that cookie can be told “Too many sign-in
-attempts are in progress. Try again in a moment.” for as long as the flood lasts; a browser with it is
-not held up by that flood (docs/KNOWN-GAPS.md describes the one way it still can be). The cookie does not sign you in and opens nothing on its own. Signing out leaves it in
-place.
+small cookie in that browser that says “this person has signed in here”. If someone keeps sending
+wrong passphrases to the sign-in page — it takes only about two requests a second — a browser without
+that cookie can be told “Too many sign-in attempts are in progress. Try again in a moment.” for as
+long as they keep it up; a browser with it is not held up by them (docs/KNOWN-GAPS.md describes the
+one way it still can be). The cookie does not sign you in and opens nothing on its own. Signing out
+leaves it in place.
 
 ---
 
@@ -60,7 +61,11 @@ records that came in through the proposal inbox; their notes say “Reported thr
 - **Executable versions**, **defects**, **tests and evidence**, **decisions**, **connections**, **blockers and next actions**.
   A build marked as accepted whose statement does not quote a source reporting it is labelled
   *Acceptance claimed — no source quoted*. HQ does not count it as a reported acceptance, and lists
-  it under *Unverified claims*.
+  it under *Unverified claims*. A build that a source reports as accepted says on its page that a
+  proposal can only withdraw that report; its **Propose a change** form offers the standing alone.
+- A stored value HQ does not recognise — a status that is not on its list, a list where text should
+  be — is shown as *Not a valid value*, never as a status, and such a record's page says it does not
+  pass validation. HQ does not count such a value as an acceptance.
 - **History & lineage** (top right) shows every version of the record and the hash chain.
 
 Check it against what you know. Where HQ is wrong, do not edit — use **Propose a change** (step 7), or tell your developer to.
@@ -87,8 +92,10 @@ decides what is musically correct.
 - *Review items* lists possible duplicates, conflicts, restated wordings and acceptance claims with no instrument behind them.
   For a build, only two things count as an instrument: founder-acceptance evidence for that build that a
   source reports or HQ's build checked, or a decision you recorded in HQ that accepts that build. A
-  decision about its module, or one a document reports, no longer counts. So more builds may now be
-  listed for review than before; that is the cautious reading, not a change in the builds.
+  decision about its module, or one a document reports, no longer counts, and your decision counts
+  only while the build's HQ acceptance is still the one it recorded: if you later clear it, or reject
+  the build, the review item comes back. So more builds may now be listed for review than before;
+  that is the cautious reading, not a change in the builds.
 
 ## 6. Sources (1 minute)
 
@@ -108,16 +115,20 @@ Anyone who may propose — a developer, or Claude or ChatGPT through the API —
    the proposed one, what else refers to the record, the sources it rests on, and the risks. For a
    proposal that creates a record, *Original context* lists the sources the new record cites, and says
    for each whether HQ holds its text (only then can its quotations be checked). Under *Known risks to
-   weigh*, a proposal that sets where a record stands — its lifecycle, standing, status, type or
-   result — says so. If the record has since gained an acceptance or rejection of yours, the page
-   warns that the proposal cannot be accepted.
+   weigh*, a proposal that sets where a record stands — its lifecycle, standing, statement, status,
+   type or result — says so, and one that withdraws a build's reported acceptance says that too. If
+   the record has since gained an acceptance or rejection of yours, or the proposal would change a
+   build a source reports as accepted without withdrawing that, the page warns that the proposal
+   cannot be accepted.
 3. **Accept and apply**, **Ask for changes** or **Reject**. Accepting creates a new dataset revision;
    *Changes* records it with your name and the proposal's id. The page then says “Your acceptance
    was recorded.” (or rejection, or request for changes). If someone — or you, in another tab —
    closed the proposal first, it says “Your … was not applied: this proposal was already … by … at …”.
 4. If the record changed after the proposal was written, HQ refuses to apply it and marks it stale.
 5. HQ re-checks the proposal as you accept it: every quotation must be in its source, it may not
-   use HQ's own labels, and it may not claim an acceptance. A proposal that fails is refused, not applied.
+   use HQ's own labels, it may not claim an acceptance, every listed value must be on its list, and
+   the whole record must still be valid as it would then stand. A proposal that fails is refused, not
+   applied, and stays in the inbox: you can still reject it or ask for changes.
 
 Notice what the proposal form does not offer: a requirement's original wording, its standing,
 acceptance, the fields only HQ's build writes, and, for sources, what HQ recorded about the
@@ -139,7 +150,9 @@ otherwise nothing is recorded and HQ lists the ids it could not find.
 This is the only way anything in HQ becomes *accepted*. No assistant and no developer can do it:
 there is no such tool in the API, and the database refuses every attempt. A proposal cannot even
 claim that a document reports an acceptance — marking a build as accepted, or a module's founder
-acceptance as yes or partial, is refused whatever it quotes. Such reports come in only through an import.
+acceptance as anything but no, unknown or not applicable, is refused whatever it quotes — and it
+cannot change a build a document reports as accepted, except to withdraw that report. Such reports
+come in only through an import.
 
 ## 9. Access for Claude and ChatGPT (1 minute)
 

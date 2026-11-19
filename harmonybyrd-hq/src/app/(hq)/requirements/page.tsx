@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "@/components/pin-link";
-import { Card, Chip, Empty, IdTag, PageHead, Pager, StatusChip } from "@/components/ui";
+import { Card, Chip, Empty, IdTag, KnownLink, PageHead, Pager, StatusChip } from "@/components/ui";
 import { filterRequirements, isOutstanding } from "@/lib/domain/derive";
 import { IMPLEMENTATION_STATES, REQUIREMENT_CATEGORIES, REQUIREMENT_DISPOSITIONS } from "@/lib/domain/schemas";
 import { loadPage, paginate, param, type SearchParams } from "@/lib/server/page";
@@ -140,17 +140,17 @@ export default async function RequirementsPage({ searchParams }: { searchParams:
                         </div>
                       </td>
                       <td className="small">
-                        <Link href={withRev(`/records/source/${r.data.source_id}`, rev)}>{r.data.source_id}</Link>
+                        <KnownLink ds={ds} type="source" id={r.data.source_id} rev={rev} />
                         <div className="muted xsmall">{isoDate(r.data.source_date)}</div>
                       </td>
                       <td className="small">
                         {r.data.module_ids.length ? r.data.module_ids.map((m) => ds.moduleName(m)).join(", ") : <span className="muted">none</span>}
                       </td>
                       <td>
-                        <StatusChip value={r.data.disposition} />
+                        <StatusChip value={r.data.disposition} field="requirement.disposition" />
                       </td>
                       <td>
-                        <StatusChip value={r.data.implementation_state} />
+                        <StatusChip value={r.data.implementation_state} field="requirement.implementation_state" />
                         {isOutstanding(r.data, ds) ? (
                           <div style={{ marginTop: 4 }}>
                             <Chip tone="warn">Outstanding</Chip>

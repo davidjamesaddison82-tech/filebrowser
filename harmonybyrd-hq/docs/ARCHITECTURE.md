@@ -10,7 +10,7 @@
  │  Pages (server components)      REST  /api/v1/tools/<name>        MCP  /api/mcp          │
  │            └────────────── one tool registry (src/lib/server/tools.ts) ───────────────┘ │
  │  services.ts  — every read and write, for every interface                                │
- │  derive.ts    — pure functions over an immutable Dataset snapshot                        │
+ │  derive.ts    — pure functions over the conformed view of an immutable Dataset snapshot  │
  │  db.ts        — per-request transaction:  SET LOCAL ROLE … ; request.jwt.claims = {…}    │
  └───────────────────────────────────────────┬─────────────────────────────────────────────┘
                                              ▼
@@ -34,6 +34,9 @@ Vitest. GitHub and Google Drive are reached through read-only adapters; HQ store
 Twelve record types: `source`, `module`, `loop`, `pathway`, `requirement`, `decision`, `commission`,
 `build`, `evidence`, `defect`, `open_item`, `recommendation`. Their shapes are defined once, in
 `src/lib/domain/schemas.ts`, and used to validate imports, to validate proposals and to type every read.
+The fields whose value comes from a fixed list are also held in the database (`hq.field_enums`, the
+same rows as `FIELD_ENUMS` in `schemas.ts`; a test compares them), so the database refuses a value
+outside its list in a proposal even when a caller goes round the application.
 
 **A statement always says what kind of statement it is.** A factual field is a *claim*: text, an
 epistemic label and citations.
@@ -65,7 +68,8 @@ shown on the map is derived from them and can never read “accepted” because 
 `verified`; a reported founder acceptance must have the basis `reported` or `founder_statement`. A
 build's standing `accepted_reported` counts as a reported acceptance only when its statement is
 labelled `reported` or `founder_statement` and quotes a source; otherwise it is shown as “Acceptance
-claimed — no source quoted”. Neither kind of acceptance can be introduced by a proposal (docs/GOVERNANCE.md). A
+claimed — no source quoted”. Neither kind of acceptance can be introduced by a proposal, and a build a
+source reports as accepted can be changed by proposal only to withdraw the report (docs/GOVERNANCE.md). A
 submitter's claim never raises a standing; it is listed under *Unverified claims*. A founder
 rejection recorded in HQ gives the standing “Founder rejected in HQ”, which outranks everything else.
 
@@ -99,6 +103,20 @@ wrongly typed one is refused at import, and no proposal can set them:
 An HQ acceptance (`hq_acceptance`) also stores `accepted_version`, the record version the founder's
 decision wrote. Record schemas still keep keys they do not know (so an older application can read a
 newer pack), but the screens show only declared fields.
+
+**A stored record that fails its schema** is still loaded, with an integrity warning. It can no longer
+arrive through a proposal (the database checks the values that drive labels, and accepting a proposal
+re-validates the record), but an owner-level import that skips the pack validator can store one.
+Every reader — the screens, the REST API and the MCP tools — computes on it conformed to its schema
+(`src/lib/domain/conform.ts`): a value of the wrong kind, or outside its list, reads “Not a valid
+value”; a reference of the wrong kind is null; a list of the wrong kind is empty, and an element of
+the wrong kind is left out; a value of the right kind that breaks its field's rule (an id that is not
+an id, a quotation too short to be one) is null or left out. Conforming only takes a meaning away:
+nothing reads as accepted, tested, checked or linked because of a value that is not valid. A rule
+across the fields of an object (a lifecycle “yes” with no quotation) is left to the derivations,
+which never count such a statement and list it as an unverified claim. The record's page says it
+does not pass validation and shows, or links to, the record exactly as stored; an API answer that
+names such a record says so too, with the problems and the stored form (docs/API.md).
 
 ## Storage: append-only, revisioned, hash-chained
 
@@ -135,9 +153,16 @@ whatever has happened since), and explicit **stale-write handling** (a proposal 
 was written against; if the record has moved on, the proposal is marked stale, not applied).
 
 The application reads a revision once into an immutable in-memory `Dataset` and caches it by
-revision number and content hash. Everything shown — standings, health figures, missing work,
-lineage, search — is a pure function of that snapshot (`src/lib/domain/derive.ts`), which is why the
-web pages, the REST API and the MCP tools cannot disagree: they call the same functions on the same snapshot.
+revision number and content hash, in two forms worked out together (`src/lib/server/store.ts`): the
+records **as stored**, and the **conformed view**, in which each record that fails validation is
+conformed to its schema (above; the two are the same object when every record is valid). Everything
+shown — standings, health figures, missing work, lineage, search — is a pure function of the view
+(`src/lib/domain/derive.ts`, whose functions take only the view's type, `DatasetView`, so they cannot
+be given the stored form by accident), which is why the web pages, the REST API and the MCP tools
+cannot disagree: they call the same functions on the same view. The write paths use the stored form:
+a proposal is compared with the record as stored, its base version is the stored version, the
+acceptance rules and the whole-record check at acceptance work on the stored record, and the review
+screen's “before” values are the stored values.
 
 ## Evidence packs: how records get in
 
@@ -199,22 +224,26 @@ Every answer from every tool is an envelope:
                     "pinned": false, "head_rev": 7, "is_head": true },
   "requested_by": { "handle": "claude", "…": "…" },
   "data":         { "…": "…" },
-  "provenance":   { "sources": [ { "id": "…", "title": "…", "sha256": "…" } ] } }
+  "provenance":   { "sources": [ { "id": "…", "title": "…", "sha256": "…" } ] },
+  "integrity":    { "notice": "…", "records": [ { "type": "…", "id": "…", "valid": false, "problems": ["…"], "stored": { } } ] } }
 ```
+
+`integrity` is present only when the answer names a stored record that fails validation (docs/API.md).
 
 ## Code map
 
 | Path | Contents |
 | --- | --- |
-| `supabase/migrations/0001…0007` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target |
-| `src/lib/domain/` | Schemas, the `Dataset` snapshot, derivations, pack validation — no database, no network |
+| `supabase/migrations/0001…0008` | Roles and identities; records and revisions; governance; row-level security and grants; 0005: what a proposal may assert (stored source texts, quotation and label checks, protected and build-only fields), acceptance binding, reserved ids, decision references; 0006: the write context table, seal chain and head seal, audit-log wrappers, the proposal state order, session epochs, read-only `service_role`; 0007: no proposal can assert an acceptance (`hq._refuse_acceptance_claims`, called by `submit_proposal` and again by `review_proposal`), `service_role` may execute only the read helpers (revoked from the catalogue; a test reads the catalogue so a later function cannot slip through), `hq.log_access` accepts only the application's allowed action families and keeps a client's own request id apart from the server's, a 16,384-byte limit on new audit details, and “rejection” in the message for a rejected target; 0008: a build reported as accepted frozen for proposals except to withdraw the report, a module's reported acceptance compared as a whole entry, the database's own check of allowed values (`hq.field_enums`, `hq._check_field_enums`), and bounded audit action names |
+| `src/lib/domain/` | Schemas, the `Dataset` snapshot and its conformed view (`conform.ts`), derivations, pack validation — no database, no network |
 | `src/lib/server/` | Database access, the store, services, tools, HTTP helpers, server actions |
-| `src/lib/auth/` | Passphrases, tokens, sessions, the device cookie (`device.ts`), the sign-in throttle and its lanes (`throttle.ts`), the safe redirect after sign-in, the start-up environment check |
-| `src/lib/ui/` | Labels, formatting, pinned-revision link rules (`pin-rules.ts`, `pin.ts`, used by `src/components/pin-link.tsx`), and type guards through which screens read stored fields (`guards.ts`) |
+| `src/lib/auth/` | Passphrases, tokens, sessions, the device cookie (`device.ts`), the sign-in throttle and its lanes (`throttle.ts`), the length limits on sign-in input (`sign-in-input.ts`), the safe redirect after sign-in, the start-up environment check |
+| `src/lib/ui/` | Labels, formatting (including the field-aware text for listed values), pinned-revision link rules (`pin-rules.ts`, `pin.ts`, used by `src/components/pin-link.tsx`), and type guards through which screens read stored fields (`guards.ts`) |
 | `src/lib/integrations/` | Read-only GitHub and Google Drive adapters that return failure values instead of throwing |
 | `src/app/(hq)/` | The screens; `error.tsx` keeps a failed screen inside the shell |
 | `src/instrumentation.ts`, `src/proxy.ts` | Refuse to start with a placeholder secret; answer a malformed address with 400 |
 | `src/app/api/` | REST and MCP routes |
+| `next.config.mjs` | Response headers, no telemetry, `pg` kept out of the bundle. Part of the repository (HQ's `.gitignore` un-ignores `*.mjs`, which the repository around it ignores) |
 | `scripts/` | Migrate, seed, setup, credentials, pack verification, test runners |
 | `tests/` | `unit`, `db`, `api`, `e2e` |
 | `data/packs/fixture` | Synthetic records used by every test |

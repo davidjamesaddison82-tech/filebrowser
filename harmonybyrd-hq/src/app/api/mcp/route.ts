@@ -109,7 +109,8 @@ async function handle(raw: unknown, principal: Principal, requestId: string): Pr
       // A tool that does not exist, or that this credential may not call, is a protocol error (-32602),
       // as the MCP specification has it; `data` carries the same code REST would answer with.
       if (!tool) {
-        return rpcError(id, -32602, `Unknown tool "${name}". tools/list shows the tools this credential can call.`, { code: "not_found", status: 404 });
+        // The name is echoed back only in part: it is whatever the client sent.
+        return rpcError(id, -32602, `Unknown tool "${name.slice(0, 80)}". tools/list shows the tools this credential can call.`, { code: "not_found", status: 404 });
       }
       if (!allowedTools(principal).includes(tool)) {
         await audit(claimsFor(principal), { action: `mcp.${name}`, outcome: "denied", requestId, detail: { reason: "scope" } });
@@ -143,31 +144,38 @@ async function handle(raw: unknown, principal: Principal, requestId: string): Pr
     }
     default:
       if (method.startsWith("notifications/")) return null;
-      return isNotification ? null : rpcError(id, -32601, `Method "${method}" is not supported by this server.`);
+      return isNotification ? null : rpcError(id, -32601, `Method "${method.slice(0, 80)}" is not supported by this server.`);
   }
 }
 
 export async function POST(request: Request) {
   const requestId = randomUUID();
+  // Every answer carries the request id, the early refusals included (G9): it is the id of the audit
+  // row, when the refusal writes one.
+  const idHeader = { "x-request-id": requestId };
   let principal: Principal | null = null;
   try {
     assertSameOrigin(request);
     principal = await principalFromRequest(request);
   } catch (error) {
     const e = error instanceof HqError ? error : fromDatabaseError(error);
-    return json(rpcError(null, -32000, e.message), { status: e.status });
+    if (e.status === 403) await audit(null, { action: "mcp.connect", outcome: "denied", requestId, detail: { reason: "cross_origin" } });
+    return json(rpcError(null, -32000, e.message), { status: e.status, headers: idHeader });
   }
   if (!principal) {
     await audit(null, { action: "mcp.connect", outcome: "denied", requestId, detail: { reason: "missing or invalid credential" } });
     return json(rpcError(null, -32001, "Authentication required: send Authorization: Bearer <HQ API token>."), {
       status: 401,
-      headers: { "www-authenticate": 'Bearer realm="harmonybyrd-hq"' },
+      headers: { ...idHeader, "www-authenticate": 'Bearer realm="harmonybyrd-hq"' },
     });
   }
 
   const versionHeader = request.headers.get("mcp-protocol-version");
   if (versionHeader && !SUPPORTED_VERSIONS.includes(versionHeader)) {
-    return json(rpcError(null, -32600, `Unsupported MCP protocol version "${versionHeader}". Supported: ${SUPPORTED_VERSIONS.join(", ")}.`), { status: 400 });
+    return json(rpcError(null, -32600, `Unsupported MCP protocol version "${versionHeader.slice(0, 40)}". Supported: ${SUPPORTED_VERSIONS.join(", ")}.`), {
+      status: 400,
+      headers: idHeader,
+    });
   }
 
   let payload: unknown;
@@ -175,9 +183,9 @@ export async function POST(request: Request) {
     payload = JSON.parse(await readBodyText(request));
   } catch (error) {
     if (error instanceof HqError && error.status === 413) {
-      return json(rpcError(null, -32600, error.message, { code: error.code, status: 413 }), { status: 413, headers: { "x-request-id": requestId } });
+      return json(rpcError(null, -32600, error.message, { code: error.code, status: 413 }), { status: 413, headers: idHeader });
     }
-    return json(rpcError(null, -32700, "Parse error: the body is not valid JSON."), { status: 400 });
+    return json(rpcError(null, -32700, "Parse error: the body is not valid JSON."), { status: 400, headers: idHeader });
   }
 
   const headers = { "x-request-id": requestId, "x-hq-client": publicPrincipal(principal).handle };
@@ -206,10 +214,13 @@ export async function POST(request: Request) {
 export async function GET() {
   return json(rpcError(null, -32000, "This MCP server does not offer a server-initiated stream. Use POST."), {
     status: 405,
-    headers: { allow: "POST" },
+    headers: { allow: "POST", "x-request-id": randomUUID() },
   });
 }
 
 export async function DELETE() {
-  return json(rpcError(null, -32000, "This MCP server is stateless; there is no session to end."), { status: 405, headers: { allow: "POST" } });
+  return json(rpcError(null, -32000, "This MCP server is stateless; there is no session to end."), {
+    status: 405,
+    headers: { allow: "POST", "x-request-id": randomUUID() },
+  });
 }

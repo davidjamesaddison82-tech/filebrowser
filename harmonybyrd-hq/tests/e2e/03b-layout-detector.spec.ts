@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { coveringsTopAndEnd, measureLayout } from "./layout-measure";
+import { coveringsTopAndEnd, measureLayout, middlePositions } from "./layout-measure";
 import { expect, test } from "./support";
 
 /**
@@ -82,11 +82,10 @@ test.describe("the layout detector finds what covers the content", () => {
   });
 });
 
-/** Coverings at the top of the page and scrolled to its end, as 03-layout measures every screen. */
+/** Coverings at the top of the page, part-way down and scrolled to its end, as 03-layout measures every screen. */
 async function coveringsAnywhere(page: Page, html: string): Promise<string[]> {
   await page.setContent(html);
-  const { top, end } = await coveringsTopAndEnd(page);
-  return [...top.coverings, ...end.coverings];
+  return (await coveringsTopAndEnd(page)).coverings;
 }
 
 /** Paragraphs that are on screen but not what the browser shows at their first line (what a reader cannot see). */
@@ -153,6 +152,140 @@ test.describe("the layout detector finds shifted blocks and pseudo-element overl
     );
     expect(await coveringsAnywhere(page, html)).toEqual([]);
     expect(await coveringsAnywhere(page, SHELL())).toEqual([]);
+  });
+});
+
+/**
+ * Part-way down a long page, and elements the browser does not draw (round 3, G6). A page of 40
+ * paragraphs is about six windows long at 1366 × 768; what covers text only in its middle is on screen
+ * neither at the top nor at the end. And an element at opacity 0, or cut away entirely by a clip-path,
+ * is hit by the browser's hit test but draws nothing: it hides nothing, so it is not a covering.
+ */
+const LONG_SHELL = (mid: string, paragraphs = 40) =>
+  SHELL().replace(/<p>1\. [\s\S]*?(<table>)/, `${Array.from({ length: paragraphs }, (_, i) => `<p>${i + 1}. ${words.repeat(3)}</p>${i === Math.floor(paragraphs / 2) ? mid : ""}`).join("")}$1`);
+
+/** Hidden paragraphs at the worst scroll position, and at the top and the end only. */
+async function hiddenAlongThePage(page: Page): Promise<{ anywhere: number; atTheEnds: number }> {
+  const positions = await page.evaluate(() => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    return Array.from({ length: 41 }, (_, i) => Math.round((max * i) / 40));
+  });
+  let anywhere = 0;
+  let atTheEnds = 0;
+  for (const [i, y] of positions.entries()) {
+    await page.evaluate((to) => window.scrollTo(0, to), y);
+    const hidden = await hiddenParagraphs(page);
+    anywhere = Math.max(anywhere, hidden);
+    if (i === 0 || i === positions.length - 1) atTheEnds = Math.max(atTheEnds, hidden);
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+  return { anywhere, atTheEnds };
+}
+
+/** Whether the browser's plain hit test answers an element matching `selector` somewhere over the text of main. */
+async function hitTestFinds(page: Page, selector: string): Promise<boolean> {
+  return page.evaluate((sel) => {
+    const target = document.querySelector(sel);
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    for (let y = 0; y <= max + 1; y += 200) {
+      window.scrollTo(0, y);
+      for (let py = 10; py < window.innerHeight; py += 20) {
+        for (let px = 260; px < window.innerWidth; px += 40) {
+          const hit = document.elementFromPoint(px, py);
+          if (target && hit && (hit === target || target.contains(hit))) return true;
+        }
+      }
+    }
+    return false;
+  }, selector);
+}
+
+test.describe("the layout detector looks part-way down a long page and ignores what is not drawn (G6)", () => {
+  test("the scroll positions: one every 0.8 window heights, at most ten, evenly spread on a longer page", () => {
+    expect(middlePositions(0, 768)).toEqual([]);
+    expect(middlePositions(600, 768), "a page shorter than one step needs none").toEqual([]);
+    expect(middlePositions(2000, 768)).toEqual([614, 1228, 1842]);
+    const long = middlePositions(100_000, 768);
+    expect(long).toHaveLength(10);
+    expect(long[0]).toBeGreaterThan(0);
+    expect(long[9]).toBeLessThan(100_000);
+    const gaps = long.slice(1).map((y, i) => y - long[i]);
+    expect(Math.max(...gaps) - Math.min(...gaps), "evenly spread").toBeLessThanOrEqual(1);
+  });
+
+  test("a sticky block in a section in the middle of a 40-paragraph page is reported, and says where", async ({ page }) => {
+    const html = LONG_SHELL(
+      `<section><div class="sticky-mid" style="position:sticky; top:300px; height:150px; background:#fff; z-index:5">Sticky mid</div>${Array.from({ length: 8 }, () => `<p>${words.repeat(3)}</p>`).join("")}</section>`,
+    );
+    await page.setContent(html);
+    const hidden = await hiddenAlongThePage(page);
+    expect(hidden.anywhere, "part-way down, it hides paragraphs").toBeGreaterThan(0);
+    expect(hidden.atTheEnds, "at the top and at the end it hides nothing").toBe(0);
+    const { top, end, coverings } = await coveringsTopAndEnd(page);
+    expect([...top.coverings, ...end.coverings], "the two ends alone show nothing").toEqual([]);
+    expect(coverings.join("\n")).toMatch(/^middle at \d+ px: div\.sticky-mid \(sticky, \d+×150 at \d+,300\) is drawn over the text/m);
+  });
+
+  test("a position: relative block shifted over text in the middle of a 40-paragraph page is reported", async ({ page }) => {
+    const html = LONG_SHELL(`<div class="shifted-mid" style="position:relative; top:-300px; z-index:5; height:250px; background:#fff">Shifted mid</div>`);
+    await page.setContent(html);
+    const hidden = await hiddenAlongThePage(page);
+    expect(hidden.anywhere, "part-way down, it hides paragraphs").toBeGreaterThan(0);
+    expect(hidden.atTheEnds, "at the top and at the end it hides nothing").toBe(0);
+    expect((await coveringsAnywhere(page, html)).join("\n")).toMatch(/^middle at \d+ px: div\.shifted-mid \(relative\) is drawn over the text/m);
+  });
+
+  test("a shifted overlay at opacity 0 hides nothing and is not reported", async ({ page }) => {
+    const html = SHELL(`<div class="ghost" style="position:relative; top:-500px; z-index:5; height:400px; background:#fff; opacity:0">X</div>`);
+    await page.setContent(html);
+    expect(await hitTestFinds(page, "div.ghost"), "the browser's hit test does answer it").toBe(true);
+    expect(await coveringsAnywhere(page, html)).toEqual([]);
+  });
+
+  test("a fixed overlay inside a wrapper at opacity 0 is not reported either", async ({ page }) => {
+    const html = SHELL("", "", `<div style="opacity:0"><div class="ghost" style="position:fixed; left:300px; top:100px; width:900px; height:500px; background:#fff; z-index:99">X</div></div>`);
+    await page.setContent(html);
+    expect(await hitTestFinds(page, "div.ghost"), "the browser's hit test does answer it").toBe(true);
+    expect(await coveringsAnywhere(page, html)).toEqual([]);
+  });
+
+  test("a shifted overlay at opacity 0.01 is drawn and is reported", async ({ page }) => {
+    const html = SHELL(`<div class="faint" style="position:relative; top:-500px; z-index:5; height:400px; background:#fff; opacity:0.01">X</div>`);
+    expect((await coveringsAnywhere(page, html)).join("\n")).toMatch(/div\.faint \(relative\) is drawn over the text/);
+  });
+
+  test("an opacity 0 layer does not hide a visible overlay under it", async ({ page }) => {
+    const html = SHELL(
+      `<div class="visible-cover" style="position:relative; top:-500px; z-index:5; height:400px; background:#fff">Cover</div>
+       <div class="ghost" style="position:relative; top:-900px; z-index:6; height:400px; background:#fff; opacity:0">X</div>`,
+    );
+    const found = (await coveringsAnywhere(page, html)).join("\n");
+    expect(found).toMatch(/div\.visible-cover \(relative\) is drawn over the text/);
+    expect(found).not.toMatch(/div\.ghost/);
+  });
+
+  test("a shifted block cut away entirely by clip-path: inset(50%) is not reported, nor is the text under it", async ({ page }) => {
+    const html = SHELL(`<div class="cut" style="position:relative; top:-500px; z-index:5; clip-path:inset(50%); background:#fff">${words.repeat(10)}</div>`);
+    await page.setContent(html);
+    expect(await hiddenParagraphs(page), "nothing is hidden").toBe(0);
+    expect(await coveringsAnywhere(page, html)).toEqual([]);
+  });
+
+  test("text that a clip-path leaves visible is still checked: a block shifted over it is reported", async ({ page }) => {
+    // The top half of .half is drawn (inset(0 0 50% 0) cuts away the bottom half); .over is moved up onto it.
+    const html = SHELL(
+      `<div class="half" style="clip-path:inset(0 0 50% 0); height:200px">${words.repeat(4)}</div>
+       <div class="over" style="position:relative; top:-200px; z-index:5; height:60px; background:#fff">Over</div>`,
+    );
+    expect((await coveringsAnywhere(page, html)).join("\n")).toMatch(/div\.over \(relative\) is drawn over the text "The founder/);
+  });
+
+  test("a clean 40-paragraph page reports nothing anywhere along it", async ({ page }) => {
+    const html = LONG_SHELL(`<section><h2 style="position:sticky; top:0; background:#fff; margin:0">A heading that stays</h2></section>`);
+    await page.setContent(html);
+    const { middle, coverings } = await coveringsTopAndEnd(page);
+    expect(middle.length, "it was measured part-way down").toBeGreaterThanOrEqual(3);
+    expect(coverings).toEqual([]);
   });
 });
 

@@ -13,12 +13,19 @@ import {
   Fold,
   IdTag,
   InboxOriginChip,
+  InvalidRecordNotice,
+  isReportedAcceptance,
+  KnownLink,
   Notice,
   PageHead,
   RecordLink,
+  ReportedAcceptanceNotice,
   BuildStandingChip,
+  ListedChip,
+  ListedText,
   StatusChip,
 } from "@/components/ui";
+import type { DatasetView } from "@/lib/domain/conform";
 import type { Dataset, Envelope } from "@/lib/domain/dataset";
 import { acceptanceStatus, dependencies, lineage, recordTitle } from "@/lib/domain/derive";
 import {
@@ -65,7 +72,7 @@ const plainList = (children: ReactNode[]) => <ul className="plain">{children}</u
 const listWrap = (children: ReactNode[]) => <ul className="list">{children}</ul>;
 
 /** A list of record links that folds when long. Same output as the shared RefList for short lists. */
-function RefList({ ds, ids, empty = "None recorded.", noun = "records" }: { ds: Dataset; ids: string[]; empty?: string; noun?: string }) {
+function RefList({ ds, ids, empty = "None recorded.", noun = "records" }: { ds: DatasetView; ids: string[]; empty?: string; noun?: string }) {
   if (ids.length === 0) return <span className="muted small">{empty}</span>;
   return (
     <Fold
@@ -97,7 +104,7 @@ function loose(data: unknown): Record<string, unknown> {
 }
 
 /** Records of the same decision or build in other documents, kept word for word after HQ merged them. */
-function OtherMentions({ ds, data }: { ds: Dataset; data: unknown }) {
+function OtherMentions({ ds, data }: { ds: DatasetView; data: unknown }) {
   const mentions = otherMentions(loose(data).other_mentions);
   if (mentions.length === 0) return null;
   return (
@@ -140,7 +147,7 @@ function OtherMentions({ ds, data }: { ds: Dataset; data: unknown }) {
 }
 
 /** What a search of the readable sources found, term by term. A term with no hits is shown, not dropped. */
-function SearchResults({ ds, results }: { ds: Dataset; results: SafeSearchResult[] }) {
+function SearchResults({ ds, results }: { ds: DatasetView; results: SafeSearchResult[] }) {
   const rows = results.map((r, i) => (
     <tr key={`${r.term}-${i}`}>
       <td className="small">{r.term}</td>
@@ -149,9 +156,13 @@ function SearchResults({ ds, results }: { ds: Dataset; results: SafeSearchResult
           r.hits.map((h, j) => (
             <span key={`${h.source_id}-${j}`}>
               {j ? ", " : ""}
-              <Link href={refHref(h.source_id)} title={ds.source(h.source_id)?.data.title ?? h.source_id}>
-                {h.source_id}
-              </Link>{" "}
+              {ds.source(h.source_id) ? (
+                <Link href={refHref(h.source_id)} title={ds.source(h.source_id)?.data.title ?? h.source_id}>
+                  {h.source_id}
+                </Link>
+              ) : (
+                <KnownLink ds={ds} type="source" id={h.source_id} />
+              )}{" "}
               <span className="muted">×{h.count}</span>
             </span>
           ))
@@ -183,7 +194,7 @@ function SearchResults({ ds, results }: { ds: Dataset; results: SafeSearchResult
   );
 }
 
-function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRecord>; rev: number | null }) {
+function Summary({ ds, envelope, rev }: { ds: DatasetView; envelope: Envelope<AnyRecord>; rev: number | null }) {
   const type = envelope.meta.type;
   if (type === "source") {
     const s = envelope.data as SourceRecord;
@@ -206,11 +217,11 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
           </dd>
           <dt>Access</dt>
           <dd>
-            <StatusChip value={s.access} />
+            <StatusChip value={s.access} field="source.access" />
           </dd>
           <dt>Authority (HQ classification)</dt>
           <dd>
-            <Chip tone="outline">{humanise(s.authority)}</Chip>
+            <ListedChip field="source.authority" value={s.authority} />
             {s.authority_note ? (
               <div className="small" style={{ marginTop: 4 }}>
                 {s.authority_note}
@@ -335,7 +346,7 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
           <dl className="facts">
             <dt>Status</dt>
             <dd>
-              <StatusChip value={d.status} />
+              <StatusChip value={d.status} field="decision.status" />
             </dd>
             <dt>Code in the source</dt>
             <dd className="mono small">{d.code ?? "—"}</dd>
@@ -389,7 +400,7 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
           <dd className="mono small">{c.code}</dd>
           <dt>Status</dt>
           <dd>
-            <StatusChip value={c.status} />
+            <StatusChip value={c.status} field="commission.status" />
           </dd>
           <dt>Date</dt>
           <dd>{isoDate(c.date)}</dd>
@@ -494,10 +505,12 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
           ) : null}
           <dl className="facts">
             <dt>Type</dt>
-            <dd>{humanise(e.type)}</dd>
+            <dd>
+              <ListedText field="evidence.type" value={e.type} />
+            </dd>
             <dt>Verification</dt>
             <dd>
-              <StatusChip value={e.verification} />
+              <StatusChip value={e.verification} field="evidence.verification" />
             </dd>
             <dt>Result</dt>
             <dd>
@@ -550,10 +563,12 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
         <dl className="facts">
           <dt>Status</dt>
           <dd>
-            <StatusChip value={d.status} />
+            <StatusChip value={d.status} field="defect.status" />
           </dd>
           <dt>Severity</dt>
-          <dd>{humanise(d.severity)}</dd>
+          <dd>
+            <ListedText field="defect.severity" value={d.severity ?? "unknown"} />
+          </dd>
           <dt>Description</dt>
           <dd>
             <ClaimView ds={ds} claim={d.statement} />
@@ -575,7 +590,7 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
         <dl className="facts">
           <dt>Kind</dt>
           <dd>
-            <Chip tone="warn">{humanise(o.kind)}</Chip>
+            <ListedChip field="open_item.kind" value={o.kind} tone="warn" />
           </dd>
           <dt>Statement</dt>
           <dd>
@@ -641,9 +656,9 @@ function Summary({ ds, envelope, rev }: { ds: Dataset; envelope: Envelope<AnyRec
                 <li key={i}>
                   <div className="stack-sm" style={{ gap: 4 }}>
                     <div className="row" style={{ gap: 8 }}>
-                      <Link href={withRev(recordHref("module", step.module_id), rev)}>
+                      <KnownLink ds={ds} type="module" id={step.module_id} rev={rev}>
                         <strong>{ds.moduleName(step.module_id)}</strong>
-                      </Link>
+                      </KnownLink>
                       {step.shared_stage !== "none" ? <Chip tone="accent">{STAGE_LABEL[step.shared_stage]}</Chip> : null}
                     </div>
                     <div className="small">{step.role}</div>
@@ -671,7 +686,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
   const { type, id: rawId } = await params;
   if (!isRecordType(type)) notFound();
   const id = routeId(rawId);
-  const { principal, ctx, rev } = await loadPage(searchParams);
+  const { principal, ctx, stored, rev } = await loadPage(searchParams);
   const { ds } = ctx;
   const envelope = ds.get(type, id) as Envelope<AnyRecord> | undefined;
   if (!envelope) notFound();
@@ -682,6 +697,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
   const list = LIST_PAGE[type];
   const canPropose = type !== "decision";
   const lockedByAcceptance = bindingAcceptance(envelope.data) !== null;
+  const invalid = ctx.warnings.some((w) => w.type === type && w.id === id);
 
   return (
     <div className="stack">
@@ -699,6 +715,8 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
         }
       />
       {canPropose ? <AcceptanceLock data={envelope.data} /> : null}
+      {canPropose && !lockedByAcceptance && isReportedAcceptance(type, envelope.data) ? <ReportedAcceptanceNotice /> : null}
+      {invalid ? <InvalidRecordNotice /> : null}
 
       <div className="split">
         <div className="stack">
@@ -719,10 +737,16 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
                 items={lin.sources.map((s) => (
                   <li key={s.id}>
                     <div className="row" style={{ gap: 8 }}>
-                      <Link className="li-title" href={withRev(recordHref("source", s.id), rev)}>
-                        {s.title}
-                      </Link>
-                      <IdTag id={s.id} />
+                      {ds.source(s.id) ? (
+                        <>
+                          <Link className="li-title" href={withRev(recordHref("source", s.id), rev)}>
+                            {s.title}
+                          </Link>
+                          <IdTag id={s.id} />
+                        </>
+                      ) : (
+                        <KnownLink ds={ds} type="source" id={s.id} />
+                      )}
                       <StatusChip value={s.access} />
                     </div>
                     <div className="li-note mono xsmall break">
@@ -901,7 +925,7 @@ export default async function RecordPage({ params, searchParams }: { params: Pro
                 Version {envelope.meta.version} · introduced at dataset revision {envelope.meta.rev} · {statusLabel(envelope.meta.origin)}
               </summary>
               <pre className="json" style={{ marginTop: 8 }}>
-                {JSON.stringify(envelope.data, null, 2)}
+                {JSON.stringify(stored.get(type, id)?.data ?? envelope.data, null, 2)}
               </pre>
             </details>
           </Card>

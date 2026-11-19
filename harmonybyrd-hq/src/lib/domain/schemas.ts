@@ -437,11 +437,13 @@ export const LoopRecord = z.looseObject({
 });
 export type LoopRecord = z.infer<typeof LoopRecord>;
 
+export const PATHWAY_BASES = ["reported", "design_intention", "commission_example", "hq_recommendation", "source_recommendation"] as const;
+
 export const PathwayRecord = z.looseObject({
   id: id("PATH"),
   name: z.string().min(1),
   description: z.string().default(""),
-  basis: z.enum(["reported", "design_intention", "commission_example", "hq_recommendation", "source_recommendation"]),
+  basis: z.enum(PATHWAY_BASES),
   steps: z
     .array(
       z.object({
@@ -490,6 +492,8 @@ export const REQUIREMENT_CATEGORIES = [
   "other",
 ] as const;
 
+export const REQUIREMENT_ATTRIBUTIONS = ["commission_text", "direct_quote", "ruling_recorded_by_source", "restated_by_source"] as const;
+
 export const RequirementRecord = z.looseObject({
   id: id("FR"),
   // -- immutable original (enforced in the database) --
@@ -497,7 +501,7 @@ export const RequirementRecord = z.looseObject({
   source_id: SourceId,
   locator: z.string().nullable().default(null),
   source_date: IsoDate.nullable().default(null),
-  attribution: z.enum(["commission_text", "direct_quote", "ruling_recorded_by_source", "restated_by_source"]),
+  attribution: z.enum(REQUIREMENT_ATTRIBUTIONS),
   // -- HQ's working fields, kept visibly separate from the original --
   title: z.string().min(1),
   category: z.enum(REQUIREMENT_CATEGORIES),
@@ -535,6 +539,8 @@ export const RequirementRecord = z.looseObject({
 export type RequirementRecord = z.infer<typeof RequirementRecord>;
 
 export const DECISION_STATUSES = ["issued", "unissued", "pending", "held", "rejected", "superseded", "unknown"] as const;
+/** "source": reported by a source document. "hq": recorded by the founder inside HQ. */
+export const DECISION_RECORDED_IN = ["source", "hq"] as const;
 
 export const DecisionRecord = z.looseObject({
   id: id("FD"),
@@ -543,7 +549,7 @@ export const DecisionRecord = z.looseObject({
   title: z.string().min(1),
   status: z.enum(DECISION_STATUSES),
   /** "source": reported by a source document. "hq": recorded by the founder inside HQ. */
-  recorded_in: z.enum(["source", "hq"]),
+  recorded_in: z.enum(DECISION_RECORDED_IN),
   date: IsoDate.nullable().default(null),
   statement: Claim,
   exact_text: z.string().nullable().default(null),
@@ -562,12 +568,14 @@ export const DecisionRecord = z.looseObject({
 });
 export type DecisionRecord = z.infer<typeof DecisionRecord>;
 
+export const COMMISSION_STATUSES = ["delivered", "in_progress", "proposed", "closed", "deferred", "unknown"] as const;
+
 export const CommissionRecord = z.looseObject({
   id: id("COM"),
   code: z.string().min(1),
   title: z.string().min(1),
   date: IsoDate.nullable().default(null),
-  status: z.enum(["delivered", "in_progress", "proposed", "closed", "deferred", "unknown"]),
+  status: z.enum(COMMISSION_STATUSES),
   scope: NullableClaim,
   module_ids: z.array(ModuleId).default([]),
   output_source_ids: z.array(SourceId).default([]),
@@ -662,13 +670,16 @@ export const EvidenceRecord = z.looseObject({
 });
 export type EvidenceRecord = z.infer<typeof EvidenceRecord>;
 
+export const DEFECT_STATUSES = ["open", "resolved", "deferred", "unknown"] as const;
+export const DEFECT_SEVERITIES = ["blocking", "major", "minor", "unknown"] as const;
+
 export const DefectRecord = z.looseObject({
   id: id("DEF"),
   title: z.string().min(1),
   module_ids: z.array(ModuleId).default([]),
   build_id: id("BLD").nullable().default(null),
-  status: z.enum(["open", "resolved", "deferred", "unknown"]),
-  severity: z.enum(["blocking", "major", "minor", "unknown"]).default("unknown"),
+  status: z.enum(DEFECT_STATUSES),
+  severity: z.enum(DEFECT_SEVERITIES).default("unknown"),
   statement: Claim,
   citations: z.array(Citation).default([]),
   ...recordedFromCluster,
@@ -698,13 +709,16 @@ export const OpenItemRecord = z.looseObject({
 });
 export type OpenItemRecord = z.infer<typeof OpenItemRecord>;
 
+/** A recommendation is only ever proposed: only a founder decision can approve work. */
+export const RECOMMENDATION_STATUSES = ["proposed"] as const;
+
 /** A proposed next step. Always a recommendation: only a founder decision can approve work. */
 export const RecommendationRecord = z.looseObject({
   id: id("REC"),
   title: z.string().min(1),
   rationale: z.string().min(1),
   rank: z.number().int().positive(),
-  status: z.literal("proposed"),
+  status: z.enum(RECOMMENDATION_STATUSES),
   made_by: z.string().default("HQ builder (commission HB-HQ-P02-R1)"),
   module_ids: z.array(ModuleId).default([]),
   prerequisite_ids: z.array(z.string()).default([]),
@@ -808,6 +822,132 @@ export const BUILD_ONLY_FIELDS: readonly string[] = [
   "identifiers",
   "other_names",
 ];
+
+// ---------------------------------------------------------------------------
+// Values that drive labels, checked by the database too (ROUND3 G1c)
+// ---------------------------------------------------------------------------
+
+/**
+ * One list of allowed values for a field. The database keeps the same rows in hq.field_enums (migration
+ * 0008) and checks them itself, so a caller that goes round the application cannot store
+ * standing "accepted" or a founder acceptance of "Yes". A test compares the two, and another compares
+ * this list with the record schemas above, so none of the three can drift.
+ *
+ * `path` is one of: "field" (a top-level field), "field.*" (the keys of an object field),
+ * "field.*.sub" (a field of every entry of an object field), "**.key" (that key in any object at any
+ * depth). A field listed with `drivesAcceptance` is checked in the whole record as it would stand
+ * after the proposal; any other only where the proposal sets it, so an odd value imported before this
+ * rule does not block an unrelated change.
+ */
+export interface FieldEnum {
+  readonly type: RecordType | "*";
+  readonly path: string;
+  readonly allowed: readonly string[];
+  readonly drivesAcceptance: boolean;
+}
+
+const fieldEnum = (type: RecordType | "*", path: string, allowed: readonly string[], drivesAcceptance = false): FieldEnum => ({ type, path, allowed, drivesAcceptance });
+
+export const FIELD_ENUMS: readonly FieldEnum[] = [
+  fieldEnum("*", "**.epistemic", EPISTEMIC),
+  fieldEnum("build", "standing", BUILD_STANDINGS, true),
+  fieldEnum("commission", "status", COMMISSION_STATUSES),
+  fieldEnum("decision", "recorded_in", DECISION_RECORDED_IN),
+  fieldEnum("decision", "status", DECISION_STATUSES),
+  fieldEnum("defect", "severity", DEFECT_SEVERITIES),
+  fieldEnum("defect", "status", DEFECT_STATUSES),
+  fieldEnum("evidence", "type", EVIDENCE_TYPES, true),
+  fieldEnum("evidence", "verification", EVIDENCE_VERIFICATION),
+  fieldEnum("loop", "standing", EPISTEMIC),
+  fieldEnum("module", "evidence_level", EVIDENCE_LEVELS),
+  fieldEnum("module", "kind", MODULE_KINDS),
+  fieldEnum("module", "lifecycle.*", LIFECYCLE_DIMENSIONS, true),
+  fieldEnum("module", "lifecycle.*.basis", EPISTEMIC, true),
+  fieldEnum("module", "lifecycle.*.state", LIFECYCLE_STATES, true),
+  fieldEnum("open_item", "kind", OPEN_ITEM_KINDS),
+  fieldEnum("pathway", "basis", PATHWAY_BASES),
+  fieldEnum("recommendation", "status", RECOMMENDATION_STATUSES),
+  fieldEnum("requirement", "attribution", REQUIREMENT_ATTRIBUTIONS),
+  fieldEnum("requirement", "category", REQUIREMENT_CATEGORIES),
+  fieldEnum("requirement", "disposition", REQUIREMENT_DISPOSITIONS),
+  fieldEnum("requirement", "implementation_state", IMPLEMENTATION_STATES),
+  fieldEnum("source", "access", SOURCE_ACCESS),
+  fieldEnum("source", "authority", SOURCE_AUTHORITY),
+  fieldEnum("source", "kind", SOURCE_KINDS),
+];
+
+type JsonObject = Record<string, unknown>;
+const isJsonObject = (value: unknown): value is JsonObject => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A stored value as the refusal shows it: a string in quotes, anything else as JSON; 40 characters at most. */
+function shown(value: unknown): string {
+  return typeof value === "string" ? `"${value.slice(0, 40)}"` : (JSON.stringify(value) ?? "null").slice(0, 40);
+}
+
+/** Every object in a value, the value itself included, depth first (as jsonpath's strict $.** visits them). */
+function objectsWithin(value: unknown, out: JsonObject[] = []): JsonObject[] {
+  if (Array.isArray(value)) for (const item of value) objectsWithin(item, out);
+  else if (isJsonObject(value)) {
+    out.push(value);
+    for (const child of Object.values(value)) objectsWithin(child, out);
+  }
+  return out;
+}
+
+/**
+ * The first value outside its field's list in the record a proposal would leave, or null. Mirrors
+ * hq._check_field_enums (migration 0008) row for row and in the same order, with the same words.
+ * `doc` is the update's "set" or the created record; `current` is the target's data for an update,
+ * null for a create.
+ */
+export function fieldEnumProblem(type: RecordType, doc: JsonObject, current: JsonObject | null): { field: string; message: string } | null {
+  const after: JsonObject = current ? { ...current, ...doc } : doc;
+  // For an update, only the fields the proposal sets, as they would stand.
+  const scope: JsonObject = current ? Object.fromEntries(Object.keys(doc).map((key) => [key, after[key]])) : after;
+  const rows = FIELD_ENUMS.filter((row) => row.type === "*" || row.type === type).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const outside = (field: string, value: unknown, allowed: readonly string[]) =>
+    typeof value === "string" && allowed.includes(value) ? null : { field, message: `Field "${field}" holds ${shown(value)}, which is not one of its allowed values.` };
+  for (const row of rows) {
+    const target = row.drivesAcceptance ? after : scope;
+    const parts = row.path.split(".");
+    if (parts[0] === "**") {
+      const key = parts[1];
+      for (const obj of objectsWithin(target)) {
+        if (Object.hasOwn(obj, key)) {
+          const problem = outside(key, obj[key], row.allowed);
+          if (problem) return problem;
+        }
+      }
+      continue;
+    }
+    if (!Object.hasOwn(target, parts[0])) continue;
+    const value = target[parts[0]];
+    if (parts.length === 1) {
+      const problem = outside(parts[0], value, row.allowed);
+      if (problem) return problem;
+      continue;
+    }
+    if (!isJsonObject(value)) return { field: parts[0], message: `Field "${parts[0]}" must be an object.` };
+    // In the order PostgreSQL keeps an object's keys (shorter first), so both report the same problem first.
+    const keys = Object.keys(value).sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+    for (const key of keys) {
+      const entry = value[key];
+      if (parts.length === 2) {
+        if (!row.allowed.includes(key)) {
+          return { field: parts[0], message: `Field "${parts[0]}" holds the key ${shown(key)}, which is not one of its allowed keys.` };
+        }
+        continue;
+      }
+      const field = `${parts[0]}.${key}`;
+      if (!isJsonObject(entry)) return { field, message: `Field "${field}" must be an object.` };
+      if (Object.hasOwn(entry, parts[2])) {
+        const problem = outside(`${field}.${parts[2]}`, entry[parts[2]], row.allowed);
+        if (problem) return problem;
+      }
+    }
+  }
+  return null;
+}
 
 /** Strip optional / nullable / default wrappers to reach the type that describes the value itself. */
 function innerSchema(schema: z.ZodType): z.ZodType {

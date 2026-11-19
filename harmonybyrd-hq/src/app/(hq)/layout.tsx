@@ -18,6 +18,7 @@ export default async function HqLayout({ children }: { children: ReactNode }) {
   let fixture = false;
   let headRev = 0;
   try {
+    // The conformed view, like every reader's (G1f): an odd stored value must not take the navigation down.
     const ctx = await getDataset(principal);
     const health = developmentHealth(ctx.ds);
     const waiting = (await listProposals(principal)).filter((p) => p.status === "submitted").length;

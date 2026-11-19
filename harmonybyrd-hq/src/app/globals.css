@@ -497,6 +497,11 @@ code,
   background: var(--bad-wash);
   color: var(--bad);
 }
+/* A stored value outside its field's list (G1f): said in words, not only by colour. */
+.not-valid {
+  color: var(--bad);
+  font-weight: 600;
+}
 .chip.info {
   background: var(--info-wash);
   color: var(--info);
@@ -993,6 +998,11 @@ svg.map .dim {
 }
 .lc-not_applicable {
   color: var(--faint);
+}
+.lc-invalid {
+  background: var(--bad-wash);
+  color: var(--bad);
+  border: 1px dashed var(--bad);
 }
 .lc-row {
   display: grid;

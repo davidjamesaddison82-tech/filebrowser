@@ -1,4 +1,27 @@
-import type { Epistemic } from "@/lib/domain/schemas";
+import { NOT_VALID } from "@/lib/domain/conform";
+import {
+  BUILD_STANDINGS,
+  COMMISSION_STATUSES,
+  DECISION_STATUSES,
+  DEFECT_SEVERITIES,
+  DEFECT_STATUSES,
+  type Epistemic,
+  EVIDENCE_LEVELS,
+  EVIDENCE_TYPES,
+  EVIDENCE_VERIFICATION,
+  IMPLEMENTATION_STATES,
+  LIFECYCLE_STATES,
+  MODULE_KINDS,
+  OPEN_ITEM_KINDS,
+  PATHWAY_BASES,
+  RECOMMENDATION_STATUSES,
+  REQUIREMENT_ATTRIBUTIONS,
+  REQUIREMENT_CATEGORIES,
+  REQUIREMENT_DISPOSITIONS,
+  SOURCE_ACCESS,
+  SOURCE_AUTHORITY,
+  SOURCE_KINDS,
+} from "@/lib/domain/schemas";
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "design" | "founder" | "accent" | "ghost" | "outline" | "plain";
 
@@ -13,11 +36,69 @@ export const EPISTEMIC_TONE: Record<Epistemic, { tone: Tone; glyph: string; shor
   no_evidence: { tone: "ghost", glyph: "∅", short: "No evidence" },
 };
 
-/** Loose stored values reach the screens too (a record that failed validation is shown as stored), so anything that is not text is "—". */
+/** What a screen shows in place of a stored value of the wrong kind, or one outside its field's list (G1f). Defined with the conformer. */
+export { NOT_VALID };
+
+/**
+ * Loose stored values reach the screens too (a record that failed validation is shown as stored), so
+ * anything that is not text is "—". A field whose values come from a list is shown with fieldLabel
+ * instead, which says "Not a valid value" for anything outside the list.
+ */
 export function humanise(value: unknown): string {
   if (typeof value !== "string" || !value) return "—";
   const text = value.replaceAll("_", " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** A stored value as a short text for a tooltip: a string as it is, anything else as JSON; 60 characters at most. */
+export function storedValueText(value: unknown): string {
+  const text = typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+  return text.length > 60 ? `${text.slice(0, 59)}…` : text;
+}
+
+/**
+ * The fields the screens show whose values come from a fixed list, with that list: the record schemas'
+ * own lists, which the database checks too (hq.field_enums, migration 0008). A screen shows such a
+ * field through fieldLabel / StatusChip's `field`, never the stored value as it is (G1f).
+ */
+const LISTED = {
+  "build.standing": BUILD_STANDINGS,
+  "commission.status": COMMISSION_STATUSES,
+  "decision.status": DECISION_STATUSES,
+  "defect.severity": DEFECT_SEVERITIES,
+  "defect.status": DEFECT_STATUSES,
+  "evidence.type": EVIDENCE_TYPES,
+  "evidence.verification": EVIDENCE_VERIFICATION,
+  "module.evidence_level": EVIDENCE_LEVELS,
+  "module.kind": MODULE_KINDS,
+  "module.lifecycle.*.state": LIFECYCLE_STATES,
+  "open_item.kind": OPEN_ITEM_KINDS,
+  "pathway.basis": PATHWAY_BASES,
+  "recommendation.status": RECOMMENDATION_STATUSES,
+  "requirement.attribution": REQUIREMENT_ATTRIBUTIONS,
+  "requirement.category": REQUIREMENT_CATEGORIES,
+  "requirement.disposition": REQUIREMENT_DISPOSITIONS,
+  "requirement.implementation_state": IMPLEMENTATION_STATES,
+  "source.access": SOURCE_ACCESS,
+  "source.authority": SOURCE_AUTHORITY,
+  "source.kind": SOURCE_KINDS,
+} as const satisfies Record<string, readonly string[]>;
+
+export type ListedField = keyof typeof LISTED;
+
+/** The values a listed field may hold. */
+export function allowedValues(field: ListedField): readonly string[] {
+  return LISTED[field];
+}
+
+/** Whether a stored value is one of its field's listed values. Anything that is not a string is not. */
+export function isListedValue(field: ListedField, value: unknown): value is string {
+  return typeof value === "string" && allowedValues(field).includes(value);
+}
+
+/** A listed field's value for the screen: its label, or "Not a valid value" for anything outside the list, null included. */
+export function fieldLabel(field: ListedField, value: unknown): string {
+  return isListedValue(field, value) ? statusLabel(value) : NOT_VALID;
 }
 
 export function shortHash(hash: unknown, length = 12): string {

@@ -1,5 +1,6 @@
 /** Build a Dataset straight from the fixture pack on disk (no database). */
 import path from "node:path";
+import { conformDataset, type DatasetView } from "@/lib/domain/conform";
 import { Dataset, type Envelope, type RecordMeta, type RevisionInfo } from "@/lib/domain/dataset";
 import { loadPack, type PackRecord } from "@/lib/domain/pack";
 import type { AnyRecord } from "@/lib/domain/schemas";
@@ -20,10 +21,17 @@ const REVISION: RevisionInfo = {
 
 /**
  * Build a Dataset from records as given (no parsing, so a test can model data that was stored
- * before a rule existed). `meta` overrides envelope fields per record, e.g. to model a record
- * that entered through the proposal inbox ({ origin: "proposal_acceptance" }).
+ * before a rule existed), and return it as every reader sees it: the conformed view, in which a
+ * record that fails validation is conformed to its schema (src/lib/domain/conform.ts), as the store
+ * does. `meta` overrides envelope fields per record, e.g. to model a record that entered through the
+ * proposal inbox ({ origin: "proposal_acceptance" }).
  */
-export function datasetFrom(records: PackRecord[], meta?: (record: PackRecord) => Partial<RecordMeta> | undefined): Dataset {
+export function datasetFrom(records: PackRecord[], meta?: (record: PackRecord) => Partial<RecordMeta> | undefined): DatasetView {
+  return conformDataset(storedDatasetFrom(records, meta));
+}
+
+/** The same records as stored, not conformed: for the conformer's own tests. */
+export function storedDatasetFrom(records: PackRecord[], meta?: (record: PackRecord) => Partial<RecordMeta> | undefined): Dataset {
   const envelopes: Envelope<AnyRecord>[] = records.map((r) => ({
     meta: {
       type: r.type,
@@ -51,6 +59,6 @@ export function fixtureRecords(): PackRecord[] {
   return structuredClone(fixturePack().records);
 }
 
-export function fixtureDataset(): Dataset {
+export function fixtureDataset(): DatasetView {
   return datasetFrom(fixturePack().records);
 }

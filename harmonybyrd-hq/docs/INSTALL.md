@@ -39,7 +39,8 @@ npm run setup
    `__GENERATED_…__` placeholders still left in it. Either way it makes `.env.local` readable by its
    owner only (0600), and warns if it was readable by others. It then stops if `HQ_JWT_SECRET` is
    still a placeholder or shorter than 32 characters, or `DATABASE_URL` still holds the placeholder password;
-2. applies the migrations in `supabase/migrations` and creates the application login role;
+2. applies the migrations in `supabase/migrations` (`0001_foundation.sql` to `0008_review_round3.sql`,
+   in order) and creates the application login role;
 3. creates the local identities — `founder`, `developer`, `reader` (people) and `claude`, `chatgpt`
    (AI clients) — and prints a passphrase or API token for each, once, saving them in
    `.hq-local-credentials.json` (also made owner-only, 0600, on every run);
@@ -121,6 +122,7 @@ by `_` and lower-case letters, digits or underscores (for example `hq_test_ci`),
 | `npm run test:e2e` | Browser suite (Playwright, Chromium) |
 | `npm run test:all` | All of the above; writes docs/TEST-RESULTS.md |
 | `npm run test:repeat` | Runs the suites twice and compares every outcome |
+| `npm run test:mutation` | Removes one database protection at a time and checks that a test notices; a full run writes `tests/mutation/RESULTS.txt` |
 
 ## Environment
 
@@ -128,7 +130,7 @@ by `_` and lower-case letters, digits or underscores (for example `hq_test_ci`),
 | --- | --- | --- |
 | `HQ_ADMIN_DATABASE_URL` | setup, migrations, seeding, tests | Owner connection. **Never used by the web application** |
 | `DATABASE_URL` | web application | The application's login role: it owns nothing and can only assume the API roles |
-| `HQ_JWT_SECRET` | web application | Signs session cookies (HS256, at least 32 characters; the application refuses to start with a placeholder or a shorter value) |
+| `HQ_JWT_SECRET` | web application | Signs session cookies and the sign-in device cookie (HS256, at least 32 characters; the application refuses to start with a placeholder or a shorter value). Changing it ends every session and every device cookie |
 | `HQ_PACK_DIR` | seeding | Which pack `npm run db:seed` imports |
 | `HQ_BASE_URL` | web application | Address shown in the connection guide |
 | `HQ_GITHUB_TOKEN`, `HQ_GITHUB_REPOSITORIES` | optional | Read-only GitHub adapter; look-ups only for the listed repositories (`owner/name`, comma-separated). Empty = “not configured” |
@@ -163,8 +165,11 @@ exists only in a signed-in session.
 **Sessions** last twelve hours. Signing out ends every session of that person, in every browser;
 so does setting a new passphrase. Changing `HQ_JWT_SECRET` signs everyone out. API tokens are not
 affected: revoke them on *AI & API access*. A successful sign-in also leaves a device cookie
-(`hq_device`, 180 days) that lets that browser sign in while someone floods the sign-in page with
-wrong passphrases; it authenticates nothing, and signing out does not remove it (docs/SECURITY.md).
+(`hq_device`, 180 days) that lets that browser sign in while someone keeps sending wrong passphrases
+to the sign-in page; it authenticates nothing, and signing out does not remove it (docs/SECURITY.md).
+A sign-in name longer than 41 characters or a passphrase longer than 1,024 is refused at once, so
+setting a passphrase longer than 1,024 characters (`npm run setup`, `npm run credentials`) is
+refused with a message saying so: it could never be used.
 
 **Supabase.** The schema follows Supabase conventions (roles `anon`, `authenticated`, `service_role`;
 claims in `request.jwt.claims`; row-level security), and the migrations sit in `supabase/migrations`.

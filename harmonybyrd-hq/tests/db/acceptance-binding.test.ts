@@ -171,19 +171,21 @@ describe("D2 — a founder acceptance binds to what was accepted", () => {
   });
 
   it("once a founder decision clears the acceptance (state none), proposals are possible again", async () => {
-    await accept("build", "BLD-FX-02", "none");
+    // BLD-FX-01 (a candidate, accepted in HQ above). BLD-FX-02 is reported as accepted by a source, so it
+    // stays frozen for proposals whatever its HQ acceptance (ROUND3 G1a).
+    await accept("build", "BLD-FX-01", "none");
     const id = idOf(
       await submitChangeProposal(w.claude, {
         title: "Name the file",
         rationale: "The handover names it.",
         base_rev: await head(),
-        target: { type: "build", id: "BLD-FX-02", base_version: await versionOf("build", "BLD-FX-02") },
-        set: { filename: "beta-build-2.html" },
+        target: { type: "build", id: "BLD-FX-01", base_version: await versionOf("build", "BLD-FX-01") },
+        set: { filename: "alpha-candidate-7.html" },
       }),
     );
     const filed = await reviewProposal(w.founder, id, "accept");
-    expect(filed.record_id).toBe("BLD-FX-02");
-    const status = acceptanceStatus((await getDataset(w.founder)).ds, "build", "BLD-FX-02")!;
+    expect(filed.record_id).toBe("BLD-FX-01");
+    const status = acceptanceStatus((await getDataset(w.founder)).ds, "build", "BLD-FX-01")!;
     expect(status.headline).not.toBe("accepted_in_hq");
   });
 });

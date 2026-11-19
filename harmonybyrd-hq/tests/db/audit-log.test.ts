@@ -14,6 +14,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { claimsFor } from "@/lib/auth/principal";
 import { audit } from "@/lib/server/db";
 import { submitChangeProposal } from "@/lib/server/services";
+import { TOOLS } from "@/lib/server/tools";
 import { admin, asAppRole, freshWorld, type TestWorld } from "../helpers/db";
 
 let w: TestWorld;
@@ -289,6 +290,111 @@ describe("F4 — hq.log_access accepts only what the application logs as allowed
       expect(await auditCount()).toBe(before);
       await client.query("select hq.log_event('proposal.submit', null, null, 'denied', $1::jsonb, null)", [JSON.stringify({ pad: "small" })]);
       expect(await auditCount()).toBe(before + 1);
+    } finally {
+      await client.end();
+    }
+  });
+});
+
+describe("G2 — audit actions are bounded, and none reads like a founder act", () => {
+  // Every action the application records as allowed (grep of src/ for withApi( and audit(…"allowed"):
+  // api.index, api.whoami, tools.list, integrations.read, proposal.read, session.sign_in, and
+  // tool.<name> / mcp.<name> for every tool in the registry. Taken from the registry itself, so a new
+  // tool whose name the database would refuse fails here.
+  const LOGGED_AS_ALLOWED = [
+    "api.index",
+    "api.whoami",
+    "tools.list",
+    "integrations.read",
+    "proposal.read",
+    "session.sign_in",
+    "session.sign_out",
+    "session.end_all",
+    ...TOOLS.flatMap((t) => [`tool.${t.name}`, `mcp.${t.name}`]),
+  ];
+  // What the application records as refused (log_refusal), besides the families above.
+  const LOGGED_AS_REFUSED = ["proposal.submit", "proposal.review", "decision.record", "credential.issue", "defect.report", "evidence.submit", "mcp.connect", "session.sign_in", "session.end_all"];
+  const READS_LIKE_A_FOUNDER_ACT = [
+    "mcp.record_founder_decision",
+    "api.decision.record",
+    "api.proposal.review",
+    "api.founder.accept",
+    "mcp.proposal.review",
+    "mcp.decision.record",
+    "tool.review_proposal",
+    "tool.record_founder_decision",
+    "tool.accept_proposal",
+    "tool.reject_proposal",
+    "mcp.approve",
+    "tool.revoke_credential",
+    "mcp.issue_token",
+    "tool.withdraw_proposal",
+    "api.register_client",
+    "tool.credential_list",
+    "tool.decide",
+    "mcp.get_acceptance_status_and_accept",
+    "tool.get_review_items_review",
+    "api..",
+    "api." + "a".repeat(100_000),
+    "mcp." + "a".repeat(61),
+    "tool." + "a".repeat(61),
+    "api." + "a".repeat(41),
+  ];
+
+  it("no tool and no action the application logs as allowed contains a refused word or is longer than its bound", () => {
+    for (const action of LOGGED_AS_ALLOWED) expect(action.length, action).toBeLessThanOrEqual(80);
+    for (const action of LOGGED_AS_REFUSED) expect(action.length, action).toBeLessThanOrEqual(80);
+  });
+
+  it("names that read like founder acts, or are too long, are refused with HQ422 for every caller, and nothing is written", async () => {
+    const before = await auditCount();
+    for (const action of READS_LIKE_A_FOUNDER_ACT) {
+      for (const who of [w.claude, w.developer, w.reader, w.founder]) {
+        await expect(
+          asAppRole("authenticated", claimsFor(who), (c) => c.query("select hq.log_access($1, 'decision', 'FD-HQ-0001', 'srv-g2')", [action])),
+          `${who.handle} ${action.slice(0, 60)}`,
+        ).rejects.toMatchObject({ code: "HQ422", message: expect.stringMatching(/cannot be recorded as allowed here/) });
+      }
+    }
+    expect(await auditCount()).toBe(before);
+  });
+
+  it("every action the application really logs as allowed is still recorded, for each kind of caller", async () => {
+    for (const action of LOGGED_AS_ALLOWED) {
+      for (const who of [w.claude, w.reader, w.founder]) {
+        await asAppRole("authenticated", claimsFor(who), (c) => c.query("select hq.log_access($1, null, null, 'req-g2')", [action]));
+        expect(await lastAudit(), `${who.handle} ${action}`).toMatchObject({ principal_handle: who.handle, action, outcome: "allowed", request_id: "req-g2" });
+      }
+    }
+  });
+
+  it("log_refusal refuses an action longer than 80 characters (HQ422), as anon too, and nothing is written", async () => {
+    const before = await auditCount();
+    for (const action of ["api." + "a".repeat(200_000), "proposal." + "r".repeat(72), "tool." + "a".repeat(76)]) {
+      await expect(asAppRole("anon", {}, refusal([action, "t".repeat(100), "o".repeat(100), "denied", null, null]))).rejects.toMatchObject({ code: "HQ422" });
+      await expect(asAppRole("authenticated", claimsFor(w.claude), refusal([action, null, null, "denied", null, null]))).rejects.toMatchObject({ code: "HQ422" });
+    }
+    expect(await auditCount()).toBe(before);
+    // 80 characters is still recorded, and every action the application logs as refused is too.
+    const eighty = "tool." + "a".repeat(75);
+    await asAppRole("anon", {}, refusal([eighty, null, null, "denied", null, null]));
+    expect((await lastAudit()).action).toBe(eighty);
+    for (const action of [...LOGGED_AS_REFUSED, ...LOGGED_AS_ALLOWED]) {
+      await asAppRole("anon", {}, refusal([action, null, null, "denied", null, "req-g2r"]));
+      expect(await lastAudit(), action).toMatchObject({ action, outcome: "denied", request_id: "req-g2r" });
+    }
+  });
+
+  it("the audit log itself refuses an action longer than 80 characters from any writer (a NOT VALID check)", async () => {
+    const client = await admin();
+    try {
+      const constraint = await client.query<{ convalidated: boolean; def: string }>(
+        "select convalidated, pg_get_constraintdef(oid) as def from pg_constraint where conname = 'audit_log_action_size' and conrelid = 'hq.audit_log'::regclass",
+      );
+      expect(constraint.rows).toEqual([{ convalidated: false, def: expect.stringMatching(/length\(action\) <= 80/) }]);
+      const before = await auditCount();
+      await expect(client.query("select hq.log_event($1, null, null, 'denied', null, null)", ["x".repeat(81)])).rejects.toMatchObject({ code: "23514" });
+      expect(await auditCount()).toBe(before);
     } finally {
       await client.end();
     }

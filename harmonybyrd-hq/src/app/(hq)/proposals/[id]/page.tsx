@@ -1,14 +1,14 @@
 import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import { ReviewForm, WithdrawForm } from "@/components/gov-forms";
-import { bindingAcceptance, Card, Chip, Empty, IdTag, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
+import { bindingAcceptance, Card, Chip, Empty, IdTag, KnownLink, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
 import { isFounderSession } from "@/lib/auth/principal";
 import { HqError } from "@/lib/server/errors";
 import { loadPage, param, routeId, type SearchParams } from "@/lib/server/page";
 import { getProposal, proposalImpact } from "@/lib/server/services";
 import { humanise, isoDate, isoDateTime, statusLabel } from "@/lib/ui/format";
 import { recordHref } from "@/lib/ui/links";
-import { citedSources, standingFieldsSet } from "@/lib/ui/proposal-review";
+import { citedSources, reportedAcceptanceEffect, standingFieldsSet } from "@/lib/ui/proposal-review";
 
 /** What the founder's (or submitter's) action was, as a noun: "Your rejection was not applied". */
 const ACTION_NOUN: Record<string, string> = {
@@ -42,7 +42,7 @@ function show(value: unknown): string {
 
 export default async function ProposalPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: SearchParams }) {
   const { id } = await params;
-  const { principal, ctx, params: query } = await loadPage(searchParams, { pinnable: false });
+  const { principal, ctx, stored, params: query } = await loadPage(searchParams, { pinnable: false });
   let proposal;
   try {
     proposal = await getProposal(principal, routeId(id));
@@ -50,7 +50,9 @@ export default async function ProposalPage({ params, searchParams }: { params: P
     if (error instanceof HqError && error.status === 404) notFound();
     throw error;
   }
-  const impact = await proposalImpact(principal, proposal);
+  // The same function the tests exercise: references and lineage from the conformed view, "before"
+  // values and the target's acceptance from the record as stored (G11b).
+  const impact = await proposalImpact(principal, proposal, ctx);
   const founder = isFounderSession(principal);
   const open = proposal.status === "submitted";
   const mine = proposal.submitted_by === principal.handle;
@@ -78,6 +80,13 @@ export default async function ProposalPage({ params, searchParams }: { params: P
   // F9: for a new record, the context is what it cites; and a proposal that sets where a record stands says so.
   const cited = impact.op === "create" ? citedSources(ctx.ds, impact.record) : [];
   const standingFields = standingFieldsSet(proposal.payload);
+  // G1a: a build reported as accepted can only have that acceptance withdrawn by proposal. Its standing
+  // before the change: as the proposal's "before" shows it when it sets the standing, else as it is stored
+  // now (the acceptance rule compares the stored standing).
+  const standingChange = impact.op === "update" ? impact.changes.find((c) => c.field === "standing") : undefined;
+  const standingBefore =
+    standingChange?.before ?? (open && proposal.target_type === "build" && proposal.target_id ? stored.get("build", proposal.target_id)?.data.standing : undefined);
+  const reportedEffect = reportedAcceptanceEffect(proposal.payload, proposal.target_type, standingBefore);
   const madeByPreview = impact.op === "create" && impact.record_type === "recommendation" ? `Proposed through the inbox by ${proposal.submitted_by}` : null;
 
   return (
@@ -109,6 +118,12 @@ export default async function ProposalPage({ params, searchParams }: { params: P
           recorded in HQ ({acceptance.decision_id}), and a record carrying one cannot be changed by proposal. To change the record, first record a founder
           decision that clears the {acceptance.state === "accepted" ? "acceptance" : "rejection"}; otherwise reject this proposal or ask for a new record
           instead.
+        </Notice>
+      ) : null}
+      {open && !acceptance && reportedEffect === "keeps" ? (
+        <Notice tone="bad">
+          <strong>This proposal cannot be accepted as it stands.</strong> A source reports its target build as accepted, and a proposal may only withdraw
+          that acceptance, by setting the build&apos;s standing to another value. Reject this proposal or ask for changes.
         </Notice>
       ) : null}
       {open ? (
@@ -302,10 +317,16 @@ export default async function ProposalPage({ params, searchParams }: { params: P
                   {impact.sources.map((s) => (
                     <li key={s.id}>
                       <span>
-                        <Link className="li-title" href={recordHref("source", s.id)}>
-                          {s.title}
-                        </Link>{" "}
-                        <IdTag id={s.id} />
+                        {ctx.ds.source(s.id) ? (
+                          <>
+                            <Link className="li-title" href={recordHref("source", s.id)}>
+                              {s.title}
+                            </Link>{" "}
+                            <IdTag id={s.id} />
+                          </>
+                        ) : (
+                          <KnownLink ds={ctx.ds} type="source" id={s.id} />
+                        )}
                       </span>
                       <div className="li-note">
                         {isoDate(s.date)} · {humanise(s.authority)} · {s.citations.length} quotation{s.citations.length === 1 ? "" : "s"} used by the record
@@ -325,6 +346,18 @@ export default async function ProposalPage({ params, searchParams }: { params: P
                 <li>
                   It sets where the record stands ({standingFields.join(", ")}). That changes what HQ shows as tested, accepted or decided: check the
                   sources for it before accepting.
+                </li>
+              ) : null}
+              {reportedEffect === "withdraws" ? (
+                <li>
+                  It withdraws a reported acceptance: a source reports this build as accepted, and after this change HQ no longer shows it as accepted. The other
+                  fields it changes can be changed by proposal only because it withdraws the acceptance.
+                </li>
+              ) : null}
+              {reportedEffect === "keeps" ? (
+                <li>
+                  It changes a build that a source reports as accepted without withdrawing that acceptance. A proposal may only withdraw it, so accepting this
+                  proposal will be refused.
                 </li>
               ) : null}
               {evidence.length === 0 ? <li>No supporting evidence was attached.</li> : null}

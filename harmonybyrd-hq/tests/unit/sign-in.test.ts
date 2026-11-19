@@ -1,6 +1,42 @@
-import { describe, expect, it } from "vitest";
-import { safeNext } from "@/lib/auth/safe-next";
-import { baseDelayFromEnv, delayFor, SignInThrottle } from "@/lib/auth/throttle";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_NEXT_LENGTH, safeNext } from "@/lib/auth/safe-next";
+import { MAX_HANDLE_LENGTH, MAX_PASSPHRASE_LENGTH, tooLongSignInInput } from "@/lib/auth/sign-in-input";
+import { baseDelayFromEnv, delayFor, SignInThrottle, signInThrottle } from "@/lib/auth/throttle";
+
+// The sign-in action is run here with its outside world replaced, so the test can see what it touches.
+const touched = vi.hoisted(() => ({ cookies: 0, headers: 0, lookups: 0, passphraseChecks: 0, audits: [] as Record<string, unknown>[] }));
+vi.mock("next/headers", () => ({
+  cookies: async () => {
+    touched.cookies += 1;
+    return { get: () => undefined, set: () => undefined, delete: () => undefined };
+  },
+  headers: async () => {
+    touched.headers += 1;
+    return new Headers();
+  },
+}));
+vi.mock("next/navigation", () => ({
+  redirect: (to: string) => {
+    throw new Error(`redirect ${to}`);
+  },
+}));
+vi.mock("@/lib/auth/authenticate", () => ({
+  authenticatePassphrase: async () => {
+    touched.passphraseChecks += 1;
+    return null;
+  },
+  authenticateSessionToken: async () => null,
+  loginPrincipalId: async () => {
+    touched.lookups += 1;
+    return null;
+  },
+}));
+vi.mock("@/lib/server/db", () => ({
+  audit: async (_claims: unknown, event: Record<string, unknown>) => {
+    touched.audits.push(event);
+  },
+  writeAs: async () => undefined,
+}));
 
 describe("after sign-in, HQ only ever redirects to a page on HQ (api-1, ui-4)", () => {
   it.each(["/", "/requirements?x=1#h", "/a/b", "/proposals/PROP-000012#a", "/records/build/BLD-FX-01?rev=1"])("keeps %j", (path) => {
@@ -145,5 +181,69 @@ describe("sign-in throttle: a growing delay per name, never a lock-out (api-2, d
     expect(baseDelayFromEnv({ NODE_ENV: "development", HQ_SIGNIN_BASE_DELAY_MS: "10" })).toBe(10);
     expect(baseDelayFromEnv({ NODE_ENV: "development", HQ_SIGNIN_BASE_DELAY_MS: "0" })).toBe(500);
     expect(baseDelayFromEnv({ NODE_ENV: "development" })).toBe(500);
+  });
+});
+
+describe("the sign-in form has a maximum name and passphrase length (G7, round 3)", () => {
+  const form = (handle: string, passphrase: string) => {
+    const fd = new FormData();
+    fd.append("handle", handle);
+    fd.append("passphrase", passphrase);
+    fd.append("next", "/");
+    return fd;
+  };
+  beforeEach(() => {
+    Object.assign(touched, { cookies: 0, headers: 0, lookups: 0, passphraseChecks: 0, audits: [] });
+    globalThis.__hqSignInThrottle = new SignInThrottle({ sleep: async () => undefined });
+  });
+
+  it("the limits: 41 characters of name (the database's handle check), 1,024 of passphrase", () => {
+    expect(MAX_HANDLE_LENGTH).toBe(41);
+    expect(MAX_PASSPHRASE_LENGTH).toBe(1024);
+    expect(tooLongSignInInput("a".repeat(41), "p".repeat(1024))).toBeNull();
+    expect(tooLongSignInInput("a".repeat(42), "p")).toEqual({ field: "name", length: 42 });
+    expect(tooLongSignInInput("a", "p".repeat(1025))).toEqual({ field: "passphrase", length: 1025 });
+    // Lower-casing can lengthen a name: 30 x "İ" is 30 characters typed, 60 once lower-cased.
+    expect(tooLongSignInInput("İ".repeat(30), "p")).toEqual({ field: "name", length: 30 });
+  });
+
+  it.each([
+    ["a 900 KB name", "M".repeat(900_000), "x"],
+    ["a 42-character name", "a".repeat(42), "x"],
+    ["a 65-character name with spaces round it", `  ${"n".repeat(65)}  `, "x"],
+    ["a 2,000-character passphrase", "founder", "p".repeat(2000)],
+  ])("%s is answered 'do not match' at once: no lane, no look-up, no passphrase check, no cookie read", async (_label, handle, passphrase) => {
+    const { signIn } = await import("@/app/sign-in/actions");
+    const before = signInThrottle().size;
+    expect(await signIn(undefined, form(handle, passphrase))).toEqual({ error: "That name and passphrase do not match." });
+    expect(signInThrottle().size).toBe(before);
+    expect(signInThrottle().inProgress).toEqual({ anonymous: 0, device: 0 });
+    expect(touched).toMatchObject({ cookies: 0, headers: 0, lookups: 0, passphraseChecks: 0 });
+    // Audited with the length, never the value.
+    expect(touched.audits).toHaveLength(1);
+    const row = JSON.stringify(touched.audits[0]);
+    expect(row.length).toBeLessThan(300);
+    expect(touched.audits[0]).toMatchObject({ action: "session.sign_in", outcome: "denied" });
+    const field = passphrase.length > 1024 ? "passphrase" : "name";
+    expect(touched.audits[0].detail).toEqual({ reason: `${field}_too_long`, [`${field}_length`]: (field === "name" ? handle.trim() : passphrase).length });
+    expect(row).not.toContain(field === "name" ? handle.trim() : passphrase);
+  });
+
+  it("a name and passphrase within the limits still go through the throttle and the passphrase check", async () => {
+    const { signIn } = await import("@/app/sign-in/actions");
+    expect(await signIn(undefined, form("a".repeat(41), "p".repeat(1024)))).toEqual({ error: "That name and passphrase do not match." });
+    expect(touched.passphraseChecks).toBe(1);
+    expect(signInThrottle().size).toBe(1);
+    expect(signInThrottle().failures("a".repeat(41))).toBe(1);
+  });
+});
+
+describe("the next parameter has a maximum length (G7 class, round 3)", () => {
+  it("a path longer than 2,048 characters falls back to /", () => {
+    expect(MAX_NEXT_LENGTH).toBe(2048);
+    const ok = `/${"a".repeat(2047)}`;
+    expect(safeNext(ok)).toBe(ok);
+    expect(safeNext(`/${"a".repeat(2048)}`)).toBe("/");
+    expect(safeNext(`/${"a".repeat(1_000_000)}`)).toBe("/");
   });
 });

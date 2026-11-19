@@ -5,7 +5,7 @@ import { Card, Chip, Empty, IdTag, PageHead, RecordLink, Tile } from "@/componen
 import { developmentHealth, ecosystemOverview, missingWork } from "@/lib/domain/derive";
 import { loadPage, type SearchParams } from "@/lib/server/page";
 import { listChanges } from "@/lib/server/store";
-import { isoDateTime, plural } from "@/lib/ui/format";
+import { humanise, isoDateTime, plural } from "@/lib/ui/format";
 import { HEALTH_META, MISSING_META, type MissingKey } from "@/lib/ui/health-meta";
 import { withRev } from "@/lib/ui/links";
 import { layoutMap } from "@/lib/ui/map-layout";
@@ -200,7 +200,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
                   </Link>
                 </div>
                 <div className="li-note">
-                  {isoDateTime(c.created_at)} · by {c.created_by} · {c.kind.replaceAll("_", " ")}
+                  {isoDateTime(c.created_at)} · by {c.created_by} · {humanise(c.kind).toLowerCase()}
                   {c.commission_ref ? ` · commission ${c.commission_ref}` : ""} · {plural(c.changes.length, "record version")}
                 </div>
               </li>

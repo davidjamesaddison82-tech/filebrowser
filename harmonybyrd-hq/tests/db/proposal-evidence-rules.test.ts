@@ -770,8 +770,9 @@ describe("D1d — the founder's review shows what the proposal touches", () => {
       title: "Restate the beta build",
       rationale: "Tidier statement.",
       base_rev: (await getDataset(w.founder)).head,
-      target: { type: "build", id: "BLD-FX-02", base_version: await baseVersion("build", "BLD-FX-02") },
-      set: { statement: { text: "Beta build 2, accepted for desktop.", epistemic: "submitter_claim", citations: [] }, sha256: "2".repeat(64), label: "Beta build 2" },
+      // BLD-FX-01: a build a source reports as accepted (BLD-FX-02) is frozen for proposals (ROUND3 G1a).
+      target: { type: "build", id: "BLD-FX-01", base_version: await baseVersion("build", "BLD-FX-01") },
+      set: { statement: { text: "Alpha candidate 7, not accepted.", epistemic: "submitter_claim", citations: [] }, sha256: "2".repeat(64), label: "Alpha candidate 7" },
     });
     const impact = await proposalImpact(w.founder, await getProposal(w.founder, (submitted.proposal as { id: string }).id));
     expect(impact.sensitive_fields).toEqual(expect.arrayContaining(["statement", "sha256"]));
@@ -803,10 +804,21 @@ describe("F1 — a proposal cannot introduce a claim of acceptance: what still g
     }
   });
 
-  it("control: a build already reported as accepted can still be renamed, and restating its standing is allowed", async () => {
-    const id = await submitAs(w.claude, { type: "build", id: "BLD-FX-02" }, { label: "beta-build-2 (desktop)", standing: "accepted_reported" });
-    await reviewProposal(w.founder, id, "accept");
-    expect(await data("build", "BLD-FX-02")).toMatchObject({ label: "beta-build-2 (desktop)", standing: "accepted_reported" });
+  it("a build already reported as accepted can no longer be renamed by proposal, even restating its standing (ROUND3 G1a; was a control)", async () => {
+    const before = await worldState();
+    const err = await expectStatus(
+      submitChangeProposal(w.claude, {
+        title: "F1 probe",
+        rationale: "F1 regression probe.",
+        base_rev: (await getDataset(w.founder)).head,
+        target: { type: "build", id: "BLD-FX-02", base_version: await baseVersion("build", "BLD-FX-02") },
+        set: { label: "beta-build-2 (desktop)", standing: "accepted_reported" },
+      }),
+      403,
+    );
+    expect(err.message).toMatch(/a build reported as accepted is changed only by an import or a founder decision; a proposal may only withdraw the reported acceptance/i);
+    expect(await worldState()).toEqual(before);
+    expect(await data("build", "BLD-FX-02")).toMatchObject({ label: "Beta build 2", standing: "accepted_reported" });
   });
 
   it("control: a module's lifecycle can change elsewhere while its reported acceptance stays identical", async () => {
@@ -819,17 +831,28 @@ describe("F1 — a proposal cannot introduce a claim of acceptance: what still g
     expect(after.founder_accepted).toEqual((fixtureData("MOD-FX-BETA").lifecycle as Record<string, unknown>).founder_accepted);
   });
 
-  it("at acceptance a build's standing is re-checked against the record as it stands then: refused with 403, not applied, still submitted", async () => {
-    // Allowed when submitted: BLD-FX-02 is reported as accepted, and this leaves its standing as it is.
-    const restate = await submitAs(w.claude, { type: "build", id: "BLD-FX-02" }, { label: "beta-build-2 (restated)", standing: "accepted_reported" });
-    // Then the founder files a correction: the build is only a candidate.
-    await reviewProposal(w.founder, await submitAs(w.developer, { type: "build", id: "BLD-FX-02" }, { standing: "candidate_not_accepted" }), "accept");
+  it("at acceptance a build is re-checked against the record as it stands then: refused with 403, not applied, still submitted", async () => {
+    // Allowed when submitted: BLD-FX-01 is a candidate, and this renames it.
+    const rename = await submitAs(w.claude, { type: "build", id: "BLD-FX-01" }, { label: "alpha-candidate-7 (renamed)" });
+    // Then an import reports it as accepted. (A proposal could not: ROUND3 G1a and F1.)
+    const client = await admin();
+    try {
+      const imported = { ...(await data("build", "BLD-FX-01")), standing: "accepted_reported", statement: { text: "Accepted.", epistemic: "reported", citations: [BETA_ACCEPTED] } };
+      await client.query("select hq.admin_put_records($1::jsonb, 'Import: alpha reported as accepted', null, 'hq-import', false)", [
+        JSON.stringify([{ type: "build", id: "BLD-FX-01", data: imported }]),
+      ]);
+    } finally {
+      await client.end();
+    }
     const before = await worldState();
-    const err = await expectStatus(reviewProposal(w.founder, restate, "accept"), 403);
-    expect(err.message).toMatch(ACCEPTANCE_RULE);
+    const err = await expectStatus(reviewProposal(w.founder, rename, "accept"), 403);
+    expect(err.message).toMatch(/a build reported as accepted is changed only by an import or a founder decision/i);
     expect(await worldState()).toEqual(before);
-    expect((await getProposal(w.founder, restate)).status).toBe("submitted");
-    expect(await data("build", "BLD-FX-02")).toMatchObject({ standing: "candidate_not_accepted" });
+    expect((await getProposal(w.founder, rename)).status).toBe("submitted");
+    expect(await data("build", "BLD-FX-01")).toMatchObject({ standing: "accepted_reported", label: "alpha-candidate-7" });
+    // Withdrawing the reported acceptance is still allowed, and returns the build to a candidate.
+    await reviewProposal(w.founder, await submitAs(w.developer, { type: "build", id: "BLD-FX-01" }, { standing: "candidate_not_accepted" }), "accept");
+    expect(await data("build", "BLD-FX-01")).toMatchObject({ standing: "candidate_not_accepted" });
   });
 
   it("at acceptance a module's founder_accepted is re-checked the same way", async () => {

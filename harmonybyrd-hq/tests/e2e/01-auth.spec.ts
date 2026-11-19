@@ -125,6 +125,25 @@ test.describe("signing in", () => {
     }
   });
 
+  // G7 (round 3): a name or passphrase over its limit is answered at once with the usual message, and
+  // never reaches the name's lane: the ordinary attempts after it start from no failures.
+  test("an over-long name or passphrase gets the usual message at once, and does not count against the name", async ({ page }) => {
+    await page.goto("/sign-in");
+    const alert = page.getByRole("alert").filter({ hasText: /./ });
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      expect(await timedAttempt(page, "reader", `${"p".repeat(2000)}${attempt}`)).toBeLessThan(1500);
+      await expect(alert).toContainText("That name and passphrase do not match.");
+    }
+    expect(await timedAttempt(page, "n".repeat(5000), "anything")).toBeLessThan(1500);
+    await expect(alert).toContainText("That name and passphrase do not match.");
+    // Eight over-long attempts for "reader" were not failures in its lane, so the right passphrase waits
+    // for nothing (eight failures would make it wait 1.6 s).
+    const started = Date.now();
+    await signInThroughForm(page, "reader");
+    expect(Date.now() - started).toBeLessThan(1200);
+    await expect(page.getByText("Reader · signed in")).toBeVisible();
+  });
+
   for (const next of ["/%09/evil.example/", "/.%2F%2Fevil.example", "/%5Cevil.example", "/%0a/evil.example/"]) {
     test(`signing in with next=${next} stays on HQ`, async ({ page, baseURL }) => {
       const offSite: string[] = [];

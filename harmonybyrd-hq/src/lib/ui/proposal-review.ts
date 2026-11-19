@@ -1,12 +1,18 @@
-import { citedSourceIds, type Dataset } from "@/lib/domain/dataset";
+import type { DatasetView } from "@/lib/domain/conform";
+import { citedSourceIds } from "@/lib/domain/dataset";
+import { BUILD_STANDINGS } from "@/lib/domain/schemas";
 
 /**
  * What the founder's review screen says about a proposal (F9): the sources a proposed new record
  * cites, and the fields whose change alters what HQ shows as tested, accepted or decided.
  */
 
-/** Fields that state where a record stands. A proposal that sets any of them gets its own line under "Known risks to weigh". */
-export const STANDING_FIELDS: readonly string[] = ["lifecycle", "standing", "status", "type", "result"];
+/**
+ * Fields that state where a record stands, or what a source is said to say about it (a build's
+ * statement is what its reported acceptance rests on, G1a). A proposal that sets any of them gets its
+ * own line under "Known risks to weigh".
+ */
+export const STANDING_FIELDS: readonly string[] = ["lifecycle", "standing", "statement", "status", "type", "result"];
 
 /**
  * The standing fields a proposal sets: for an update, the fields in its `set`; for a create, the
@@ -29,9 +35,24 @@ export interface CitedSource {
 }
 
 /** The sources a proposed new record cites, in the order it first cites them. */
-export function citedSources(ds: Dataset, record: unknown): CitedSource[] {
+export function citedSources(ds: DatasetView, record: unknown): CitedSource[] {
   return citedSourceIds(record).map((id) => {
     const source = ds.get("source", id);
     return { id, title: source ? source.data.title : null, textHeld: !!source && source.data.text_snapshot != null };
   });
+}
+
+/**
+ * What a proposal does to a build that a source reports as accepted (G1a): "withdraws" when it sets the
+ * standing to another valid standing; "keeps" when it changes the build and leaves the reported
+ * acceptance standing, which the database refuses; null for any other proposal. `standingBefore` is the
+ * build's standing before the change.
+ */
+export function reportedAcceptanceEffect(payload: unknown, targetType: string | null, standingBefore: unknown): "withdraws" | "keeps" | null {
+  const p = (payload ?? {}) as { op?: unknown; set?: unknown };
+  if (p.op !== "update" || targetType !== "build" || standingBefore !== "accepted_reported") return null;
+  const set = p.set && typeof p.set === "object" && !Array.isArray(p.set) ? (p.set as Record<string, unknown>) : {};
+  const after = Object.hasOwn(set, "standing") ? set.standing : standingBefore;
+  const withdraws = typeof after === "string" && after !== "accepted_reported" && (BUILD_STANDINGS as readonly string[]).includes(after);
+  return withdraws ? "withdraws" : "keeps";
 }

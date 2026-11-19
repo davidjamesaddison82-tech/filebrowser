@@ -3,8 +3,10 @@
  * against the TEST database on its own port. Tests talk to it over real HTTP.
  */
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import type { TestProject } from "vitest/node";
 import { TEST_ADMIN_URL, TEST_APP_URL, TEST_BASE_URL, TEST_JWT_SECRET, TEST_PORT } from "./env";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
@@ -36,7 +38,11 @@ export function ensureBuild(): void {
   if (result.status !== 0) throw new Error("next build failed");
 }
 
-export async function startServer(port: number, overrides: Record<string, string> = {}): Promise<ChildProcess> {
+/**
+ * Start the built server. With `logFile`, everything it prints is also appended to that file, so a
+ * test can check that what it did left no error in the server's output (tests/api/odd-values.test.ts).
+ */
+export async function startServer(port: number, overrides: Record<string, string> = {}, logFile?: string): Promise<ChildProcess> {
   // Run Next directly (not through npx) so that stopping the child stops the server itself.
   const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
   const child = spawn(process.execPath, [nextBin, "start", "-p", String(port)], {
@@ -45,8 +51,12 @@ export async function startServer(port: number, overrides: Record<string, string
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";
-  child.stdout?.on("data", (d) => (log += d));
-  child.stderr?.on("data", (d) => (log += d));
+  const keep = (d: Buffer) => {
+    log += d;
+    if (logFile) appendFileSync(logFile, d);
+  };
+  child.stdout?.on("data", keep);
+  child.stderr?.on("data", keep);
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     try {
@@ -62,9 +72,21 @@ export async function startServer(port: number, overrides: Record<string, string
   throw new Error(`server did not start within 60s:\n${log}`);
 }
 
-export default async function setup() {
+declare module "vitest" {
+  export interface ProvidedContext {
+    /** The process id of the test server, so a test can read its memory use (tests/api/sign-in.test.ts). */
+    serverPid: number;
+    /** A file that holds everything the test server has printed (outside the repository). */
+    serverLog: string;
+  }
+}
+
+export default async function setup(project: TestProject) {
   ensureBuild();
-  const child = await startServer(TEST_PORT);
+  const logFile = path.join(mkdtempSync(path.join(os.tmpdir(), "hq-api-server-")), "server.log");
+  const child = await startServer(TEST_PORT, {}, logFile);
+  if (child.pid !== undefined) project.provide("serverPid", child.pid);
+  project.provide("serverLog", logFile);
   return async () => {
     child.stdout?.destroy();
     child.stderr?.destroy();

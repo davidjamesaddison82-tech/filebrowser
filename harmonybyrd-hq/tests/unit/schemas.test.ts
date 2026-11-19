@@ -2,7 +2,20 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { collectCitations } from "@/lib/domain/dataset";
 import { SourceTexts, validateRecords } from "@/lib/domain/pack";
-import { BUILD_ONLY_FIELDS, type RecordType, safeParseRecord, STRUCTURED_FIELDS } from "@/lib/domain/schemas";
+import {
+  BUILD_ONLY_FIELDS,
+  Claim,
+  EPISTEMIC,
+  FIELD_ENUMS,
+  fieldEnumProblem,
+  LIFECYCLE_DIMENSIONS,
+  LIFECYCLE_STATES,
+  RECORD_SCHEMAS,
+  RECORD_TYPES,
+  type RecordType,
+  safeParseRecord,
+  STRUCTURED_FIELDS,
+} from "@/lib/domain/schemas";
 import { FIXTURE_DIR, fixturePack } from "../helpers/fixture";
 
 const texts = () => new SourceTexts(path.join(FIXTURE_DIR, "source-text"));
@@ -182,4 +195,61 @@ describe("dates are ISO dates or null (honesty-5)", () => {
       }
     });
   }
+});
+
+/** The values a zod enum or literal allows, through optional / nullable / default wrappers; null for anything else. */
+function choicesOf(schema: unknown): string[] | null {
+  let current = schema as { _zod: { def: { type: string; innerType?: unknown; entries?: Record<string, string>; values?: unknown[] } } };
+  while (["optional", "nullable", "default", "prefault", "readonly", "catch", "nonoptional"].includes(current._zod.def.type) && current._zod.def.innerType) {
+    current = current._zod.def.innerType as typeof current;
+  }
+  const def = current._zod.def;
+  if (def.type === "enum") return Object.values(def.entries!);
+  if (def.type === "literal") return def.values!.map(String);
+  return null;
+}
+
+describe("G1c — FIELD_ENUMS is the record schemas' own lists", () => {
+  const shape = (type: RecordType) => (RECORD_SCHEMAS[type] as unknown as { shape: Record<string, unknown> }).shape;
+
+  it("every top-level field the schemas restrict to a list is in FIELD_ENUMS, with exactly the schema's values", () => {
+    for (const type of RECORD_TYPES) {
+      for (const [field, schema] of Object.entries(shape(type))) {
+        const choices = choicesOf(schema);
+        if (!choices) continue;
+        const row = FIELD_ENUMS.find((f) => f.type === type && f.path === field);
+        expect(row, `${type}.${field}`).toBeDefined();
+        expect([...row!.allowed], `${type}.${field}`).toEqual(choices);
+      }
+    }
+  });
+
+  it("every FIELD_ENUMS row names a real field, and the nested rows use the schema's lists", () => {
+    for (const row of FIELD_ENUMS) {
+      if (row.type === "*") {
+        expect(row.path).toBe("**.epistemic");
+        expect([...row.allowed]).toEqual(choicesOf((Claim as unknown as { shape: Record<string, unknown> }).shape.epistemic));
+        continue;
+      }
+      const top = row.path.split(".")[0];
+      expect(shape(row.type), `${row.type}.${row.path}`).toHaveProperty(top);
+      if (row.path === top) expect([...row.allowed]).toEqual(choicesOf(shape(row.type)[top]));
+    }
+    const lifecycle = (path: string) => [...FIELD_ENUMS.find((f) => f.type === "module" && f.path === path)!.allowed];
+    expect(lifecycle("lifecycle.*")).toEqual([...LIFECYCLE_DIMENSIONS]);
+    expect(lifecycle("lifecycle.*.state")).toEqual([...LIFECYCLE_STATES]);
+    expect(lifecycle("lifecycle.*.basis")).toEqual([...EPISTEMIC]);
+  });
+
+  it("fieldEnumProblem checks only what an update sets, plus always the fields that drive acceptance", () => {
+    const build = raw("build", "BLD-FX-01");
+    const oddSeverity = { ...raw("defect", "DEF-FX-01"), severity: "critical" };
+    expect(fieldEnumProblem("defect", { title: "Renamed" }, oddSeverity)).toBeNull();
+    expect(fieldEnumProblem("defect", { severity: "critical" }, raw("defect", "DEF-FX-01"))).toMatchObject({ field: "severity" });
+    expect(fieldEnumProblem("build", { label: "x" }, { ...build, standing: "accepted" })).toMatchObject({ field: "standing" });
+    expect(fieldEnumProblem("build", { label: "x" }, build)).toBeNull();
+    expect(fieldEnumProblem("build", { standing: "accepted" }, null)).toMatchObject({ message: 'Field "standing" holds "accepted", which is not one of its allowed values.' });
+    expect(fieldEnumProblem("open_item", { statement: { text: "x", epistemic: "constructor" } }, null)).toMatchObject({ field: "epistemic" });
+    expect(fieldEnumProblem("module", { constructor: "x" }, raw("module", "MOD-FX-GAMMA"))).toBeNull();
+  });
 });

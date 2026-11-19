@@ -1,8 +1,14 @@
 /**
  * Pure derived views over a Dataset. No I/O, no clock, no randomness: the same Dataset always
  * yields the same result, which is what makes pinned-revision retrieval reproducible.
+ *
+ * Every derivation takes the conformed view (DatasetView, conform.ts), never the dataset as stored:
+ * the code below reads fields as the record schemas declare them, and a stored record of the wrong
+ * shape would make it throw or read as something it does not validly hold. The type says so, so a
+ * stored dataset cannot be passed by accident.
  */
-import { citedSourceIds, collectCitations, Dataset, type Envelope, outgoingRefs, type RecordRef, refKey } from "./dataset";
+import type { DatasetView } from "./conform";
+import { citedSourceIds, collectCitations, type Dataset, type Envelope, outgoingRefs, type RecordRef, refKey } from "./dataset";
 import { normaliseForQuote } from "./quote";
 import {
   type AnyRecord,
@@ -62,7 +68,7 @@ export interface RefSummary extends RecordRef {
   exists: boolean;
 }
 
-export function describeRef(ds: Dataset, id: string): RefSummary {
+export function describeRef(ds: DatasetView, id: string): RefSummary {
   const envelope = ds.byId(id);
   if (!envelope) {
     return { type: guessType(id), id, title: id, type_label: RECORD_TYPE_LABEL[guessType(id)], exists: false };
@@ -98,7 +104,7 @@ export function guessType(id: string): RecordType {
 const incomingCache = new WeakMap<Dataset, Map<string, RecordRef[]>>();
 
 /** Records that refer to the given id. */
-export function incomingRefs(ds: Dataset, id: string): RecordRef[] {
+export function incomingRefs(ds: DatasetView, id: string): RecordRef[] {
   let map = incomingCache.get(ds);
   if (!map) {
     map = new Map();
@@ -266,7 +272,7 @@ export interface AcceptanceStatus {
   caution: string | null;
 }
 
-export function acceptanceStatus(ds: Dataset, type: RecordType, id: string): AcceptanceStatus | null {
+export function acceptanceStatus(ds: DatasetView, type: RecordType, id: string): AcceptanceStatus | null {
   const envelope = ds.get(type, id);
   if (!envelope) return null;
   const data = envelope.data as Record<string, unknown>;
@@ -331,7 +337,7 @@ export function acceptanceStatus(ds: Dataset, type: RecordType, id: string): Acc
           ? BUILD_ACCEPTANCE_LABEL.build_acceptance_claimed
           : build.standing === "candidate_not_accepted"
             ? "Candidate — not accepted"
-            : `Build standing: ${build.standing.replaceAll("_", " ")}`;
+            : `Build standing: ${typeof build.standing === "string" ? build.standing.replaceAll("_", " ") : "not a valid value"}`;
     return {
       ...base,
       headline,
@@ -405,9 +411,18 @@ export interface EcosystemOverview {
   edges: ModuleEdge[];
 }
 
-export function ecosystemOverview(ds: Dataset): EcosystemOverview {
+/**
+ * A defect counts as open when its status says so, and also when HQ cannot read its status at all (a
+ * stored value that is not one of the listed ones). A defect must not drop out of the open work
+ * because its record is damaged: an unreadable status is counted on the cautious side. "unknown",
+ * "resolved" and "deferred" are statuses a source really gave, and are not open.
+ */
+const SETTLED_DEFECT_STATUSES = new Set(["resolved", "deferred", "unknown"]);
+export const isOpenDefect = (status: unknown) => !(typeof status === "string" && SETTLED_DEFECT_STATUSES.has(status));
+
+export function ecosystemOverview(ds: DatasetView): EcosystemOverview {
   const openDefects = countBy(
-    ds.defects.filter((d) => d.data.status === "open"),
+    ds.defects.filter((d) => isOpenDefect(d.data.status)),
     (d) => d.data.module_ids,
   );
   const reqCount = countBy(ds.requirements, (r) => r.data.module_ids);
@@ -507,7 +522,7 @@ export function enteredThroughInbox(envelope: Envelope<AnyRecord>): boolean {
   return envelope.meta.origin === "proposal_acceptance" && acceptanceOf(envelope.data)?.state !== "accepted";
 }
 
-export function developmentHealth(ds: Dataset): DevelopmentHealth {
+export function developmentHealth(ds: DatasetView): DevelopmentHealth {
   const item = (envelope: Envelope<AnyRecord>, note: string): HealthItem => ({
     type: envelope.meta.type,
     id: envelope.meta.id,
@@ -549,7 +564,7 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
     }
   }
 
-  const open_defects = ds.defects.filter((d) => d.data.status === "open").map((d) => item(d, d.data.statement.text));
+  const open_defects = ds.defects.filter((d) => isOpenDefect(d.data.status)).map((d) => item(d, d.data.statement.text));
 
   // A blocker recorded both as an open item and on the module it names, quoting the same
   // sentence, is one blocker: the module's copy is not counted again.
@@ -642,7 +657,7 @@ export function developmentHealth(ds: Dataset): DevelopmentHealth {
  * Ids that an HQ-recorded founder decision says it resolves, plus every open item that points
  * at a decision so resolved (resolving a decision also settles the items waiting on it).
  */
-export function resolvedByHqDecisions(ds: Dataset): Set<string> {
+export function resolvedByHqDecisions(ds: DatasetView): Set<string> {
   const resolved = new Set<string>();
   for (const d of ds.decisions) {
     if (d.data.recorded_in === "hq" && d.data.status === "issued") {
@@ -672,16 +687,24 @@ export interface MissingWork {
   not_in_recent_sources: { cutoff: string | null; newest: string | null; window_days: number; items: HealthItem[] };
 }
 
-const LIVE_DISPOSITIONS = new Set(["unreviewed", "active", "conflicted", "deferred"]);
+/** Dispositions that close a requirement. Every other one is live. */
+const CLOSED_DISPOSITIONS = new Set(["superseded", "withdrawn", "satisfied"]);
 
-export function missingWork(ds: Dataset, windowDays = 21): MissingWork {
+/**
+ * Is a requirement still live (unreviewed, active, conflicted or deferred)? A disposition HQ cannot
+ * read ("Not a valid value" in the conformed view) closes nothing: the requirement stays live, so it
+ * cannot drop out of the outstanding work just because its stored disposition is of the wrong kind (G11a).
+ */
+const isLive = (disposition: unknown) => !(typeof disposition === "string" && CLOSED_DISPOSITIONS.has(disposition));
+
+export function missingWork(ds: DatasetView, windowDays = 21): MissingWork {
   const item = (envelope: Envelope<AnyRecord>, note: string): HealthItem => ({
     type: envelope.meta.type,
     id: envelope.meta.id,
     title: recordTitle(envelope.meta.type, envelope.data),
     note,
   });
-  const live = ds.requirements.filter((r) => LIVE_DISPOSITIONS.has(r.data.disposition));
+  const live = ds.requirements.filter((r) => isLive(r.data.disposition));
 
   const modulesWithLoop = new Set<string>();
   for (const l of ds.loops) l.data.module_ids.forEach((m) => modulesWithLoop.add(m));
@@ -764,7 +787,7 @@ function sourceDate(s: SourceRecord): string | null {
 }
 
 /** For each module, the latest date of any source that a record about that module cites. */
-export function moduleLastSeen(ds: Dataset): Map<string, string> {
+export function moduleLastSeen(ds: DatasetView): Map<string, string> {
   const dateOf = new Map<string, string>();
   for (const s of ds.sources) {
     const date = sourceDate(s.data);
@@ -837,7 +860,7 @@ export interface ReviewItem {
   refs: RefSummary[];
 }
 
-export function reviewItems(ds: Dataset): ReviewItem[] {
+export function reviewItems(ds: DatasetView): ReviewItem[] {
   const items: ReviewItem[] = [];
   const ref = (id: string) => describeRef(ds, id);
 
@@ -1020,13 +1043,14 @@ export function reviewItems(ds: Dataset): ReviewItem[] {
  * What counts as an acceptance instrument for a build marked as accepted (F2). Only:
  *   (a) evidence of type founder_acceptance that a source reports or HQ's build checked, whose
  *       build_id is this build; or
- *   (b) a decision recorded in HQ and issued, with a set_acceptance effect that accepts this build
- *       (what hq_acceptance records).
+ *   (b) a decision recorded in HQ and issued, with a set_acceptance effect that accepts this build,
+ *       and only while the build's current hq_acceptance names that decision with state accepted
+ *       (G1e: an acceptance the founder cleared or replaced by a rejection is no instrument).
  * Nothing else counts: not a decision that merely lists the build's module, not a decision a source
  * reports (those carry no reference to a build), and never a link the build itself carries
  * (decision_ids and the like), because a proposal can set those.
  */
-export function hasAcceptanceInstrument(ds: Dataset, b: Envelope<BuildRecord>): boolean {
+export function hasAcceptanceInstrument(ds: DatasetView, b: Envelope<BuildRecord>): boolean {
   const evidence = ds.evidence.some(
     (e) =>
       e.data.build_id === b.meta.id &&
@@ -1034,10 +1058,16 @@ export function hasAcceptanceInstrument(ds: Dataset, b: Envelope<BuildRecord>): 
       (e.data.verification === "source_reported" || e.data.verification === "hq_verified"),
   );
   if (evidence) return true;
+  // G1e: a founder decision counts only while it is the one the build's current HQ acceptance names,
+  // with state accepted. An acceptance the founder later cleared, or replaced by a rejection, is none.
+  const current = acceptanceOf(b.data);
+  if (current?.state !== "accepted") return false;
   return ds.decisions.some(
     (d) =>
+      d.meta.id === current.decision_id &&
       d.data.recorded_in === "hq" &&
       d.data.status === "issued" &&
+      Array.isArray(d.data.effects) &&
       d.data.effects.some(
         (effect) => effect.type === "set_acceptance" && effect.record_type === "build" && effect.record_id === b.meta.id && effect.state === "accepted",
       ),
@@ -1064,7 +1094,7 @@ export interface SearchHit extends RecordRef {
 
 const haystackCache = new WeakMap<Dataset, Map<string, { title: string; body: string }>>();
 
-function haystacks(ds: Dataset) {
+function haystacks(ds: DatasetView) {
   let map = haystackCache.get(ds);
   if (!map) {
     map = new Map();
@@ -1088,7 +1118,7 @@ function flattenText(value: unknown): string {
 }
 
 /** Deterministic search: every term must match; ties are broken by id. */
-export function search(ds: Dataset, query: string, options: { types?: RecordType[]; limit?: number } = {}): SearchHit[] {
+export function search(ds: DatasetView, query: string, options: { types?: RecordType[]; limit?: number } = {}): SearchHit[] {
   const terms = query
     .toLowerCase()
     .split(/\s+/)
@@ -1159,7 +1189,7 @@ export interface RequirementTestEvidence {
 }
 
 /** Resolve a requirement's linked evidence ids against the dataset and sort them by what they prove. */
-export function requirementTestEvidence(ds: Dataset, r: RequirementRecord): RequirementTestEvidence {
+export function requirementTestEvidence(ds: DatasetView, r: RequirementRecord): RequirementTestEvidence {
   const out: RequirementTestEvidence = { verified: [], unverified: [], missing: [] };
   for (const id of Array.isArray(r.linked_evidence_ids) ? r.linked_evidence_ids : []) {
     const e = ds.get("evidence", id);
@@ -1175,13 +1205,13 @@ export function requirementTestEvidence(ds: Dataset, r: RequirementRecord): Requ
  * by verified evidence. Pass the dataset: without it the linked ids cannot be resolved, and only
  * their number is checked (the older, weaker rule).
  */
-export function isOutstanding(r: RequirementRecord, ds?: Dataset): boolean {
-  if (!LIVE_DISPOSITIONS.has(r.disposition)) return false;
+export function isOutstanding(r: RequirementRecord, ds?: DatasetView): boolean {
+  if (!isLive(r.disposition)) return false;
   if (r.implementation_state !== "implemented_tested") return true;
   return ds ? requirementTestEvidence(ds, r).verified.length === 0 : r.linked_evidence_ids.length === 0;
 }
 
-export function filterRequirements(ds: Dataset, filter: RequirementFilter): Envelope<RequirementRecord>[] {
+export function filterRequirements(ds: DatasetView, filter: RequirementFilter): Envelope<RequirementRecord>[] {
   let list = ds.requirements;
   if (filter.q?.trim()) {
     const ids = new Set(search(ds, filter.q, { types: ["requirement"], limit: 10_000 }).map((h) => h.id));
@@ -1233,7 +1263,7 @@ export interface SourceSummary {
   date: string | null;
 }
 
-export function sourceSummary(ds: Dataset, id: string): SourceSummary {
+export function sourceSummary(ds: DatasetView, id: string): SourceSummary {
   const s = ds.source(id)?.data;
   return {
     id,
@@ -1248,7 +1278,7 @@ export function sourceSummary(ds: Dataset, id: string): SourceSummary {
   };
 }
 
-export function moduleBrief(ds: Dataset, id: string): ModuleBrief | null {
+export function moduleBrief(ds: DatasetView, id: string): ModuleBrief | null {
   const module = ds.module(id);
   if (!module) return null;
   const ref = (rid: string) => describeRef(ds, rid);
@@ -1318,7 +1348,7 @@ export interface LoopStageMatrixRow {
   unmapped: string[];
 }
 
-export function loopStageMatrix(ds: Dataset): LoopStageMatrixRow[] {
+export function loopStageMatrix(ds: DatasetView): LoopStageMatrixRow[] {
   return ds.loops.map(({ data }) => {
     const stages = Object.fromEntries(STAGES.map((s) => [s, [] as string[]])) as Record<Stage, string[]>;
     const unmapped: string[] = [];
@@ -1331,7 +1361,7 @@ export function loopStageMatrix(ds: Dataset): LoopStageMatrixRow[] {
 }
 
 /** Which modules contribute to each stage of the shared progression (from recovered loop steps). */
-export function stageCoverage(ds: Dataset): Record<Stage, { module_id: string; loop_ids: string[] }[]> {
+export function stageCoverage(ds: DatasetView): Record<Stage, { module_id: string; loop_ids: string[] }[]> {
   const coverage = Object.fromEntries(STAGES.map((s) => [s, new Map<string, Set<string>>()])) as Record<
     Stage,
     Map<string, Set<string>>
@@ -1374,7 +1404,7 @@ export interface Lineage {
   downstream: RefSummary[];
 }
 
-export function lineage(ds: Dataset, type: RecordType, id: string): Lineage | null {
+export function lineage(ds: DatasetView, type: RecordType, id: string): Lineage | null {
   const envelope = ds.get(type, id);
   if (!envelope) return null;
   const citations = collectCitations(envelope.data);
@@ -1415,7 +1445,7 @@ export interface Dependencies {
   blockers: { ref: RefSummary | null; text: string }[];
 }
 
-export function dependencies(ds: Dataset, type: RecordType, id: string): Dependencies | null {
+export function dependencies(ds: DatasetView, type: RecordType, id: string): Dependencies | null {
   const envelope = ds.get(type, id);
   if (!envelope) return null;
   const data = envelope.data as Record<string, unknown>;
@@ -1471,7 +1501,7 @@ export interface LifecycleRow {
   cells: { dimension: LifecycleDimension; state: string; basis: string; note: string }[];
 }
 
-export function lifecycleMatrix(ds: Dataset): LifecycleRow[] {
+export function lifecycleMatrix(ds: DatasetView): LifecycleRow[] {
   return ds.modules.map(({ data }) => ({
     module_id: data.id,
     name: data.name,

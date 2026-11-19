@@ -3,7 +3,10 @@
 This describes what the build does and what was tested. It is not an external security review; none
 has been done. An adversarial review by reviewers who had not written the code found 71 defects,
 which were then fixed. Every original attack was re-run against the fixes, and a second round fixed
-what was only partly closed; see docs/REVIEW-FINDINGS.md, and docs/KNOWN-GAPS.md for what remains.
+what was only partly closed. A re-check of the second round found ways round some of its rules,
+mostly by calling the database functions directly, and one serious sign-in defect; a third round
+(migration 0008) fixed those, and has not yet been re-checked. See docs/REVIEW-FINDINGS.md, and
+docs/KNOWN-GAPS.md for what remains.
 
 ## Boundaries the commission set, and how the build kept them
 
@@ -44,9 +47,13 @@ It can execute only the read helpers (`records_at`, `dataset_hash`, `head_rev`, 
 `verify_chain`, `principal_directory`, `jwt_claims`, `current_principal_id`, `current_principal`,
 `current_app_role`, `current_principal_kind`). Every other function in schema `hq` — the founder
 functions, the proposal functions, the audit wrappers and the sign-in look-ups — refuses it with
-“permission denied”, even when it forges the founder's claims. Migration 0007 revokes this from the
-catalogue, so no function is missed, and turns off PostgreSQL's default grant of EXECUTE to PUBLIC
-for functions created later: a later migration must grant each new function to the roles that need it.
+“permission denied”, even when it forges the founder's claims. Migration 0007 revoked EXECUTE for
+every function then in schema `hq`, reading the list from the catalogue so that none was missed. It
+does not change PostgreSQL's default privileges, so a function created later **is** executable by
+PUBLIC (and so by `service_role`) until its own migration revokes it. Every migration must therefore
+revoke EXECUTE from PUBLIC for each function it creates and grant it only to the roles that need it;
+migration 0008 does so for each function it creates or replaces. `tests/db/service-role.test.ts`
+reads the catalogue and fails if any function in schema `hq` is executable by PUBLIC.
 Imports run on the owner connection.
 
 **What the owner can still do.** The database owner, or a PostgreSQL superuser, can bypass every
@@ -64,6 +71,15 @@ history, seals and chain together; that is detected only by comparing the latest
 **Authentication.**
 - Passphrases: scrypt with a per-user salt; comparison in constant time. A wrong passphrase gets the
   same message whether or not the name exists: “That name and passphrase do not match.”
+- **Length limits.** A name longer than 41 characters (the longest handle the database allows), or a
+  passphrase longer than 1,024 characters, gets that same message at once. Nothing else happens: no
+  throttle lane, no database look-up, no passphrase check, no cookie read. The refusal is audited as
+  `session.sign_in` *denied* with the length only (`name_too_long` with `name_length`, or
+  `passphrase_too_long` with `passphrase_length`); a name over the limit is never stored. Why: a
+  server action accepts a body of about 1 MB, and a lane used to be keyed by the whole name the client
+  typed, so long names could fill the server's memory and stop it. The name is measured after
+  trimming, and again after lower-casing, which can make it longer. A passphrase over the limit
+  cannot be set either (`scripts/lib/principals.ts`): it could never be used to sign in.
 - **Sign-in delay, not lock-out.** Attempts are counted per *lane*, never per address: without a
   proxy HQ trusts, the `X-Forwarded-For` header is whatever the client sends, so keying on it would
   let a guesser rotate it freely. There are two kinds of lane:
@@ -83,9 +99,17 @@ history, seals and chain together; that is detected only by comparing the latest
   the passphrase: “Too many sign-in attempts are in progress. Try again in a moment.” The refusal is
   logged. Unknown names take the anonymous lane
   exactly like known ones (the name is looked up only when a valid device cookie is present), so
-  neither the wait nor a refusal shows which names exist. Up to 10,000 lanes are tracked, in the
-  server's memory. `X-Forwarded-For` is read only when `HQ_TRUST_PROXY=1`, and then only into the
-  audit log.
+  neither the wait nor a refusal shows which names exist. `X-Forwarded-For` is read only when
+  `HQ_TRUST_PROXY=1`, and then only into the audit log.
+- **Bounded memory.** Up to 10,000 lanes are tracked, in the server's memory. The throttle itself
+  refuses as busy, without creating anything, a name longer than 64 characters (after lower-casing)
+  or a device id longer than 64, so no caller can make a lane hold data of its choosing. When a new
+  lane needs room, the one forgotten is, in this order: the least recently used lane with no attempt
+  in progress and either fewer than five failures or a count that has expired; otherwise the least
+  recently used lane with no attempt in progress. A lane with an attempt in progress is never
+  forgotten; if every lane has one, the new attempt is refused as busy. A lane that is forgotten
+  loses its failure count, so to push out a name under attack every other lane must hold five
+  failures or more (docs/KNOWN-GAPS.md).
 - **The device cookie** (`hq_device`) means “this browser has signed in as this person before”. It is
   set only after a successful sign-in: HS256-signed with `HQ_JWT_SECRET`, holding HQ's issuer, the
   type `device`, the person's id and a random 128-bit device id; 180 days; `HttpOnly`,
@@ -97,12 +121,13 @@ history, seals and chain together; that is detected only by comparing the latest
   malformed one, gets the anonymous lane. Signing out leaves it in place; changing `HQ_JWT_SECRET`
   ends it. Someone who copies it gets that browser's lane, with that lane's waits, and nothing more.
 - **The honest limit.** While someone keeps sending wrong passphrases, a browser that has never signed
-  in can be refused, for that name or, once the anonymous limit of 12 is full, for every name. A
-  browser that has signed in as that person before is not slowed by the flood, unless the device
-  lanes are full too (see docs/KNOWN-GAPS.md).
-- After sign-in, HQ redirects only to a path on HQ itself. A `next` value with a control character,
-  whitespace or a backslash, one that starts with `//`, or one that resolves to another site, sends
-  the person to the dashboard instead.
+  in can be refused, for that name or, once the anonymous limit of 12 is full, for every name. That
+  takes little: holding all 12 anonymous places was measured at about two requests a second, and the
+  names need not exist. A browser that has signed in as that person before is not slowed by it,
+  unless that person's device lanes are full too (see docs/KNOWN-GAPS.md).
+- After sign-in, HQ redirects only to a path on HQ itself. A `next` value longer than 2,048
+  characters, one with a control character, whitespace or a backslash, one that starts with `//`, or
+  one that resolves to another site, sends the person to the dashboard instead.
 - Sessions: HS256-signed cookie, `HttpOnly`, `SameSite=Lax`, `Secure` in production, twelve hours. A
   session token carries HQ's issuer, the session marker, its issue and expiry times, and the person's
   **session epoch**; a token missing any of them is refused, even if correctly signed. The person is
@@ -124,30 +149,49 @@ a founder or developer signed in to HQ (see Privacy).
 **Audit.** Sign-ins, sign-outs, token use, proposals, reviews, decisions and refusals are logged with
 the caller, the action and the outcome. The log is append-only and readable only by the founder.
 - API roles cannot write to the log directly. The application writes through two narrow database
-  functions: `hq.log_refusal` (outcome *denied* or *error* only, a dotted action name, a detail of at
-  most 8,192 bytes) and `hq.log_access` (outcome *allowed*, for an active principal only). A refusal
-  is attributed to a principal only if the claims name an active one; otherwise the claimed identity
-  is kept in the detail, marked as unverified.
+  functions: `hq.log_refusal` (outcome *denied* or *error* only, a dotted lower-case action name of
+  at most 80 characters, a detail of at most 8,192 bytes) and `hq.log_access` (outcome *allowed*, for
+  an active principal only). A refusal is attributed to a principal only if the claims name an active
+  one; otherwise the claimed identity is kept in the detail, marked as unverified. The audit log
+  itself refuses any new row whose action is longer than 80 characters, whoever writes it (rows
+  written before migration 0008 are not re-checked).
 - **Where denials are logged.** The application logs a refusal in a transaction of its own, so the
   record survives the rollback of the request that was refused. A refusal raised inside a database
   function cannot log itself: raising the error rolls back that function's own writes. A caller that
   goes round the application (for example straight to the database) therefore leaves no record of
   being refused.
-- **The request id is always the server's.** Every REST request (except `GET /api/v1/health`, which has none) and every MCP request gets an id HQ generates; it
-  is returned in `x-request-id` and stored as the audit row's `request_id`, so no client can give its
-  request the id of another request in the log. A client's own `X-Request-Id`, if it is 1–64
-  characters of letters, digits, `.`, `_` and `-`, is echoed back by the REST endpoints in
-  `x-client-request-id` and kept as `detail.client_request_id` on the audit row they write for the
-  call (allowed, or a 401 or 403 answer), for correlation only; otherwise it is dropped. The database
-  checks the same pattern again before storing it. The MCP endpoint does not read it.
-- `hq.log_access` records only the actions the application logs as allowed: `api.*`, `mcp.*`,
-  `tool.*`, `tools.list`, `integrations.read`, `proposal.read`, `session.sign_in`,
-  `session.sign_out` and `session.end_all`. Anything else is refused (HQ422) and nothing is written.
-  A founder act (`proposal.review`, `decision.record`, issuing or revoking a token) is recorded as
-  allowed only by the database function that performs it, so no caller can write such a row without
-  doing the act. The two REST routes for founder acts therefore log nothing as allowed themselves.
-  Founder acts (`proposal.review`, `decision.record`, `credential.*`) and `proposal.submit` and
-  `proposal.withdraw` are recorded as allowed only by the database functions that perform them.
+- **The request id is the server's.** Every REST request (except `GET /api/v1/health`, which has
+  none) and every MCP request gets an id HQ generates, returned in `x-request-id`. Every MCP answer
+  carries it, including the 401, the cross-origin refusal, a database error, an unsupported protocol
+  version, a parse error, an over-long body and a bad batch; `GET` and `DELETE` get a fresh id with
+  their 405. The audit rows the REST and MCP layers write store it as `request_id`: an allowed call,
+  a 401 or 403 answer, the MCP 401 and the MCP cross-origin refusal. Other rows carry no request id:
+  sign-in and sign-out, the rows the database functions write themselves (a submitted proposal, a
+  founder review or decision), and the refusals the service records for a proposal or a review. So
+  no client of the application can give its request the id of another request in the log. A caller
+  that reaches the database directly, as `authenticated` or `anon`, chooses the request id it passes
+  to `hq.log_access` and `hq.log_refusal`, another request's included: the database cannot know the
+  server's id (docs/KNOWN-GAPS.md).
+- A client's own `X-Request-Id`, if it is 1–64 characters of letters, digits, `.`, `_` and `-`, is
+  echoed back by the REST endpoints in `x-client-request-id` and kept as `detail.client_request_id`
+  on the audit row they write for the call (allowed, or a 401 or 403 answer), for correlation only;
+  otherwise it is dropped. On allowed rows the database checks that pattern again (`hq.log_access`).
+  On 401 and 403 rows the client's id travels inside the detail, which `hq.log_refusal` stores
+  without checking it. The MCP endpoint does not read the header.
+- `hq.log_access` records only the actions the application logs as allowed, each family bounded and
+  with no dot inside a name: `api.<name>` (up to 40 of `a`–`z` and `_`), `mcp.<name>` and
+  `tool.<name>` (up to 60), `tools.list`, `integrations.read`, `proposal.read`, `session.sign_in`,
+  `session.sign_out` and `session.end_all`. It also refuses any name containing `review`,
+  `decision`, `decide`, `credential`, `accept`, `reject`, `approve`, `revoke`, `issue`, `withdraw` or
+  `register`, except the two read tools whose names contain one (`get_acceptance_status`,
+  `get_review_items`, under `tool.` and `mcp.`). Anything else is refused (HQ422) and nothing is
+  written. Founder acts (`proposal.review`, `decision.record`, `credential.*`) and `proposal.submit`
+  and `proposal.withdraw` are recorded as allowed only by the database functions that perform them,
+  so no caller can write such a row without doing the act. The two REST routes for founder acts
+  therefore log nothing as allowed themselves.
+- The REST tool route logs the call as `tool.<name>` with the real tool's name, or `tool.unknown` for
+  a name HQ has no tool for; it never puts the address the client typed into the action. An unknown
+  tool or method name is echoed in an error message only up to 80 characters.
 - A detail larger than 6,000 bytes is shortened to a preview by the application. The database also
   refuses any new audit row whose detail is over 16,384 bytes (rows written before migration 0007 are
   not re-checked).
@@ -193,16 +237,26 @@ The database and HTTP suites include, among others: an AI client reading another
 founder acts directly in the database (refused); proposals setting protected fields — a requirement's
 original fields, an HQ acceptance, an evidence record's verification, HQ's own checks, attribution,
 source integrity fields and build-only fields — and proposals carrying invented quotations or HQ's
-own labels (refused, through the application and directly in the database); `service_role` writing
+own labels (refused, through the application and directly in the database); a build reported as
+accepted relabelled, rewritten, moved to another module or renamed, a founder acceptance restated
+with an added key or a state such as `Yes`, and values outside their lists — through the
+application, directly in the database, and planted in the inbox and then accepted (refused); a
+planted proposal that would leave an invalid record, accepted through the application (refused with
+422); `service_role` writing
 history, forging a founder act or calling any function but the read helpers (refused); a proposal
 asserting an acceptance (refused, through the application and directly in the database); direct `UPDATE`/`DELETE`/`TRUNCATE` on the record history,
 the proposal history and the audit log, even as the database owner (refused); tampering with stored versions and seals (reported by
-`verify_chain`); API roles writing the audit log, and a founder act recorded through `hq.log_access` (refused);
-a flood of wrong sign-in attempts against the founder's name while the founder's browser signs in; a founder being given a token (refused);
+`verify_chain`); API roles writing the audit log, a founder act or a name that reads like one
+recorded through `hq.log_access`, and an audit action over 80 characters (refused);
+many wrong sign-in attempts held open against the founder's name while the founder's browser signs
+in; 500 sign-ins with 900 KB names (refused at once, no lane created); a 2,000-character passphrase
+(refused without a passphrase check); the throttle's eviction order; a founder being given a token (refused);
 an AI client being made founder (refused); a revoked or expired token, and a forged, expired or
 ended session (refused); a cross-origin state-changing request (refused); an oversized body (413); a
-read tool attempting to write (impossible: read-only transaction). docs/TESTING.md names the files.
-Results: docs/TEST-RESULTS.md.
+read tool attempting to write (impossible: read-only transaction); every MCP answer carrying a
+request id. docs/TESTING.md names the files. docs/TEST-RESULTS.md records the last full run and names
+the commit it was made on; it is regenerated on the final commit, and until then it describes the
+commit named inside it, not necessarily the code described here.
 
 ## Not done
 
@@ -214,6 +268,7 @@ Results: docs/TEST-RESULTS.md.
   refused for browsers that have never signed in. A browser that has signed in before keeps its own
   lane, limited per person and not shared between people (docs/KNOWN-GAPS.md).
 - The sign-in delay is held in the server's memory: it resets on restart and is per process.
+- A caller that reaches the database directly chooses the request id it records (docs/KNOWN-GAPS.md).
 - No Content-Security-Policy header yet.
 - The database owner or a superuser can bypass every rule; only a seal kept outside HQ shows it.
 - If writing an audit entry fails, the request still gets its answer and the entry is lost.

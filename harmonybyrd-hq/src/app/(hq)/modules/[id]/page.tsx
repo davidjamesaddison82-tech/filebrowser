@@ -16,6 +16,10 @@ import {
   IdTag,
   InboxMark,
   InboxOriginChip,
+  InvalidRecordNotice,
+  KnownLink,
+  ListedChip,
+  ListedText,
   Notice,
   PageHead,
   RecordLink,
@@ -204,7 +208,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
               {brief.standing.label}
             </Chip>
             <InboxOriginChip envelope={brief.module} />
-            <Chip tone="outline">{humanise(m.kind)}</Chip>
+            <ListedChip field="module.kind" value={m.kind} />
             {m.evidence_level !== "documented_in_sources" ? <Chip tone="ghost">No supporting source</Chip> : null}
             {m.commission_listed ? <Chip tone="outline">Listed in commission HB-HQ-P02-R1</Chip> : null}
           </>
@@ -235,6 +239,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
       </nav>
 
       <AcceptanceLock data={m} />
+      {ctx.warnings.some((w) => w.type === "module" && w.id === brief.module.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/module/${encodeURIComponent(brief.module.meta.id)}`, rev)} /> : null}
       {brief.standing.caution ? <Notice tone="warn">{brief.standing.caution}</Notice> : null}
       {m.evidence_level === "commission_list_only" ? (
         <Notice tone="warn">
@@ -423,7 +428,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                       <Link className="li-title" href={withRev(recordHref("defect", d.ref.id), rev)}>
                         {d.ref.title}
                       </Link>
-                      <StatusChip value={d.status} />
+                      <StatusChip value={d.status} field="defect.status" />
                       <InboxMark ds={ds} id={d.ref.id} />
                     </div>
                   </li>
@@ -445,7 +450,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                   <Fold
                     items={openItems.map((o) => (
                       <li key={o.ref.id}>
-                        <Link href={withRev(recordHref("open_item", o.ref.id), rev)}>{o.ref.title}</Link> <Chip tone="warn">{humanise(o.kind)}</Chip>{" "}
+                        <Link href={withRev(recordHref("open_item", o.ref.id), rev)}>{o.ref.title}</Link> <ListedChip field="open_item.kind" value={o.kind} tone="warn" />{" "}
                         <InboxMark ds={ds} id={o.ref.id} />
                       </li>
                     ))}
@@ -497,7 +502,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                     </Link>
                     <div className="row" style={{ gap: 6 }}>
                       <IdTag id={r.ref.id} />
-                      <StatusChip value={r.implementation_state} />
+                      <StatusChip value={r.implementation_state} field="requirement.implementation_state" />
                       {r.outstanding ? <Chip tone="warn">Outstanding</Chip> : null}
                     </div>
                   </li>
@@ -540,7 +545,7 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                         <Link className="li-title" href={withRev(recordHref("decision", d.ref.id), rev)}>
                           {d.ref.title}
                         </Link>
-                        <StatusChip value={d.status} label={`Decision ${humanise(d.status).toLowerCase()}`} />
+                        <StatusChip value={d.status} field="decision.status" label={`Decision ${humanise(d.status).toLowerCase()}`} />
                       </div>
                     </li>
                   )),
@@ -572,10 +577,12 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
                       <Link className="li-title" href={withRev(recordHref("evidence", e.ref.id), rev)}>
                         {e.ref.title}
                       </Link>
-                      <StatusChip value={e.verification} />
+                      <StatusChip value={e.verification} field="evidence.verification" />
                       <InboxMark ds={ds} id={e.ref.id} />
                     </div>
-                    <div className="li-note">{humanise(e.type)}</div>
+                    <div className="li-note">
+                      <ListedText field="evidence.type" value={e.type} />
+                    </div>
                   </li>
                 ))}
                 limit={6}
@@ -602,10 +609,18 @@ export default async function ModulePage({ params, searchParams }: { params: Pro
             items={sources.map((s) => (
               <tr key={s.id}>
                 <td className="title-cell">
-                  <Link href={withRev(recordHref("source", s.id), rev)}>{s.title}</Link> <IdTag id={s.id} />
+                  {ds.source(s.id) ? (
+                    <>
+                      <Link href={withRev(recordHref("source", s.id), rev)}>{s.title}</Link> <IdTag id={s.id} />
+                    </>
+                  ) : (
+                    <KnownLink ds={ds} type="source" id={s.id} />
+                  )}
                 </td>
                 <td className="nowrap">{isoDate(s.date)}</td>
-                <td className="small">{humanise(s.authority)}</td>
+                <td className="small">
+                  <ListedText field="source.authority" value={s.authority} />
+                </td>
                 <td className="mono xsmall break">{s.version ?? "—"}</td>
                 <td className="mono xsmall" title={s.sha256 ?? undefined}>
                   {shortHash(s.sha256, 12)}

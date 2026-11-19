@@ -17,6 +17,10 @@ import type { Page } from "@playwright/test";
  *      the point), so a block shifted over earlier text (relative offset, transform) and a fixed
  *      pseudo-element (body::before, main::after) are found too (F11).
  * While measuring, pointer-events is forced on, so an overlay made "click-through" is still seen.
+ * "Shown at a point" means the topmost element there that the browser draws: an element with
+ * opacity 0 (itself or through an ancestor) is hit by the browser's hit test but draws nothing, so it
+ * is looked through, never reported (round 3, G6). Opacity 0.01 is drawn and is reported.
+ * One measure sees only what is on screen; coveringsTopAndEnd measures at several scroll positions.
  */
 export interface LayoutMeasure {
   /**
@@ -53,9 +57,19 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
       const meet = (a: Box, b: Box): Box => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
       const inside = (a: Box, b: Box) => a.left >= b.left - 1 && a.top >= b.top - 1 && a.right <= b.right + 1 && a.bottom <= b.bottom + 1;
       const describe = (el: Element) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${typeof el.className === "string" && el.className ? `.${el.className.trim().split(/\s+/).join(".")}` : ""}`;
-      const shown = (el: Element) => {
-        const cs = getComputedStyle(el);
-        return cs.display !== "none" && cs.visibility !== "hidden" && Number(cs.opacity) > 0;
+      // Drawn by the browser: not display: none, not visibility: hidden, and neither it nor an ancestor
+      // at opacity 0 (checkVisibility looks at the ancestors too).
+      const drawn = new Map<Element, boolean>();
+      const isDrawn = (el: Element) => {
+        if (!drawn.has(el)) drawn.set(el, el.checkVisibility({ opacityProperty: true, visibilityProperty: true }));
+        return drawn.get(el)!;
+      };
+      const shown = (el: Element) => getComputedStyle(el).display !== "none" && isDrawn(el);
+      // The topmost element the browser draws at a point. elementFromPoint answers an element at
+      // opacity 0 too; that one draws nothing, so look through it to what is drawn under it.
+      const shownAt = (x: number, y: number): Element | null => {
+        for (const el of document.elementsFromPoint(x, y)) if (isDrawn(el)) return el;
+        return null;
       };
 
       const nav = document.querySelector("aside.nav");
@@ -69,7 +83,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
       if (h1 && r) {
         const x = Math.min(r.left + 24, vw - 2);
         const y = r.top + r.height / 2;
-        const top = document.elementFromPoint(x, y);
+        const top = shownAt(x, y);
         headingUncovered = !!top && (top === h1 || h1.contains(top) || top.contains(h1));
       }
 
@@ -108,7 +122,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
           if (area(m) <= 0) continue;
           const x = (m.left + m.right) / 2;
           const y = (m.top + m.bottom) / 2;
-          const top = document.elementFromPoint(x, y);
+          const top = shownAt(x, y);
           if (top && (top === el || el.contains(top)) && !t.holder.contains(top)) {
             hidden = `"${(t.holder.textContent ?? "").trim().slice(0, 40)}"`;
             break;
@@ -132,7 +146,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
         for (let y = mainBox.top + 4; y < mainBox.bottom - 2 && reported < 3; y += step) {
           for (let x = mainBox.left + 4; x < mainBox.right - 2 && reported < 3; x += step) {
             if (navBox && x >= navBox.left && x <= navBox.right && y >= navBox.top && y <= navBox.bottom) continue;
-            const top = document.elementFromPoint(x, y);
+            const top = shownAt(x, y);
             if (!top || main.contains(top) || top.contains(main)) continue;
             coverings.push(`${describe(top)} covers the content at ${Math.round(x)},${Math.round(y)}`);
             reported++;
@@ -141,7 +155,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
         // Inside main: a point must not be taken by an element positioned over the flow.
         for (let y = mainBox.top + 4; y < mainBox.bottom - 2 && reported < 3; y += step) {
           for (let x = mainBox.left + 4; x < mainBox.right - 2 && reported < 3; x += step) {
-            const top = document.elementFromPoint(x, y);
+            const top = shownAt(x, y);
             if (!top || !main.contains(top) || top === main) continue;
             for (let a: Element | null = top; a && a !== main; a = a.parentElement) {
               const p = getComputedStyle(a).position;
@@ -170,6 +184,11 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
           if (cs.overflowX === "visible" && cs.overflowY === "visible" && cs.clipPath === "none" && cs.clip === "auto") continue;
           const b = a.getBoundingClientRect();
           if (x < b.left || x > b.right || y < b.top || y > b.bottom) return true;
+          // A clip-path can cut away any part of the box (inset(50%) cuts all of it), and its shape
+          // cannot be read. The browser's hit test follows it: where the ancestor is cut away, neither
+          // it nor anything inside it is among the elements at the point, at any depth. If one is,
+          // the text is there (possibly under something else, which is then reported).
+          if (cs.clipPath !== "none" && !document.elementsFromPoint(x, y).some((hit) => hit === a || a!.contains(hit))) return true;
         }
         return false;
       };
@@ -218,7 +237,7 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
             const e = 1.5;
             const under = inMain.find((t) => x >= t.box.left + e && x <= t.box.right - e && y >= t.box.top + e && y <= t.box.bottom - e && !clippedAt(t.holder, x, y));
             if (!under) continue;
-            const top = document.elementFromPoint(x, y);
+            const top = shownAt(x, y);
             const holder = under.holder;
             if (!top || top === holder || holder.contains(top)) continue;
             const text = `"${(holder.textContent ?? "").trim().slice(0, 40)}"`;
@@ -256,12 +275,57 @@ export async function measureLayout(page: Page): Promise<LayoutMeasure> {
   });
 }
 
-/** Measure at the top of the page, then again scrolled to the end; return both sets of coverings. */
-export async function coveringsTopAndEnd(page: Page): Promise<{ top: LayoutMeasure; end: LayoutMeasure }> {
+/** Where on the page a measure was made: "top", "middle at <scrollY> px" or "end". */
+export interface PlacedMeasure {
+  where: string;
+  scrollY: number;
+  measure: LayoutMeasure;
+}
+
+/** At most this many measures between the top and the end of a long page. */
+const MAX_MIDDLE_POSITIONS = 10;
+
+/**
+ * The scroll positions strictly between the top (0) and the end (`maxScroll`): one every
+ * 0.8 × the window height, so consecutive measures overlap and every part of the page is on screen
+ * for at least one of them; on a page so long that this needs more than ten, ten evenly spread.
+ */
+export function middlePositions(maxScroll: number, windowHeight: number): number[] {
+  const step = Math.max(1, Math.floor(windowHeight * 0.8));
+  if (maxScroll <= step) return [];
+  const needed = Math.ceil(maxScroll / step) - 1;
+  if (needed <= MAX_MIDDLE_POSITIONS) return Array.from({ length: needed }, (_, i) => (i + 1) * step);
+  return Array.from({ length: MAX_MIDDLE_POSITIONS }, (_, i) => Math.round((maxScroll * (i + 1)) / (MAX_MIDDLE_POSITIONS + 1)));
+}
+
+/**
+ * Measure at the top of the page, part-way down it (see middlePositions) and scrolled to its end, so
+ * that a sticky or shifted element that covers text only part-way down a long page is found (round 3,
+ * G6). `top` and `end` are the measures at both ends; `middle` the ones between; `coverings` every
+ * covering found anywhere, each prefixed with where it was seen.
+ */
+export async function coveringsTopAndEnd(page: Page): Promise<{ top: LayoutMeasure; middle: PlacedMeasure[]; end: LayoutMeasure; coverings: string[] }> {
+  // y null: the end of the page. Returns the position actually reached.
+  const at = async (y: number | null) => {
+    const scrollY = await page.evaluate((target) => {
+      window.scrollTo(0, target ?? document.documentElement.scrollHeight);
+      return window.scrollY;
+    }, y);
+    return { scrollY, measure: await measureLayout(page) };
+  };
+  const { maxScroll, windowHeight } = await page.evaluate(() => ({
+    maxScroll: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+    windowHeight: window.innerHeight,
+  }));
+  const first = await at(0);
+  const middle: PlacedMeasure[] = [];
+  for (const y of middlePositions(maxScroll, windowHeight)) {
+    const m = await at(y);
+    middle.push({ where: `middle at ${m.scrollY} px`, ...m });
+  }
+  const last = await at(null);
   await page.evaluate(() => window.scrollTo(0, 0));
-  const top = await measureLayout(page);
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  const end = await measureLayout(page);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  return { top, end };
+  const placed: PlacedMeasure[] = [{ where: "top", ...first }, ...middle, { where: "end", ...last }];
+  const coverings = placed.flatMap((p) => p.measure.coverings.map((c) => `${p.where}: ${c}`));
+  return { top: first.measure, middle, end: last.measure, coverings };
 }

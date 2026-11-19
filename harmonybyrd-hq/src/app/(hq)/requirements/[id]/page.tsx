@@ -1,17 +1,18 @@
 import Link from "@/components/pin-link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
-import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, Fold, IdTag, InboxOriginChip, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
-import type { Dataset } from "@/lib/domain/dataset";
+import { AcceptanceLock, bindingAcceptance, Card, Chip, Citations, ClaimView, Empty, Fold, IdTag, InboxOriginChip, InvalidRecordNotice, KnownLink, ListedChip, ListedText, Notice, PageHead, RecordLink, StatusChip } from "@/components/ui";
+
+import type { DatasetView } from "@/lib/domain/conform";
 import { isOutstanding, reviewItems } from "@/lib/domain/derive";
 import { loadPage, routeId, type SearchParams } from "@/lib/server/page";
-import { humanise, isoDate } from "@/lib/ui/format";
+import { isoDate } from "@/lib/ui/format";
 import { recordHref, withRev } from "@/lib/ui/links";
 
 const plainList = (children: ReactNode[]) => <ul className="plain">{children}</ul>;
 
 /** Record links that fold when the list is long. */
-function RefList({ ds, ids, empty = "None recorded.", noun = "records" }: { ds: Dataset; ids: string[]; empty?: string; noun?: string }) {
+function RefList({ ds, ids, empty = "None recorded.", noun = "records" }: { ds: DatasetView; ids: string[]; empty?: string; noun?: string }) {
   if (ids.length === 0) return <span className="muted small">{empty}</span>;
   return (
     <Fold
@@ -55,10 +56,10 @@ export default async function RequirementPage({ params, searchParams }: { params
         chips={
           <>
             <InboxOriginChip envelope={record} />
-            <StatusChip value={r.disposition} />
-            <StatusChip value={r.implementation_state} />
+            <StatusChip value={r.disposition} field="requirement.disposition" />
+            <StatusChip value={r.implementation_state} field="requirement.implementation_state" />
             {isOutstanding(r, ds) ? <Chip tone="warn">Outstanding</Chip> : null}
-            <Chip tone="outline">{humanise(r.category)}</Chip>
+            <ListedChip field="requirement.category" value={r.category} />
           </>
         }
         actions={
@@ -75,6 +76,7 @@ export default async function RequirementPage({ params, searchParams }: { params
         }
       />
       <AcceptanceLock data={r} />
+      {ctx.warnings.some((w) => w.type === "requirement" && w.id === record.meta.id) ? <InvalidRecordNotice storedAt={withRev(`/records/requirement/${encodeURIComponent(record.meta.id)}`, rev)} /> : null}
 
       <Card title="Original wording" hint="Permanent — a correction is a new requirement that supersedes this one">
         <div className="stack-sm">
@@ -82,14 +84,20 @@ export default async function RequirementPage({ params, searchParams }: { params
           <dl className="facts">
             <dt>Source</dt>
             <dd>
-              <Link href={withRev(recordHref("source", r.source_id), rev)}>{source?.data.title ?? r.source_id}</Link> <IdTag id={r.source_id} />
+              {source ? (
+                <>
+                  <Link href={withRev(recordHref("source", r.source_id), rev)}>{source.data.title}</Link> <IdTag id={r.source_id} />
+                </>
+              ) : (
+                <KnownLink ds={ds} type="source" id={r.source_id} />
+              )}
               {r.locator ? <div className="muted small">{r.locator}</div> : null}
             </dd>
             <dt>Date</dt>
             <dd>{isoDate(r.source_date)}</dd>
             <dt>How we have these words</dt>
             <dd>
-              {attribution[r.attribution] ?? humanise(r.attribution)}
+              {typeof r.attribution === "string" && Object.hasOwn(attribution, r.attribution) ? attribution[r.attribution] : <ListedText field="requirement.attribution" value={r.attribution} />}
               {r.attribution === "restated_by_source" ? (
                 <div className="muted small">Treat with care: the source paraphrases or summarises the founder rather than quoting.</div>
               ) : null}
@@ -129,7 +137,7 @@ export default async function RequirementPage({ params, searchParams }: { params
             <dl className="facts">
               <dt>Standing</dt>
               <dd>
-                <StatusChip value={r.disposition} />
+                <StatusChip value={r.disposition} field="requirement.disposition" />
                 <div className="muted small" style={{ marginTop: 4 }}>
                   {r.disposition === "unreviewed"
                     ? "Registered from the source. Only a founder decision in HQ can mark it active, superseded, deferred, withdrawn or satisfied."
@@ -141,7 +149,7 @@ export default async function RequirementPage({ params, searchParams }: { params
               </dd>
               <dt>Implementation state</dt>
               <dd>
-                <StatusChip value={r.implementation_state} />
+                <StatusChip value={r.implementation_state} field="requirement.implementation_state" />
                 <div style={{ marginTop: 6 }}>
                   <ClaimView ds={ds} claim={r.implementation_note} empty="No source or evidence record says whether this was implemented." />
                 </div>

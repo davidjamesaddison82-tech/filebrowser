@@ -1,11 +1,12 @@
 import Link from "@/components/pin-link";
 import type { ReactNode } from "react";
-import type { Dataset, Envelope } from "@/lib/domain/dataset";
+import type { DatasetView } from "@/lib/domain/conform";
+import type { Envelope } from "@/lib/domain/dataset";
 import { BUILD_ACCEPTANCE_LABEL, buildAcceptanceIsSourced, describeRef } from "@/lib/domain/derive";
-import { type BuildRecord, type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL } from "@/lib/domain/schemas";
-import { EPISTEMIC_TONE, statusLabel, statusTone, type Tone } from "@/lib/ui/format";
+import { type BuildRecord, type Citation, type Claim, type Epistemic, EPISTEMIC_LABEL, type RecordType } from "@/lib/domain/schemas";
+import { EPISTEMIC_TONE, fieldLabel, isListedValue, type ListedField, NOT_VALID, statusLabel, statusTone, storedValueText, type Tone } from "@/lib/ui/format";
 import { claim as asClaim, citations as asCitations, isEpistemic, isObject } from "@/lib/ui/guards";
-import { recordHref, refHref } from "@/lib/ui/links";
+import { recordHref, refHref, withRev } from "@/lib/ui/links";
 
 export function Chip({ tone = "plain", glyph, children, title }: { tone?: Tone; glyph?: string; children: ReactNode; title?: string }) {
   return (
@@ -37,8 +38,41 @@ export function EpistemicChip({ value }: { value: Epistemic | unknown }) {
   );
 }
 
-export function StatusChip({ value, label }: { value: string; label?: string }) {
+/**
+ * A status. With `field`, the value is checked against that field's list first: a stored value outside
+ * it (a list, a number, null, a word the list does not hold) is shown as "Not a valid value", with what
+ * is stored in the tooltip, never as a status it is not (G1f).
+ */
+export function StatusChip({ value, label, field }: { value: unknown; label?: string; field?: ListedField }) {
+  if (field && !isListedValue(field, value)) return <NotValidChip value={value} />;
   return <Chip tone={statusTone(value)}>{label ?? statusLabel(value)}</Chip>;
+}
+
+/** A listed value in a chip of a given tone (a kind, an authority), or "Not a valid value" for anything outside the list. */
+export function ListedChip({ field, value, tone = "outline" }: { field: ListedField; value: unknown; tone?: Tone }) {
+  if (!isListedValue(field, value)) return <NotValidChip value={value} />;
+  return <Chip tone={tone}>{fieldLabel(field, value)}</Chip>;
+}
+
+/** A listed value as plain text, or "Not a valid value" (marked, with what is stored in the tooltip) for anything outside the list. */
+export function ListedText({ field, value }: { field: ListedField; value: unknown }) {
+  if (!isListedValue(field, value)) {
+    return (
+      <span className="not-valid" title={`Stored as: ${storedValueText(value)}`}>
+        {NOT_VALID}
+      </span>
+    );
+  }
+  return <>{fieldLabel(field, value)}</>;
+}
+
+/** A stored value outside its field's list. */
+export function NotValidChip({ value }: { value: unknown }) {
+  return (
+    <Chip tone="bad" glyph="!" title={`Stored as: ${storedValueText(value)}`}>
+      {NOT_VALID}
+    </Chip>
+  );
 }
 
 /**
@@ -54,7 +88,7 @@ export function BuildStandingChip({ build }: { build: { standing?: unknown; stat
       </Chip>
     );
   }
-  return <StatusChip value={typeof build.standing === "string" ? build.standing : ""} />;
+  return <StatusChip value={build.standing} field="build.standing" />;
 }
 
 export function IdTag({ id }: { id: string }) {
@@ -162,7 +196,7 @@ export function Tile({
 }
 
 /** A link to a record by id, labelled with its title. Marks references to records that are not in the register. */
-export function RecordLink({ ds, id, showId = true }: { ds: Dataset; id: string; showId?: boolean }) {
+export function RecordLink({ ds, id, showId = true }: { ds: DatasetView; id: string; showId?: boolean }) {
   if (typeof id !== "string") return <span className="muted small">(not an id)</span>;
   const ref = describeRef(ds, id);
   if (!ref.exists) {
@@ -185,7 +219,42 @@ export function RecordLink({ ds, id, showId = true }: { ds: Dataset; id: string;
   );
 }
 
-export function RefList({ ds, ids: raw, empty = "None recorded." }: { ds: Dataset; ids: string[]; empty?: string }) {
+/**
+ * A link to a record that HQ holds, or, for an id it does not hold (a reference left dangling, or a
+ * value of the wrong kind), the id marked "not in register" with no link: a reference never leads to a
+ * page that does not exist. `children` is what the link shows; the id itself by default.
+ */
+export function KnownLink({
+  ds,
+  type,
+  id,
+  rev = null,
+  className,
+  children,
+}: {
+  ds: DatasetView;
+  type: RecordType;
+  id: unknown;
+  rev?: number | null;
+  className?: string;
+  children?: ReactNode;
+}) {
+  if (typeof id !== "string" || !id) return <span className="muted small">(not an id)</span>;
+  if (!ds.get(type, id)) {
+    return (
+      <span title="This id is referred to but is not in the register">
+        <IdTag id={id} /> <span className="muted small">(not in register)</span>
+      </span>
+    );
+  }
+  return (
+    <Link className={className} href={withRev(recordHref(type, id), rev)}>
+      {children ?? id}
+    </Link>
+  );
+}
+
+export function RefList({ ds, ids: raw, empty = "None recorded." }: { ds: DatasetView; ids: string[]; empty?: string }) {
   const ids = Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : [];
   if (ids.length === 0) return <span className="muted small">{empty}</span>;
   return (
@@ -199,7 +268,7 @@ export function RefList({ ds, ids: raw, empty = "None recorded." }: { ds: Datase
   );
 }
 
-export function Citations({ ds, citations: raw, label }: { ds: Dataset; citations: Citation[] | unknown; label?: string }) {
+export function Citations({ ds, citations: raw, label }: { ds: DatasetView; citations: Citation[] | unknown; label?: string }) {
   const citations = asCitations(raw);
   if (!citations.length) return null;
   return (
@@ -209,7 +278,13 @@ export function Citations({ ds, citations: raw, label }: { ds: Dataset; citation
         <div className="cite" key={`${c.source_id}-${i}`}>
           <q>{c.quote}</q>
           <span className="src">
-            <Link href={refHref(c.source_id)}>{ds.source(c.source_id)?.data.title ?? c.source_id}</Link> <IdTag id={c.source_id} />
+            {ds.source(c.source_id) ? (
+              <>
+                <Link href={refHref(c.source_id)}>{ds.source(c.source_id)?.data.title ?? c.source_id}</Link> <IdTag id={c.source_id} />
+              </>
+            ) : (
+              <KnownLink ds={ds} type="source" id={c.source_id} />
+            )}
             {c.locator ? <> · {c.locator}</> : null}
           </span>
         </div>
@@ -218,7 +293,7 @@ export function Citations({ ds, citations: raw, label }: { ds: Dataset; citation
   );
 }
 
-export function ClaimView({ ds, claim: raw, empty }: { ds: Dataset; claim: Claim | null | undefined | unknown; empty?: string }) {
+export function ClaimView({ ds, claim: raw, empty }: { ds: DatasetView; claim: Claim | null | undefined | unknown; empty?: string }) {
   const claim = asClaim(raw);
   if (!claim) return <span className="muted small">{empty ?? "Not stated in any accessible source."}</span>;
   return (
@@ -232,7 +307,7 @@ export function ClaimView({ ds, claim: raw, empty }: { ds: Dataset; claim: Claim
   );
 }
 
-export function ClaimList({ ds, claims, empty }: { ds: Dataset; claims: Claim[]; empty: string }) {
+export function ClaimList({ ds, claims, empty }: { ds: DatasetView; claims: Claim[]; empty: string }) {
   if (!claims.length) return <p className="muted small">{empty}</p>;
   return (
     <div className="stack-sm">
@@ -259,7 +334,7 @@ export function InboxOriginChip({ envelope }: { envelope: Envelope<unknown> }) {
 }
 
 /** The inbox-origin chip for a record given by id, in lists of defects, evidence and open items. */
-export function InboxMark({ ds, id }: { ds: Dataset; id: string }) {
+export function InboxMark({ ds, id }: { ds: DatasetView; id: string }) {
   const envelope = typeof id === "string" ? ds.byId(id) : undefined;
   return envelope ? <InboxOriginChip envelope={envelope} /> : null;
 }
@@ -284,6 +359,46 @@ export function AcceptanceLock({ data }: { data: unknown }) {
       <strong>Proposals cannot change this record.</strong> It carries a founder {acc.state === "accepted" ? "acceptance" : "rejection"} recorded in HQ (
       {acc.decision_id}), and a proposal to change it would be refused. To change it, the founder first records a decision that clears the{" "}
       {acc.state === "accepted" ? "acceptance" : "rejection"}. Or propose a new record instead.
+    </Notice>
+  );
+}
+
+/**
+ * Said on the page of a stored record that does not pass validation (G1f). `storedAt` is where the
+ * record is shown exactly as stored; omitted on that page itself, where it is at the end.
+ */
+export function InvalidRecordNotice({ storedAt }: { storedAt?: string }) {
+  return (
+    <Notice tone="warn">
+      <strong>This record as stored does not pass validation.</strong> Values of the wrong kind are shown as “Not a valid value” and count for nothing in
+      HQ&apos;s figures.{" "}
+      {storedAt ? (
+        <>
+          The record exactly as stored is on <Link href={storedAt}>its history page</Link>.
+        </>
+      ) : (
+        "The record exactly as stored is at the end of this page."
+      )}
+    </Notice>
+  );
+}
+
+/** A build whose standing says a source reports it as accepted (G1a). */
+export function isReportedAcceptance(type: string, data: unknown): boolean {
+  return type === "build" && isObject(data) && data.standing === "accepted_reported";
+}
+
+/**
+ * Said wherever a change to a build reported as accepted can be proposed (G1a): such a build is changed
+ * only by an import or a founder decision, and a proposal may only withdraw the reported acceptance.
+ * The database refuses anything else (migration 0008), at submission and again at acceptance.
+ */
+export function ReportedAcceptanceNotice() {
+  return (
+    <Notice tone="warn">
+      <strong>A proposal can only withdraw this build&apos;s reported acceptance.</strong> A source reports it as accepted, so its statement, module,
+      label, checksum and every other field are changed only by an import or a founder decision. A proposal must set its standing to another value, for
+      example candidate_not_accepted or withdrawn; then it may change the other fields too. Any other proposal is refused.
     </Notice>
   );
 }

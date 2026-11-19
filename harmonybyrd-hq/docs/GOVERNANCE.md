@@ -44,6 +44,12 @@ the records, and it changes nothing until the founder accepts it.
   and re-checks that the target has not changed. If it has changed, the proposal is **marked stale
   and not applied**, and the founder is told which version it was based on and which version is
   current. Nothing is merged silently.
+- Accepting a proposal also re-validates the **whole record** as it would then stand, with the same
+  schema a pack import uses. If the result would not pass, the answer is 422 (`invalid_request`, with
+  the problems in `detail`), nothing is applied, the refusal is audited, and the proposal stays in the
+  inbox as *submitted*; the founder can still reject it or ask for changes. This check is made before
+  the stale check, so an invalid proposal is never marked stale instead. It is made by the
+  application: the database checks its own rules (below) at acceptance, but not the whole schema.
 
 ## What a proposal may assert
 
@@ -86,21 +92,46 @@ module `addenda_from_clusters`, `commission_entry`, `lifecycle_other_reports`; d
 `other_mentions`; build `possibly_same_as`, `code_ref`; evidence `search_results`; requirement
 `linked_tests`; source `doc_kind`, `content_kind`, `importance`, `identifiers`, `other_names`.
 
-**A proposal can never assert acceptance.** A verbatim quotation proves that words are in a source,
-not that they report an acceptance, so a citation is not enough. Acceptance is recorded only by a
-founder decision in HQ or by an import. On an update and on a create, whatever labels or citations
-the proposal carries, the database refuses (and the application refuses first):
+**A proposal can never assert acceptance, or reshape one a source reports.** A verbatim quotation
+proves that words are in a source, not that they report an acceptance, so a citation is not enough.
+Acceptance is recorded only by a founder decision in HQ or by an import. On an update and on a
+create, whatever labels or citations the proposal carries, the database refuses (and the application
+refuses first, with the same words):
 
-- a build whose standing would become `accepted_reported`, unless the record already had that standing;
-- a module whose `lifecycle.founder_accepted.state` would become `yes` or `partial`, unless the record's
-  current `lifecycle.founder_accepted` is identical (state, basis, note and citations). Replacing the
-  whole `lifecycle`, or giving a `lifecycle` that holds only `founder_accepted`, is caught the same way;
+- **any change to a build a source reports as accepted** (current standing `accepted_reported`),
+  unless the proposal withdraws that report by giving the build another standing that is one of the
+  valid standings. Statement, module, label, artifact, checksum and every other field are covered at
+  once. The message is “a build reported as accepted is changed only by an import or a founder
+  decision; a proposal may only withdraw the reported acceptance”. A proposal that does withdraw it
+  may change the other fields too: withdrawing a claim is not asserting one;
+- a build whose standing would become `accepted_reported`, when the record did not already have it;
+- a module whose `lifecycle.founder_accepted` would be **positive**, unless the whole entry is
+  identical to the record's current one. Positive means anything other than an object whose `state`
+  is exactly `no`, `unknown` or `not_applicable`: `yes` and `partial`, but also a missing state,
+  `Yes`, `yes ` or a list. Identical means the whole entry object is equal, not only some of its keys:
+  an added key such as `scope` is a change. Replacing the whole `lifecycle`, or giving a `lifecycle`
+  that holds only `founder_accepted`, is caught the same way;
 - on any record type, a top-level field named `founder_accepted` (also spelt as a dotted path such as
   `lifecycle.founder_accepted`);
 - evidence of type `founder_acceptance` (see below).
 
 At acceptance the rule is checked again against the record as it stands then, before the stale
-check, so a refused proposal stays in the inbox as *submitted*.
+check, so a refused proposal stays in the inbox as *submitted*. If an import has since made the
+target a build reported as accepted, accepting a proposal written before that is refused too.
+
+**The database checks the values that drive labels itself.** For each record type it holds the
+fields whose value must come from a fixed list, and the lists (`hq.field_enums`, the same lists as
+`FIELD_ENUMS` in `src/lib/domain/schemas.ts`: `tests/db/field-enums.test.ts` compares the table with
+`FIELD_ENUMS`, and `tests/unit/schemas.test.ts` compares `FIELD_ENUMS` with the record schemas). Among them: a build's `standing`; a module's `kind`, `evidence_level`, the dimension names in
+`lifecycle` and each entry's `state` and `basis`; evidence `type` and `verification`; the status-like
+fields of every other type; and `epistemic` in any object at any depth. A value must be a JSON string
+on its list; anything else is refused with 422 (`detail.field` names the field, `detail.rule` is
+`allowed_values`). A created record is checked in full. For an update, the fields the proposal sets
+are checked as they would stand, and the fields that drive acceptance (build `standing`, module
+`lifecycle`, evidence `type`) are always checked in the whole resulting record. So an odd value
+imported before this rule does not block an unrelated change, except in those fields: a build with an
+odd standing can only be changed by a proposal that gives it a valid one. The check runs at
+submission and again at acceptance.
 
 **Rules for particular record types:**
 
@@ -128,14 +159,17 @@ stale. The database also refuses any write to such a record other than a founder
 | Refusal | HTTP status | Error code |
 | --- | --- | --- |
 | A protected or build-only field, an HQ-only label, a forbidden evidence type, a source or evidence integrity rule, a decision record | 403 | `forbidden` (`detail.protected_fields` lists the fields, where there are any) |
-| A claim of acceptance: a build standing `accepted_reported`, a module `lifecycle.founder_accepted` of `yes` or `partial`, or a `founder_accepted` field | 403 | `forbidden` (`detail.rule` is `acceptance_claim`; `detail.field` names the field) |
+| A claim of acceptance: a build standing `accepted_reported`, any change to a build reported as accepted that does not withdraw it, a positive module `lifecycle.founder_accepted` that is not identical to the current one, or a `founder_accepted` field | 403 | `forbidden` (`detail.rule` is `acceptance_claim`; `detail.field` names the field: `standing` for a build) |
 | A quotation or wording that cannot be verified, a source label without a citation, a malformed citation | 422 | `invalid_request` (`detail.unverified_quotations` lists every quotation that failed) |
+| A value outside its field's list | 422 | `invalid_request` (`detail.field`; `detail.rule` is `allowed_values`) |
+| At acceptance, a record that would no longer pass its schema | 422 | `invalid_request` (`detail` lists the problems; the proposal stays *submitted*) |
 | A linked id that does not exist | 422 | `invalid_request` (`detail.unknown_links`) |
 | A target carrying a founder acceptance or rejection recorded in HQ | 409 | `conflict` (`detail.acceptance`; the message says “acceptance” or “rejection”, whichever it is) |
 | A target that changed since `base_version` | 409 | `conflict` |
 
 The application writes these refusals to the audit log (see “History and audit”), whether they
-come through the API or the browser form.
+come through the API or the browser form. A refused acceptance is logged as `proposal.review`
+*denied*, with the status (403, 409 or 422), the code and the message.
 
 ## Evidence from agents
 
@@ -149,8 +183,10 @@ things count:
 
 - evidence of type `founder_acceptance` that a source reports or HQ's build checked, whose `build_id`
   is that build; or
-- an issued decision recorded in HQ whose effects include a `set_acceptance` that accepts that build
-  (the same thing the build's HQ acceptance records).
+- an issued decision recorded in HQ whose effects include a `set_acceptance` that accepts that build,
+  and only while the build's current HQ acceptance has the state *accepted* and names that decision.
+  An acceptance the founder later cleared, or replaced by a rejection, is no instrument: the review
+  item comes back.
 
 Nothing else counts: not a decision that only names the build's module, not a decision a source
 reports (those carry no reference to a build), and never a link the build itself carries, such as
@@ -191,8 +227,8 @@ approval except a founder decision.
 
 - **Acceptance reported in a source** — a document says the founder accepted something. HQ shows it
   as reported, with the quotation and the scope the document states. HQ has not seen the founder do
-  it. Such a report reaches HQ only through an import, never through a proposal (see “A proposal can
-  never assert acceptance”). HQ counts it as reported only when it is labelled `reported` or
+  it. Such a report reaches HQ only through an import: a proposal can neither introduce one nor change
+  a build that carries one, except to withdraw it (see “A proposal can never assert acceptance”). HQ counts it as reported only when it is labelled `reported` or
   `founder_statement` and quotes a source: a module's lifecycle entry, or a build's statement. A pack
   is refused if a build in it has the standing `accepted_reported` with no citation, and is warned if
   the citing statement has another label.

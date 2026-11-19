@@ -212,3 +212,165 @@ describe("bounded work (F5)", () => {
     expect(throttle.size).toBe(10_000);
   });
 });
+
+describe("a lane never holds what the client chose to send (G7, round 3)", () => {
+  it("a name longer than 64 characters is refused as busy: no lane, no attempt, no failure counted", async () => {
+    const { throttle } = throttleWithClock();
+    let ran = 0;
+    const attempt = async () => {
+      ran += 1;
+      return { outcome: "failure" as const, value: false };
+    };
+    for (const name of ["m".repeat(65), "M".repeat(900_000), `${"x".repeat(64)}y`]) {
+      expect(await throttle.run(name, attempt)).toEqual({ busy: true });
+      expect(await throttle.run({ name, device: "AAAAAAAAAAAAAAAAAAAAAA" }, attempt)).toEqual({ busy: true });
+    }
+    expect(ran).toBe(0);
+    expect(throttle.size).toBe(0);
+    expect(throttle.inProgress).toEqual({ anonymous: 0, device: 0 });
+  });
+
+  it("a name that becomes longer than 64 characters when lower-cased is refused too", async () => {
+    const { throttle } = throttleWithClock();
+    // "İ" (U+0130) lower-cases to two code units, so 40 of them make an 80-character key.
+    expect(await throttle.run("İ".repeat(40), async () => ({ outcome: "failure" as const, value: false }))).toEqual({ busy: true });
+    expect(throttle.size).toBe(0);
+  });
+
+  it("a device id longer than 64 characters is refused, whatever the caller passes", async () => {
+    const { throttle } = throttleWithClock();
+    expect(await throttle.run({ name: "founder", device: "d".repeat(65) }, async () => ({ outcome: "success" as const, value: true }))).toEqual({ busy: true });
+    expect(throttle.size).toBe(0);
+  });
+
+  it("names of exactly 64 characters still get a lane", async () => {
+    const { throttle, fail } = throttleWithClock();
+    const result = await fail("n".repeat(64));
+    expect(result.busy).toBe(false);
+    expect(throttle.size).toBe(1);
+    expect(throttle.failures("n".repeat(64))).toBe(1);
+  });
+});
+
+describe("eviction keeps the lanes that matter (G8, round 3)", () => {
+  function smallThrottle(maxNames: number) {
+    let clock = 9_000_000;
+    const throttle = new SignInThrottle({
+      baseDelayMs: 500,
+      maxNames,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    const fail = (lane: Parameters<SignInThrottle["run"]>[0]) => throttle.run(lane, async () => ({ outcome: "failure" as const, value: false }));
+    return { throttle, fail, advance: (ms: number) => (clock += ms) };
+  }
+
+  it("first evicts the oldest lane with nothing in progress and fewer than five failures", async () => {
+    const { throttle, fail } = smallThrottle(3);
+    for (let i = 0; i < 11; i += 1) await fail("founder");
+    await fail("a");
+    await fail("b");
+    await fail("c"); // founder is the oldest, but it is delaying a guesser: "a" goes
+    expect(throttle.size).toBe(3);
+    expect(throttle.failures("founder")).toBe(11);
+    expect(throttle.failures("a")).toBe(0);
+    expect(throttle.failures("b")).toBe(1);
+    expect(throttle.failures("c")).toBe(1);
+  });
+
+  it("an expired count is evictable even at five failures or more, before a recent lane with fewer", async () => {
+    const { throttle, fail, advance } = smallThrottle(2);
+    for (let i = 0; i < 6; i += 1) await fail("old");
+    advance(15 * 60_000 + 1);
+    await fail("low");
+    await fail("new");
+    expect(throttle.size).toBe(2);
+    expect(throttle.failures("low")).toBe(1);
+    expect(throttle.failures("new")).toBe(1);
+  });
+
+  it("when every lane is at five failures or more, the oldest one with nothing in progress goes", async () => {
+    const { throttle, fail } = smallThrottle(3);
+    for (const name of ["a", "b", "c"]) for (let i = 0; i < 5; i += 1) await fail(name);
+    await fail("d");
+    expect(throttle.size).toBe(3);
+    expect(throttle.failures("a")).toBe(0);
+    expect(throttle.failures("b")).toBe(5);
+    expect(throttle.failures("c")).toBe(5);
+    expect(throttle.failures("d")).toBe(1);
+  });
+
+  it("a lane with an attempt in progress is never evicted; with no other lane to evict, a new name is refused as busy", async () => {
+    const { throttle, fail } = smallThrottle(2);
+    const one = held();
+    const two = held();
+    const p1 = throttle.run("a", one.attempt);
+    const p2 = throttle.run("b", two.attempt);
+    await new Promise((r) => setTimeout(r, 1));
+    expect(await fail("c")).toEqual({ busy: true });
+    expect(throttle.size).toBe(2);
+    one.settle("failure");
+    await p1;
+    expect((await fail("c")).busy).toBe(false); // "a" has nothing in progress now
+    expect(throttle.failures("a")).toBe(0);
+    two.settle("failure");
+    await p2;
+    expect(throttle.failures("b")).toBe(1);
+    expect(throttle.inProgress).toEqual({ anonymous: 0, device: 0 });
+  });
+
+  it("the per-lane cap and the failure count hold for a name under attack while 10,000 other names come and go", async () => {
+    const { throttle, fail } = throttleWithClock();
+    for (let i = 0; i < 11; i += 1) await fail("founder");
+    const open = Array.from({ length: ANONYMOUS_PER_LANE }, () => held());
+    const runs = open.map((h) => throttle.run("founder", h.attempt));
+    await new Promise((r) => setTimeout(r, 1));
+    for (let i = 0; i < 10_100; i += 1) await fail(`flush-${i}`);
+    expect(throttle.size).toBe(10_000);
+    expect(throttle.failures("founder")).toBe(11);
+    expect(await throttle.run("founder", async () => ({ outcome: "success" as const, value: true }))).toEqual({ busy: true });
+    expect(throttle.inProgress).toEqual({ anonymous: ANONYMOUS_PER_LANE, device: 0 });
+    for (const h of open) h.settle("failure");
+    await Promise.all(runs);
+    expect(throttle.failures("founder")).toBe(11 + ANONYMOUS_PER_LANE);
+    // And with nothing in progress, the founder's count still survives another flush of fresh names.
+    for (let i = 0; i < 10_100; i += 1) await fail(`again-${i}`);
+    expect(throttle.failures("founder")).toBe(11 + ANONYMOUS_PER_LANE);
+    expect(throttle.inProgress).toEqual({ anonymous: 0, device: 0 });
+  });
+
+  it("counters return to zero when evictions and completions interleave", async () => {
+    let clock = 1;
+    const throttle = new SignInThrottle({ maxNames: 4, now: () => clock, sleep: async (ms) => void (clock += ms) });
+    const opened: { settle: (o: "success" | "failure") => void; run: Promise<unknown> }[] = [];
+    const open = (lane: Parameters<SignInThrottle["run"]>[0]) => {
+      const h = held();
+      opened.push({ settle: h.settle, run: throttle.run(lane, h.attempt) });
+    };
+    open("a");
+    open({ name: "b", device: "BBBBBBBBBBBBBBBBBBBBBB" });
+    await throttle.run("x1", async () => ({ outcome: "failure" as const, value: null }));
+    await throttle.run("x2", async () => ({ outcome: "failure" as const, value: null }));
+    open("c"); // evicts x1
+    opened[0].settle("failure");
+    await opened[0].run;
+    open({ name: "d", device: "DDDDDDDDDDDDDDDDDDDDDD" }); // evicts x2 or a
+    open("e"); // evicts whatever has nothing in progress
+    expect(throttle.size).toBeLessThanOrEqual(4);
+    expect(throttle.inProgress).toEqual({ anonymous: 2, device: 2 });
+    for (const o of opened.slice(1)) o.settle("success");
+    await Promise.all(opened.map((o) => o.run));
+    expect(throttle.inProgress).toEqual({ anonymous: 0, device: 0 });
+    // The per-name device count is back to zero too: four device attempts for "b" are admitted again.
+    const four = [held(), held(), held(), held()];
+    const devices = ["B1".padEnd(22, "x"), "B2".padEnd(22, "x")];
+    const runs = four.map((h, i) => throttle.run({ name: "b", device: devices[i % 2] }, h.attempt));
+    await new Promise((r) => setTimeout(r, 1));
+    expect(throttle.inProgress.device).toBe(4);
+    for (const h of four) h.settle("failure");
+    await Promise.all(runs);
+    expect(throttle.inProgress).toEqual({ anonymous: 0, device: 0 });
+  });
+});

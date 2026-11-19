@@ -7,6 +7,7 @@ import { DEVICE_COOKIE, DEVICE_DAYS, type DeviceClaims, secureCookies, signDevic
 import { claimsFor } from "@/lib/auth/principal";
 import { safeNext } from "@/lib/auth/safe-next";
 import { SESSION_COOKIE, SESSION_HOURS, signSession } from "@/lib/auth/session";
+import { tooLongSignInInput } from "@/lib/auth/sign-in-input";
 import { type Lane, signInThrottle } from "@/lib/auth/throttle";
 import { audit, writeAs } from "@/lib/server/db";
 
@@ -38,11 +39,29 @@ async function laneFor(handle: string, device: DeviceClaims | null): Promise<Lan
   }
 }
 
-export async function signIn(_previous: { error?: string } | undefined, formData: FormData): Promise<{ error?: string }> {
-  const handle = String(formData.get("handle") ?? "").trim().toLowerCase();
-  const passphrase = String(formData.get("passphrase") ?? "");
-  const next = safeNext(formData.get("next"));
+const NO_MATCH = "That name and passphrase do not match.";
 
+export async function signIn(_previous: { error?: string } | undefined, formData: FormData): Promise<{ error?: string }> {
+  const typed = String(formData.get("handle") ?? "").trim();
+  const passphrase = String(formData.get("passphrase") ?? "");
+
+  // Before anything else (G7): an over-long name or passphrase never reaches the throttle, the
+  // database or the passphrase check. The refusal is audited with the length only, never the value.
+  const tooLong = tooLongSignInInput(typed, passphrase);
+  if (tooLong) {
+    await audit(null, {
+      action: "session.sign_in",
+      objectType: "principal",
+      // The name is kept only when it is not the over-long value.
+      objectId: tooLong.field === "passphrase" ? typed.toLowerCase() || null : null,
+      outcome: "denied",
+      detail: { reason: `${tooLong.field}_too_long`, [`${tooLong.field}_length`]: tooLong.length },
+    });
+    return { error: NO_MATCH };
+  }
+
+  const handle = typed.toLowerCase();
+  const next = safeNext(formData.get("next"));
   if (!handle || !passphrase) return { error: "Enter your name and passphrase." };
   const address = await clientAddress();
   const store = await cookies();
@@ -79,7 +98,7 @@ export async function signIn(_previous: { error?: string } | undefined, formData
       outcome: "denied",
       detail: { failures: signInThrottle().failures(lane), lane: lane.device ? "device" : "anonymous", ...(address ? { client_address: address } : {}) },
     });
-    return { error: "That name and passphrase do not match." };
+    return { error: NO_MATCH };
   }
 
   const secure = secureCookies();
