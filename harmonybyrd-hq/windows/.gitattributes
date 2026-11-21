@@ -1,0 +1,6 @@
+# Windows files are run by Windows tools: keep Windows line endings in every checkout and archive.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.html text eol=crlf
+# Run inside Linux (WSL): Unix line endings.
+*.sh text eol=lf

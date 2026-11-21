@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Give a person (default: founder) a NEW sign-in passphrase. It is generated, shown ONCE, and only its
+# hash is stored. Any earlier passphrase for that person stops working. Run as root.
+#   hq-passphrase [founder|developer|reader]
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+who="${1:-founder}"
+case "$who" in founder|developer|reader) ;; *) die "usage: hq-passphrase [founder|developer|reader]";; esac
+load_hq_env
+hq_node scripts/credentials.ts passphrase "$who"

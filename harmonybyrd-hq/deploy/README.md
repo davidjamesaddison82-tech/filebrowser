@@ -127,7 +127,8 @@ The server makes no founder passphrase: set one yourself, on the server.
 ```
 server# cd /opt/hq/current && sudo bash -c '. /usr/local/bin/hq-common.sh; load_hq_env; hq_node scripts/credentials.ts passphrase founder'
 ```
-It asks for the passphrase twice and never displays it.
+It generates a new passphrase and shows it **once**. Store it in your password manager straight
+away. Running the command again replaces it.
 
 Open HQ from your computer through an SSH tunnel. HQ is never on the public internet.
 ```

@@ -1,5 +1,11 @@
 # Permanent hosting for HarmonyByrd HQ (HB-HQ-HOST-P1)
 
+> **Founder decision (21 November 2026): HQ runs on the founder's Windows 11 laptop, not on a cloud
+> server.** The Windows installation is in `windows/` (guide: `windows/Read me first.html`). It
+> reuses this design's scripts inside a dedicated WSL 2 Linux system, with loopback-only listeners,
+> plain restore-tested backups copied to a Windows folder, and no firewall or SSH changes. The cloud
+> design below is kept for reference; nothing in it is approved.
+
 Status: **prepared and rehearsed locally; nothing is deployed.** No server, paid service, tunnel or
 token exists. Every step that would create one is listed under [Approvals](#actions-that-need-the-founders-approval).
 

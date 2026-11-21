@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HarmonyByrd HQ for Windows</title>
+<style>
+  :root { --bg:#fbfaf7; --fg:#1f2328; --muted:#5b636d; --line:#ddd8cf; --card:#ffffff; --accent:#2f5d50; --warn:#8a5a00; --warnbg:#fff6e0; --code:#f1eee8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181b; --fg:#e7e4de; --muted:#a3a9b0; --line:#33373c; --card:#1d2024; --accent:#8cc3b0; --warn:#f0c46a; --warnbg:#2c2615; --code:#262a2f; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 "Segoe UI", system-ui, sans-serif; }
+  main { max-width:780px; margin:0 auto; padding:32px 16px 64px; }
+  h1 { font-size:1.9rem; margin:0 0 4px; }
+  h2 { font-size:1.3rem; margin:40px 0 8px; padding-top:16px; border-top:1px solid var(--line); }
+  h3 { font-size:1.05rem; margin:24px 0 6px; }
+  p.lead { color:var(--muted); margin-top:0; }
+  code, kbd { background:var(--code); border-radius:4px; padding:1px 5px; font:0.92em Consolas, monospace; }
+  .note { background:var(--warnbg); border-left:4px solid var(--warn); padding:10px 14px; border-radius:4px; margin:16px 0; }
+  .step { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin:12px 0; }
+  .step b.n { display:inline-block; min-width:1.6em; color:var(--accent); }
+  table { border-collapse:collapse; width:100%; margin:12px 0; font-size:0.95rem; }
+  th, td { text-align:left; vertical-align:top; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  a { color:var(--accent); }
+  .wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+<h1>HarmonyByrd HQ for Windows</h1>
+<p class="lead">Install and use HarmonyByrd HQ on this laptop. You won't need any programming knowledge.</p>
+
+<p>HQ runs only on this computer. You open it in your browser at <code>http://localhost:3210</code>.
+Other computers, your local network and the internet cannot reach it. Your records are never uploaded
+anywhere.</p>
+
+<h2>What you need</h2>
+<ul>
+  <li>Windows 11 and an account that can approve an administrator prompt (this is needed once).</li>
+  <li>At least 10 GB of free disk space. 8 GB of memory or more is recommended.</li>
+  <li>An internet connection for the first installation. It downloads public software only:
+    Ubuntu Linux, PostgreSQL 16 and Node.js.</li>
+  <li>Your verified preservation archive, <code>hq-preservation-2026-11-21-v1.zip</code>. The installer
+    looks for it in <code>Downloads\HarmonyByrd HQ</code> first. If it isn't there, the installer asks you to
+    choose it.</li>
+</ul>
+
+<h3>What gets installed, and why</h3>
+<p>HQ is built from Linux software: its PostgreSQL 16 database and its web application. Windows runs
+Linux software through a built-in, free Microsoft feature called <b>WSL 2</b> (Windows Subsystem for
+Linux).</p>
+<p>The installer turns WSL 2 on if it is off, then creates a private Linux system used only by HQ, named
+<code>HarmonyByrdHQ</code>. You do <b>not</b> need Docker. You do not need to install PostgreSQL or
+Node.js on Windows yourself, and you never have to type Linux commands.</p>
+
+<h2>Install</h2>
+<div class="step"><b class="n">1.</b> <b>Unblock and extract the package.</b> Right-click
+<code>HarmonyByrd-HQ-Windows-v1.zip</code> and choose <i>Properties</i>. Tick <i>Unblock</i> if it is
+shown, then click <i>OK</i>. Then right-click the zip, choose <i>Extract All…</i>, and extract it, for
+example into <code>Downloads\HarmonyByrd HQ</code>.</div>
+
+<div class="step"><b class="n">2.</b> In the extracted folder, double-click <b>Install HarmonyByrd HQ</b>.
+If Windows shows "Windows protected your PC", click <i>More info</i> and then <i>Run anyway</i>. The package
+is checked against its checksums before anything is installed.</div>
+
+<div class="step"><b class="n">3.</b> <b>If WSL is not yet turned on</b>, Windows asks for permission.
+Click <i>Yes</i>. When the window says so, <b>restart Windows</b>, then double-click <b>Install
+HarmonyByrd HQ</b> again. It carries on from where it stopped.</div>
+
+<div class="step"><b class="n">4.</b> <b>Wait.</b> The installation takes 20–40 minutes. It:
+<ul>
+  <li>checks your preservation archive's SHA-256;</li>
+  <li>copies the archive into a read-only <code>Archive</code> folder and unpacks it there;</li>
+  <li>downloads and checks Ubuntu, then installs PostgreSQL 16 and HQ;</li>
+  <li>restores all 1,581 development records exactly as preserved;</li>
+  <li>runs the 38 restoration checks and the security checks;</li>
+  <li>makes the first backup.</li>
+</ul>
+The window shows each step. Every check must pass, or the installation stops and tells you why.</div>
+
+<div class="step"><b class="n">5.</b> <b>Save your founder passphrase.</b> At the end, the window
+shows a new passphrase <b>once</b>. Copy it into your password manager before you press Enter. It is not
+saved in any file. If you lose it, use <i>New founder passphrase</i> from the Start menu.</div>
+
+<div class="step"><b class="n">6.</b> Your browser opens HQ. Sign in with the name <code>founder</code> and
+that passphrase.</div>
+
+<h2>Everyday use</h2>
+<table>
+<tr><th>To…</th><th>Do this</th></tr>
+<tr><td>Open HQ</td><td>Double-click <b>Start HarmonyByrd HQ</b> on the desktop. The browser opens at <code>http://localhost:3210</code> once HQ is ready, within about a minute.</td></tr>
+<tr><td>Finish for the day</td><td>Double-click <b>Stop HarmonyByrd HQ</b>. It makes a backup first, then stops HQ.</td></tr>
+<tr><td>Other tools</td><td>Start menu → <b>HarmonyByrd HQ</b>: back up now, restore from a backup, check HQ, new founder passphrase, open the HQ folder, uninstall.</td></tr>
+</table>
+<p>Your records stay on disk when HQ is stopped, when Windows restarts, and when HQ is updated.</p>
+
+<h2>Backups</h2>
+<ul>
+  <li><b>When:</b> every time you use <i>Stop HarmonyByrd HQ</i>, and every night at 2:15 am while HQ is
+    running. If the laptop was off at 2:15 am, the backup runs the next time HQ starts. You can also back
+    up at any time from the Start menu.</li>
+  <li><b>Checked:</b> each backup is test-restored and checked before it is kept. A backup that does not
+    restore cleanly is not kept, and you are told.</li>
+  <li><b>Where:</b> <code>C:\Users\&lt;you&gt;\HarmonyByrdHQ\Backups</code>. Files are named
+    <code>hq-&lt;date&gt;T&lt;time&gt;Z.dump</code>, each with a <code>.sha256</code> checksum file. They are kept for
+    35 days.</li>
+  <li><b>Keep a copy elsewhere:</b> copy the Backups folder to a USB drive from time to time. A backup that
+    exists only on this laptop is lost with the laptop.</li>
+</ul>
+<div class="note"><b>Protect the laptop.</b> The backups are ordinary database files, so anyone who
+has the laptop's disk could read them. Turn on <i>Device encryption</i> or <i>BitLocker</i>: Settings →
+Privacy &amp; security → Device encryption. The HarmonyByrdHQ folder is not inside OneDrive and is not
+uploaded. Do not move it into OneDrive, Dropbox or Google Drive.</div>
+
+<h3>Restoring a backup</h3>
+<ol>
+  <li>Start menu → HarmonyByrd HQ → <b>Restore HarmonyByrd HQ from a backup</b>.</li>
+  <li>Choose the backup file and type <code>RESTORE</code>.</li>
+</ol>
+<p>HQ then backs up the current database, checks the chosen backup, and only then swaps it in. The
+database it replaced is also kept inside HQ, so nothing is thrown away. Afterwards it runs the checks
+again.</p>
+
+<h2>Checking HQ</h2>
+<p>Start menu → HarmonyByrd HQ → <b>Check HarmonyByrd HQ</b> confirms that:</p>
+<ul>
+  <li>HQ is reachable from this computer only;</li>
+  <li>every file in the Archive (including the 43 captured original documents) still matches its SHA-256
+    checksum;</li>
+  <li>the records' seals, hash chain, citations and quotations are intact;</li>
+  <li>the 38 restoration checks still equal the preserved database (skip this one once you have added
+    records on purpose);</li>
+  <li>a read-only AI identity can read but cannot write or act as founder;</li>
+  <li>the per-token rate limit works;</li>
+  <li>a backup has been made in the last 26 hours.</li>
+</ul>
+<p>A report is saved in the <code>Logs</code> folder.</p>
+
+<h2>Where everything is</h2>
+<div class="wrap"><table>
+<tr><th>Folder (in <code>C:\Users\&lt;you&gt;\HarmonyByrdHQ</code>)</th><th>What it holds</th></tr>
+<tr><td><code>System</code></td><td>HQ's private Linux system: the PostgreSQL database and the application. Do not edit or move it.</td></tr>
+<tr><td><code>Backups</code></td><td>Your backups.</td></tr>
+<tr><td><code>Archive</code></td><td>An untouched copy of the preservation archive, and its unpacked contents, all read-only: the 43 captured originals and source map, the recovery tools and private package, the database exports and the verification results.</td></tr>
+<tr><td><code>Program</code></td><td>The launchers and scripts.</td></tr>
+<tr><td><code>Logs</code></td><td>Installation and check reports. Passphrases are never written here.</td></tr>
+</table></div>
+
+<h2>Security</h2>
+<ul>
+  <li>HQ and its database listen only on this computer's own loopback address. Windows passes
+    <code>localhost:3210</code> to HQ and to nothing else. No firewall rule is added and no port is
+    opened. The installer and <i>Check HarmonyByrd HQ</i> both confirm this.</li>
+  <li>Credentials are created fresh on this laptop during installation, and none is inside the
+    package:
+    <ul>
+      <li>a random database password and a random session secret, readable only inside HQ's Linux
+        system;</li>
+      <li>your founder passphrase, of which only a hash is stored.</li>
+    </ul></li>
+  <li>The Linux system cannot start Windows programs.</li>
+  <li>Your requirements, founder decisions, acceptance records and evidence are restored exactly. The
+    38 checks prove that before HQ is first opened.</li>
+</ul>
+
+<h2>Claude and ChatGPT (later)</h2>
+<p>HQ's REST API and MCP interface are installed unchanged, at <code>http://localhost:3210/api/v1</code>
+and <code>http://localhost:3210/api/mcp</code>.</p>
+<p>Three separate <b>read-only</b> AI identities are ready: <code>researcher</code>, <code>qa-auditor</code>
+and <code>chatgpt</code>. <b>None has a token yet</b>, so no AI can connect until you decide.</p>
+<p>When you do, issue a token on HQ's <i>AI &amp; API access</i> screen, one per AI. Leave only
+<i>read</i> ticked, and enter an expiry, for example 90 days. The token is shown once, and you can
+revoke it on the same screen at any time. Each token is limited to 120 requests a minute.</p>
+<ul>
+  <li>An AI tool running on this laptop (for example Claude Code) can use the localhost address
+    directly.</li>
+  <li>Cloud services (Claude's Managed Agents, ChatGPT) cannot reach <code>localhost</code>. They need a
+    tunnel or a public address. That is a separate decision, described in <code>docs/HOSTING.md</code>
+    in the HQ source.</li>
+</ul>
+
+<h2>Updating HQ</h2>
+<p>When you receive a newer Windows package, extract it and double-click <b>Install HarmonyByrd HQ</b>
+again. It:</p>
+<ul>
+  <li>backs up first;</li>
+  <li>installs the new application;</li>
+  <li><b>never</b> replaces your database;</li>
+  <li>runs the checks.</li>
+</ul>
+<p>It asks whether you want a new founder passphrase. Answer N to keep your current one.</p>
+
+<h2>Uninstalling</h2>
+<p>Start menu → HarmonyByrd HQ → <b>Uninstall HarmonyByrd HQ</b>, then type <code>REMOVE</code>. It makes a
+final backup, then removes HQ's Linux system and the shortcuts. Your <code>Backups</code> and
+<code>Archive</code> folders are kept.</p>
+
+<h2>If something goes wrong</h2>
+<div class="wrap"><table>
+<tr><th>What you see</th><th>What to do</th></tr>
+<tr><td>A message about virtualization, or <code>0x80370102</code></td><td>Restart the laptop into its firmware (BIOS/UEFI) settings and turn on <i>Virtualization</i> (Intel VT-x, or AMD-V/SVM). Then run the installer again. The laptop maker's website explains how for your model.</td></tr>
+<tr><td>"SHA-256 … is not the verified preservation archive"</td><td>The file chosen is not your verified archive, or it was damaged. Use the copy you verified, for example your second copy.</td></tr>
+<tr><td>A download fails</td><td>Check the internet connection and run the installer again. It carries on safely.</td></tr>
+<tr><td>Start says HQ did not answer</td><td>Use Stop, then Start. If that fails, run <i>Check HarmonyByrd HQ</i> and keep its report from the Logs folder.</td></tr>
+<tr><td>"reachable from beyond this computer"</td><td>Use Stop. This should not happen with Windows' standard WSL settings. If you have changed WSL's networking settings (a <code>.wslconfig</code> file in your user folder), undo that change.</td></tr>
+<tr><td>Port 3210 already in use</td><td>Another program is using it. Close that program, then Start again.</td></tr>
+<tr><td>Forgotten passphrase</td><td>Start menu → <i>New founder passphrase</i>.</td></tr>
+</table></div>
+<p>Every installation run writes a full log to the <code>Logs</code> folder.</p>
+</main>
+</body>
+</html>

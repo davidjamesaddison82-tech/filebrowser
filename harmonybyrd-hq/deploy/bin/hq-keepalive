@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Windows only. "Start HarmonyByrd HQ" runs this in a hidden window: while it runs, Windows keeps the
+# HQ WSL distribution (and so HQ, PostgreSQL and the backup timer) running. "Stop" ends it.
+exec sleep infinity

@@ -6,6 +6,8 @@
 #       Replace the live database with a backup. The live database is NOT deleted: it is renamed
 #       hq_replaced_<time> and kept until you drop it yourself. The key file is the founder's private
 #       key, brought to the server for this command only; delete it from the server afterwards.
+#   hq-rollback db <hq-YYYYmmddTHHMMSSZ.dump>
+#       The same with a plain (unencrypted) backup, as made on Windows. No key.
 . "$(dirname "$(readlink -f "$0")")/hq-common.sh"
 
 case "${1:-}" in
@@ -19,11 +21,16 @@ case "${1:-}" in
     log "Now running $prev (the release you left: $cur)"
     ;;
   db)
-    backup="${2:?backup file}"; key="${3:?age private key file}"
-    [ -f "$backup" ] && [ -f "$key" ] || die "backup or key file not found"
+    backup="${2:?backup file}"; key="${3:-}"
+    [ -f "$backup" ] || die "backup file not found: $backup"
+    case "$backup" in *.age) [ -n "$key" ] && [ -f "$key" ] || die "an encrypted backup needs the age private key file";; esac
     if [ -f "$backup.sha256" ]; then (cd "$(dirname "$backup")" && sha256sum -c "$(basename "$backup").sha256") || die "backup checksum mismatch"; fi
     work="$(pg mktemp -d)"; trap 'pg rm -rf "$work"' EXIT
-    age -d -i "$key" -o - "$backup" | pg tee "$work/restore.dump" >/dev/null
+    case "$backup" in
+      *.age) age -d -i "$key" -o - "$backup" | pg tee "$work/restore.dump" >/dev/null;;
+      *) pg tee "$work/restore.dump" < "$backup" >/dev/null;;
+    esac
+    [ "$(head -c5 "$work/restore.dump")" = PGDMP ] || die "not a PostgreSQL backup file: $backup"
     pg dropdb --if-exists hq_rollback_check; pg createdb hq_rollback_check
     pg pg_restore --exit-on-error -d hq_rollback_check "$work/restore.dump"
     integrity_check hq_rollback_check | sed 's/^/   /' || die "the backup failed its integrity checks; live database untouched (hq_rollback_check kept for inspection)"
@@ -34,5 +41,5 @@ case "${1:-}" in
     systemctl start hq.service || true
     log "Database replaced from $backup. The previous live database is kept as $keep."
     ;;
-  *) die "usage: hq-rollback app | hq-rollback db <backup.dump.age> <age private key file>";;
+  *) die "usage: hq-rollback app | hq-rollback db <backup.dump.age> <age private key file> | hq-rollback db <backup.dump>";;
 esac

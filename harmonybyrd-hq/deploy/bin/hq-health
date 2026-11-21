@@ -15,7 +15,7 @@ fi
 used="$(df --output=pcent "$HQ_VAR" | tail -1 | tr -dc 0-9)"
 [ "$used" -le 85 ] || problems+=("disk ${used}% full")
 # Nothing but SSH may listen on a public interface.
-public="$(ss -Hltn | awk '{print $4}' | grep -vE '^(127\.0\.0\.1|\[::1\]):' | grep -vE ':22$' || true)"
+public="$(public_listeners | grep -vE ':22$' || true)"
 [ -z "$public" ] || problems+=("unexpected public listener(s): $(echo "$public" | tr '\n' ' ')")
 
 mkdir -p "$HQ_VAR/health"

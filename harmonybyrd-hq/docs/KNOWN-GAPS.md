@@ -10,7 +10,7 @@ docs/TESTING.md does not show.
 | --- | --- |
 | HQ is not authoritative | The prerequisite HB-AI-P00 could not be shown to be completed or accepted. HQ says so on every screen and in every API answer |
 | HQ is not accepted | No founder acceptance of HQ exists. Building it satisfies no gate |
-| HQ is not deployed | It runs on a local machine only. A deployment package (deploy/, docs/HOSTING.md) is prepared and rehearsed locally, but nothing is installed on a server; its installer and release script have not been run on a real Ubuntu server yet |
+| HQ is not deployed | It runs on a local machine only. The founder chose the Windows laptop installation (`windows/`). Its Linux side is rehearsed with the real preservation package, but the Windows installer and launchers have not been run on Windows by the builder, and the server package (deploy/, docs/HOSTING.md) has not been run on a real Ubuntu server |
 
 ## Sources HQ could not read
 

@@ -6,11 +6,13 @@
 #   3. encrypt it with age to the founder's PUBLIC key(s) in /etc/hq/backup-recipients.txt (the private
 #      key is never on the server, so the server cannot read its own backups);
 #   4. keep 35 days, and record success in backups/LAST_OK for the health check.
+# On Windows (HQ_BACKUP_PLAIN=1 in /etc/hq/ops.conf) step 3 is skipped: the file is the restore-tested
+# dump itself, and it is also copied to the Windows folder HQ_BACKUP_EXPORT.
 . "$(dirname "$(readlink -f "$0")")/hq-common.sh"
 
 backups="$HQ_VAR/backups"
 recipients="$HQ_ETC/backup-recipients.txt"
-grep -q '^age1' "$recipients" 2>/dev/null || die "no age public key in $recipients: backups cannot be encrypted (see deploy/README.md)"
+[ "$HQ_BACKUP_PLAIN" = 1 ] || grep -q '^age1' "$recipients" 2>/dev/null || die "no age public key in $recipients: backups cannot be encrypted (see deploy/README.md)"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 work="$(pg mktemp -d)"; trap 'pg rm -rf "$work"; pg dropdb --if-exists hq_backup_check >/dev/null 2>&1 || true' EXIT
 plain="$work/hq-$stamp.dump"
@@ -28,13 +30,25 @@ bak_count="$(psql_db hq_backup_check -Atc "select count(*) from hq.record_versio
 [ "$src_count" = "$bak_count" ] || die "record versions differ: live $src_count, backup $bak_count"
 pg dropdb hq_backup_check
 
-log "Encrypting"
-out="$backups/hq-$stamp.dump.age"
-pg age -R "$recipients" -o "$out" "$plain"
+if [ "$HQ_BACKUP_PLAIN" = 1 ]; then
+  out="$backups/hq-$stamp.dump"
+  pg cp "$plain" "$out"
+else
+  log "Encrypting"
+  out="$backups/hq-$stamp.dump.age"
+  pg age -R "$recipients" -o "$out" "$plain"
+fi
 pg sh -c "cd '$backups' && sha256sum '$(basename "$out")' > '$(basename "$out").sha256'"
 printf '%s %s record_versions=%s\n' "$stamp" "$(basename "$out")" "$src_count" | pg tee "$backups/LAST_OK" >/dev/null
 pg chmod 0640 "$out" "$out.sha256" "$backups/LAST_OK"   # readable by the hqbackup group: encrypted, so safe to copy
 
-log "Pruning backups older than 35 days"
-pg find "$backups" -maxdepth 1 -name 'hq-*.dump.age*' -mtime +35 -delete
+log "Pruning backups older than $HQ_BACKUP_KEEP_DAYS days"
+pg find "$backups" -maxdepth 1 -name 'hq-*.dump*' -mtime "+$HQ_BACKUP_KEEP_DAYS" -delete
+if [ -n "$HQ_BACKUP_EXPORT" ]; then
+  log "Copying to $HQ_BACKUP_EXPORT"
+  mkdir -p "$HQ_BACKUP_EXPORT"
+  cp "$out" "$out.sha256" "$backups/LAST_OK" "$HQ_BACKUP_EXPORT/"
+  (cd "$HQ_BACKUP_EXPORT" && sha256sum -c --quiet "$(basename "$out").sha256") || die "the copy in $HQ_BACKUP_EXPORT does not match"
+  find "$HQ_BACKUP_EXPORT" -maxdepth 1 -name 'hq-*.dump*' -mtime "+$HQ_BACKUP_KEEP_DAYS" -delete
+fi
 log "Backup OK: $out ($(pg du -h "$out" | cut -f1))"

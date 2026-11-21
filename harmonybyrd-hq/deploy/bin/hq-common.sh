@@ -11,6 +11,19 @@ HQ_DEPLOY="${HQ_DEPLOY:-$HQ_ROOT/current/deploy}"
 # How to run PostgreSQL client tools as the database superuser. On the server: the postgres OS user,
 # through its local socket (peer authentication, so no superuser password exists anywhere).
 HQ_PG_RUNAS="${HQ_PG_RUNAS-runuser -u postgres --}"
+# Non-secret settings written by install.sh (on Windows: plain backups and the export folder).
+HQ_OPS_CONF="${HQ_OPS_CONF:-$HQ_ETC/ops.conf}"
+# shellcheck disable=SC1090
+[ -r "$HQ_OPS_CONF" ] && . "$HQ_OPS_CONF"
+HQ_PLATFORM="${HQ_PLATFORM:-server}"
+HQ_BACKUP_PLAIN="${HQ_BACKUP_PLAIN:-0}"
+HQ_BACKUP_EXPORT="${HQ_BACKUP_EXPORT:-}"
+HQ_BACKUP_KEEP_DAYS="${HQ_BACKUP_KEEP_DAYS:-35}"
+
+# Addresses that are not reachable from any other machine (loopback, IPv4 and IPv6).
+LOOPBACK_RE='^(127\.[0-9.]+|\[::1\]|\[::ffff:127\.[0-9.]+\]):'
+# Listening TCP addresses that are NOT loopback (one per line). On a server only :22 may appear.
+public_listeners() { ss -Hltn | awk '{print $4}' | grep -vE "$LOOPBACK_RE" || true; }
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
