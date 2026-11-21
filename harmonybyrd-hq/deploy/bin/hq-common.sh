@@ -7,6 +7,7 @@ HQ_ETC="${HQ_ETC:-/etc/hq}"                   # hq.env (secrets, 0640 root:hq), 
 HQ_VAR="${HQ_VAR:-/var/lib/hq}"               # backups/, health/
 HQ_DB="${HQ_DB:-hq}"                          # the production database
 HQ_PORT="${HQ_PORT:-3210}"                    # the application listens on 127.0.0.1 only
+HQ_PG_PORT="${HQ_PG_PORT:-5432}"              # PostgreSQL; loopback only
 HQ_DEPLOY="${HQ_DEPLOY:-$HQ_ROOT/current/deploy}"
 # How to run PostgreSQL client tools as the database superuser. On the server: the postgres OS user,
 # through its local socket (peer authentication, so no superuser password exists anywhere).
@@ -20,10 +21,54 @@ HQ_BACKUP_PLAIN="${HQ_BACKUP_PLAIN:-0}"
 HQ_BACKUP_EXPORT="${HQ_BACKUP_EXPORT:-}"
 HQ_BACKUP_KEEP_DAYS="${HQ_BACKUP_KEEP_DAYS:-35}"
 
-# Addresses that are not reachable from any other machine (loopback, IPv4 and IPv6).
-LOOPBACK_RE='^(127\.[0-9.]+|\[::1\]|\[::ffff:127\.[0-9.]+\]):'
-# Listening TCP addresses that are NOT loopback (one per line). On a server only :22 may appear.
-public_listeners() { ss -Hltn | awk '{print $4}' | grep -vE "$LOOPBACK_RE" || true; }
+# ---- Network exposure -------------------------------------------------------------------------
+# A listening socket is CONFINED to this machine only if it is bound to the loopback interface:
+#   - an address in 127.0.0.0/8, ::1 or ::ffff:127.x;
+#   - a socket tied to lo itself, which ss prints with a "%lo" suffix (systemd-resolved's stub
+#     resolver: 127.0.0.53%lo:53);
+#   - an address assigned to the lo interface (WSL's DNS tunnelling puts 10.255.255.254 on lo; it is
+#     not on any network interface, so nothing outside the machine can route to it).
+# Everything else is EXPOSED: wildcards (0.0.0.0, ::, *), and any address of a real interface.
+# TCP and UDP are both checked.
+
+# Addresses assigned to lo (one per line, no prefix length). Override with HQ_LO_ADDRS for tests.
+lo_addresses() {
+  if [ -n "${HQ_LO_ADDRS+x}" ]; then printf '%s\n' $HQ_LO_ADDRS; return; fi
+  ip -o addr show dev lo 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+}
+
+# Every listening socket as one line: "<CONFINED|EXPOSED> <tcp|udp> <address:port> <iface> <process>".
+classify_listeners() {
+  local lo; lo=" $(lo_addresses | tr '\n' ' ') "
+  ss -Hlntup 2>/dev/null | while read -r netid _state _rq _sq laddr _peer rest; do
+    [ -n "${laddr:-}" ] || continue
+    local port="${laddr##*:}" host="${laddr%:*}" iface="-" addr verdict proc
+    host="${host#[}"; host="${host%]}"
+    case "$host" in *%*) iface="${host#*%}"; addr="${host%%%*}";; *) addr="$host";; esac
+    proc="$(printf '%s' "${rest:-}" | sed -nE 's/.*users:\(\("([^"]+)".*/\1/p')"
+    verdict=EXPOSED
+    if [ "$iface" = lo ]; then verdict=CONFINED
+    elif [ "$iface" = - ]; then
+      case "$addr" in
+        127.*|::1|::ffff:127.*) verdict=CONFINED;;
+        0.0.0.0|::|'*'|'') verdict=EXPOSED;;
+        *) case "$lo" in *" $addr "*) verdict=CONFINED;; esac;;
+      esac
+    fi
+    printf '%s %s %s:%s %s %s\n' "$verdict" "$netid" "$addr" "$port" "$iface" "${proc:-?}"
+  done
+}
+
+# The exposed ones only, as "<tcp|udp> <address:port> <process>". On a server, SSH (tcp :22) is expected.
+public_listeners() { classify_listeners | awk '$1 == "EXPOSED" {print $2, $3, $5}'; }
+
+# TCP listening addresses on one port (for the strict checks of HQ's own ports).
+tcp_listeners_on() { ss -Hltn 2>/dev/null | awk '{print $4}' | grep -E ":$1\$" || true; }
+# True if something listens on the port and EVERY listener is exactly 127.0.0.1 or ::1.
+only_loopback_on() {
+  local found; found="$(tcp_listeners_on "$1")"
+  [ -n "$found" ] && ! printf '%s\n' "$found" | grep -vqxE "(127\.0\.0\.1|\[::1\]):$1"
+}
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*" >&2; exit 1; }

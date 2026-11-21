@@ -13,6 +13,9 @@ $HQProgramDir  = Join-Path $HQHome 'Program'     # these scripts, the launchers,
 $HQLogDir      = Join-Path $HQHome 'Logs'
 $HQPort        = 3210
 $HQUrl         = "http://localhost:$HQPort"
+$HQVersion     = '1.1'
+# Written only when an installation has completed (checks passed, founder passphrase issued).
+$HQCompleteMarker = Join-Path $HQProgramDir 'installation-complete.txt'
 
 $PreservationName   = 'hq-preservation-2026-11-21-v1.zip'
 $PreservationSha256 = 'c752592b3e8d8980df5685aa993f8ac03a6eaea308da479c9739d7949f21301e'
@@ -109,6 +112,39 @@ function Get-ExposedListeners {
       $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
       return ($p -and $p.ProcessName -like 'wsl*')
     }
+}
+
+# Try to connect to HQ's ports on each of this computer's own network addresses (Wi-Fi, Ethernet, the
+# WSL adapter...). HQ must answer on localhost only, so every one of these must be refused.
+# Returns one line per problem; empty means not reachable beyond this computer.
+function Test-NetworkExposure {
+  $problems = @()
+  $addrs = @(Get-NetIPAddress -ErrorAction SilentlyContinue |
+    Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.IPAddress -ne '::1' -and $_.IPAddress -notlike 'fe80*' -and $_.IPAddress -notlike '169.254.*' } |
+    Select-Object -ExpandProperty IPAddress -Unique)
+  # Also the HQ Linux system's own network address(es), as Windows sees them.
+  $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { $vm = (& wsl.exe -d $HQDistro -u root -e hostname -I 2>$null) -join ' ' } finally { $ErrorActionPreference = $old }
+  foreach ($a in ($vm -split '\s+')) { if ($a -and $a -match '^[0-9.]+$' -and $addrs -notcontains $a) { $addrs += $a } }
+  # A PostgreSQL installed directly on Windows (not HQ's) may own 5432; it is not probed.
+  $ports = @($HQPort)
+  $own5432 = @(Get-NetTCPConnection -State Listen -LocalPort 5432 -ErrorAction SilentlyContinue | Where-Object {
+    $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; -not ($p -and $p.ProcessName -like 'wsl*') })
+  if ($own5432.Count -eq 0) { $ports += 5432 } else { Write-Warn 'Port 5432 belongs to a program outside HQ (not checked).' }
+  foreach ($a in $addrs) {
+    foreach ($port in $ports) {
+      $c = New-Object System.Net.Sockets.TcpClient
+      try {
+        $iar = $c.BeginConnect($a, $port, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(1500)) {
+          try { $c.EndConnect($iar); $problems += "port $port answers on this computer's network address $a" } catch { }
+        }
+      } catch { } finally { $c.Close() }
+    }
+  }
+  foreach ($l in @(Get-ExposedListeners)) { $problems += "port $($l.LocalPort) listens on $($l.LocalAddress)" }
+  Write-Host ("   Probed {0} network address(es) of this computer on port(s) {1}." -f $addrs.Count, ($ports -join ', '))
+  return ,$problems
 }
 
 # Verify the unpacked preservation archive against its own SHA256SUMS. Returns the number of bad files.

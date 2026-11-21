@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HarmonyByrd HQ for Windows</title>
+<title>HarmonyByrd HQ for Windows 1.1</title>
 <style>
   :root { --bg:#fbfaf7; --fg:#1f2328; --muted:#5b636d; --line:#ddd8cf; --card:#ffffff; --accent:#2f5d50; --warn:#8a5a00; --warnbg:#fff6e0; --code:#f1eee8; }
   @media (prefers-color-scheme: dark) { :root { --bg:#16181b; --fg:#e7e4de; --muted:#a3a9b0; --line:#33373c; --card:#1d2024; --accent:#8cc3b0; --warn:#f0c46a; --warnbg:#2c2615; --code:#262a2f; } }
@@ -26,12 +26,26 @@
 </head>
 <body>
 <main>
-<h1>HarmonyByrd HQ for Windows</h1>
+<h1>HarmonyByrd HQ for Windows <small style="font-weight:400;color:var(--muted)">version 1.1</small></h1>
 <p class="lead">Install and use HarmonyByrd HQ on this laptop. You won't need any programming knowledge.</p>
 
 <p>HQ runs only on this computer. You open it in your browser at <code>http://localhost:3210</code>.
 Other computers, your local network and the internet cannot reach it. Your records are never uploaded
 anywhere.</p>
+
+<div class="note"><b>If version 1 stopped at "nothing listens on a non-loopback interface":</b>
+extract this version 1.1 package and double-click <b>Install HarmonyByrd HQ</b> again. Nothing needs to
+be removed first. Version 1.1:
+<ul>
+  <li>backs up your database first;</li>
+  <li>proves it is still the complete preserved database (the 38 restoration checks) and keeps it
+    exactly as it is;</li>
+  <li>never restores over it;</li>
+  <li>leaves your <code>Archive</code> and <code>Backups</code> untouched;</li>
+  <li>runs every check again, now treating Ubuntu's and WSL's own loopback-only DNS services
+    correctly;</li>
+  <li>finishes by issuing your founder passphrase.</li>
+</ul></div>
 
 <h2>What you need</h2>
 <ul>
@@ -54,7 +68,7 @@ Node.js on Windows yourself, and you never have to type Linux commands.</p>
 
 <h2>Install</h2>
 <div class="step"><b class="n">1.</b> <b>Unblock and extract the package.</b> Right-click
-<code>HarmonyByrd-HQ-Windows-v1.zip</code> and choose <i>Properties</i>. Tick <i>Unblock</i> if it is
+<code>HarmonyByrd-HQ-Windows-v1.1.zip</code> and choose <i>Properties</i>. Tick <i>Unblock</i> if it is
 shown, then click <i>OK</i>. Then right-click the zip, choose <i>Extract All…</i>, and extract it, for
 example into <code>Downloads\HarmonyByrd HQ</code>.</div>
 

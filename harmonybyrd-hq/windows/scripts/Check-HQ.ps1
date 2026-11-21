@@ -6,8 +6,8 @@ Start-Transcript -Path $report | Out-Null
 Write-Step 'Starting HQ if needed'
 if (Start-HQServices) { Write-Ok "HQ answers at $HQUrl" } else { Write-Warn "HQ does not answer at $HQUrl" }
 Write-Step 'Network: HQ must be reachable from this computer only'
-$exposed = @(Get-ExposedListeners)
-if ($exposed.Count -eq 0) { Write-Ok 'Ports 3210 and 5432 are not open to the network' } else { Write-Warn ('Open beyond this computer: ' + (($exposed | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ')) }
+$exposed = Test-NetworkExposure
+if ($exposed.Count -eq 0) { Write-Ok 'HQ and PostgreSQL are not reachable from the network' } else { foreach ($p in $exposed) { Write-Warn $p } }
 Write-Step 'Archive: captured originals, recovery evidence and source materials unchanged'
 $bad = Test-ArchiveIntegrity
 Write-Step 'Inside HQ: records, seals, 38 restoration checks, read-only AI access, rate limit, backups'

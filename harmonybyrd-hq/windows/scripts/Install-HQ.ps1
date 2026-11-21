@@ -6,7 +6,7 @@ param([string]$PreservationPath = '')
 $PackageRoot = Split-Path -Parent $PSScriptRoot
 
 Write-Host ''
-Write-Host '  HarmonyByrd HQ - installation on this computer' -ForegroundColor White
+Write-Host "  HarmonyByrd HQ $HQVersion - installation on this computer" -ForegroundColor White
 Write-Host '  ----------------------------------------------'
 Write-Host '  HQ will run only on this computer. Nothing is uploaded anywhere.'
 Write-Host '  It downloads Ubuntu Linux, PostgreSQL 16 and Node.js (public software) the first time.'
@@ -142,7 +142,9 @@ Write-Ok "Program files in $HQProgramDir"
 
 # ---------------------------------------------------------------- 6. Inside Linux
 Write-Step '6. Installing PostgreSQL 16 and HQ, restoring your records, running the checks'
-$modeArg = 'update'; if ($first) { $modeArg = 'first' }
+# Until an installation has completed, check against the 38 preserved results (also when resuming).
+$modeArg = 'update'; if (-not (Test-Path $HQCompleteMarker)) { $modeArg = 'first' }
+if (-not $first -and $modeArg -eq 'first') { Write-Host '   Resuming an installation that did not complete. Your restored database is kept and verified, never replaced.' }
 $rc = Invoke-HQ bash (ConvertTo-WslPath (Join-Path $HQProgramDir 'linux\hq-windows-setup.sh')) `
   (ConvertTo-WslPath (Join-Path $HQProgramDir $releaseZip.Name)) (ConvertTo-WslPath $archiveCopy) (ConvertTo-WslPath $HQHome) $modeArg
 if ($rc -ne 0) { Stop-WithMessage "Installation stopped (see the messages above, and the log $log). Your records and the archive are untouched. Fix the problem named above and run the installer again." }
@@ -151,11 +153,11 @@ if ($rc -ne 0) { Stop-WithMessage "Installation stopped (see the messages above,
 Write-Step '7. Checking HQ is reachable from this computer only'
 if (-not (Start-HQServices)) { Stop-WithMessage "HQ is running inside WSL but does not answer at $HQUrl. See 'If something goes wrong' in Read me first." }
 Write-Ok "HQ answers at $HQUrl"
-$exposed = @(Get-ExposedListeners)
-if ($exposed.Count -gt 0) {
-  Stop-WithMessage ("Port(s) " + (($exposed | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', ') + " are open beyond this computer. Stop HQ and see 'If something goes wrong' in Read me first.")
+$problems = Test-NetworkExposure
+if ($problems.Count -gt 0) {
+  Stop-WithMessage ("HQ is reachable beyond this computer: " + ($problems -join '; ') + ". Use 'Stop HarmonyByrd HQ' and see 'If something goes wrong' in Read me first.")
 }
-Write-Ok 'Not reachable from the local network or the internet (ports 3210 and 5432 listen on this computer only)'
+Write-Ok 'Not reachable from the local network or the internet: HQ and PostgreSQL answer on localhost only'
 
 # ---------------------------------------------------------------- 8. Shortcuts
 Write-Step '8. Shortcuts on the desktop and in the Start menu'
@@ -196,6 +198,7 @@ if ($issue) {
   Clear-Host
 }
 
+Set-Content -LiteralPath $HQCompleteMarker -Value ("HarmonyByrd HQ {0} installation completed {1}." -f $HQVersion, (Get-Date -Format s))
 Write-Host ''
 Write-Host '  INSTALLATION COMPLETE' -ForegroundColor Green
 Write-Host "  Opening $HQUrl - sign in as: founder"

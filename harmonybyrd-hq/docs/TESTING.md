@@ -191,6 +191,11 @@ attempt is refused *and* nothing changed. Examples:
   refused outright, refusals audited at most once a minute, a founder session exempt
   (`tests/unit/token-rate.test.ts`, `tests/api/token-rate.test.ts`). The shared test servers run with
   `HQ_TOKEN_RATE_PER_MINUTE=0` so the other suites are not limited.
+- the network-exposure checks of the operations scripts, against a fake `ss`: the Windows first-run
+  listeners (127.0.0.53%lo, 10.255.255.254 on lo) are confined; the same address off lo, wildcards,
+  real interface addresses, IPv4-mapped non-loopback and link-local addresses are exposure, over TCP
+  and UDP; HQ's ports need every listener exactly 127.0.0.1 or ::1, and at least one
+  (`tests/unit/deploy-listeners.test.ts`).
 
 ## Corrections made to tests during the build
 

@@ -14,17 +14,17 @@ fail() { printf 'FAIL  %s\n' "$*"; fails=$((fails + 1)); }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 B="http://127.0.0.1:$HQ_PORT"
 
+echo "== 1. Network exposure (TCP and UDP)"
+classify_listeners | awk '$1 == "CONFINED" && $3 !~ /^127\.0\.0\.1:|^::1:/ {printf "INFO  loopback-only %s %s (interface %s, process %s)\n", $2, $3, $4, $5}'
 if [ "$HQ_PLATFORM" = wsl ]; then
-  echo "== 1. Nothing is reachable from the network"
   public="$(public_listeners)"
-  check "nothing listens on a non-loopback interface${public:+ (found: $(echo $public))}" '[ -z "$public" ]'
+  check "nothing listens beyond loopback${public:+ (found: $(echo $public))}" '[ -z "$public" ]'
 else
-  echo "== 1. Nothing but SSH is reachable from outside"
-  public="$(public_listeners | grep -vE ':22$' || true)"
-  check "only SSH listens on a public interface${public:+ (found: $(echo $public))}" '[ -z "$public" ]'
+  public="$(public_listeners | grep -vE '^tcp [^ ]+:22 ' || true)"
+  check "only SSH listens beyond loopback${public:+ (found: $(echo $public))}" '[ -z "$public" ]'
 fi
-check "the application listens on 127.0.0.1:$HQ_PORT only" "ss -Hltn | awk '{print \$4}' | grep -qx '127.0.0.1:$HQ_PORT'"
-check "PostgreSQL listens on loopback only" "! ss -Hltn | awk '{print \$4}' | grep -E ':5432\$' | grep -vqE '^(127\.0\.0\.1|\[::1\]):'"
+check "HQ (port $HQ_PORT) listens on 127.0.0.1/::1 only (found: $(echo $(tcp_listeners_on "$HQ_PORT")))" "only_loopback_on $HQ_PORT"
+check "PostgreSQL (port $HQ_PG_PORT) listens on 127.0.0.1/::1 only (found: $(echo $(tcp_listeners_on "$HQ_PG_PORT")))" "only_loopback_on $HQ_PG_PORT"
 if [ "$HQ_PLATFORM" = server ] && command -v ufw >/dev/null; then check "firewall active, incoming denied by default" "ufw status verbose | grep -q 'Status: active' && ufw status verbose | grep -q 'deny (incoming)'"; fi
 
 echo "== 2. The records are intact"

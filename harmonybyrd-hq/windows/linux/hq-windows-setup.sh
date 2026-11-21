@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Run by the Windows installer inside the HarmonyByrdHQ WSL distribution, as root:
 #   hq-windows-setup.sh <release.zip> <preservation.zip> <Windows HarmonyByrdHQ folder> <first|update>
-# Each step is safe to repeat. It never replaces an existing database: on an update it backs the
-# database up, installs the new application release, and checks everything again.
+#   first:  the installation has never completed; the acceptance checks compare the database with the
+#           38 preserved results (also when resuming an interrupted first installation).
+#   update: HQ was installed before; records may have been added since, so that comparison is skipped.
+# Each step is safe to repeat. It never replaces or restores over an existing database: it backs the
+# database up, installs the application release, and checks everything again.
 set -euo pipefail
 release="$1"; pres="$2"; windir="$3"; mode="${4:-first}"
 step() { printf '\n=== %s\n' "$*"; }
@@ -37,12 +40,24 @@ else
   echo "$new_sum" > /opt/hq/release.sha256
 fi
 
+marker=/etc/hq/restored-from-preservation
 if db_exists; then
   step "4/7  Database already present: left exactly as it is"
+  if [ ! -f "$marker" ]; then
+    # Installed by v1, or interrupted: prove the database is the complete preserved one before going on.
+    [ -f /etc/hq/expected-results.txt ] || fail "a database exists but was never verified against the preservation archive. Nothing was changed. Ask for help before going on."
+    if diff -q /etc/hq/expected-results.txt <(runuser -u postgres -- psql -X -At -d hq -f /opt/hq/current/deploy/sql/verify-restore.sql) >/dev/null; then
+      echo "   The existing database passes all 38 restoration checks: it is the complete preserved database."
+      echo "verified on resume $(date -u +%FT%TZ): 38 restoration checks identical" > "$marker"
+    else
+      fail "the existing database does not match the preservation archive (38 checks differ). Nothing was changed. Ask for help before going on."
+    fi
+  fi
 else
   step "4/7  Restoring the 1,581 development records from the preservation archive"
   [ -f "$pres" ] || fail "preservation archive not found: $pres"
   hq-restore-preservation "$pres"
+  echo "restored $(date -u +%FT%TZ) from $(basename "$pres"): 38 restoration checks identical" > "$marker"
 fi
 
 step "5/7  Starting HQ (listening on this computer only)"

@@ -15,8 +15,11 @@ fi
 used="$(df --output=pcent "$HQ_VAR" | tail -1 | tr -dc 0-9)"
 [ "$used" -le 85 ] || problems+=("disk ${used}% full")
 # Nothing but SSH may listen on a public interface.
-public="$(public_listeners | grep -vE ':22$' || true)"
-[ -z "$public" ] || problems+=("unexpected public listener(s): $(echo "$public" | tr '\n' ' ')")
+public="$(public_listeners)"
+[ "$HQ_PLATFORM" = server ] && public="$(printf '%s\n' "$public" | grep -vE '^tcp [^ ]+:22 ' || true)"
+[ -z "$public" ] || problems+=("listening beyond loopback: $(echo "$public" | tr '\n' ';')")
+only_loopback_on "$HQ_PORT" || problems+=("HQ port $HQ_PORT is not loopback-only: $(echo $(tcp_listeners_on "$HQ_PORT"))")
+only_loopback_on "$HQ_PG_PORT" || problems+=("PostgreSQL port $HQ_PG_PORT is not loopback-only: $(echo $(tcp_listeners_on "$HQ_PG_PORT"))")
 
 mkdir -p "$HQ_VAR/health"
 if [ ${#problems[@]} -eq 0 ]; then
