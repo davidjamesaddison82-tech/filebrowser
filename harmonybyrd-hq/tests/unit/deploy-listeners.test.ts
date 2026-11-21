@@ -28,7 +28,7 @@ esac
   );
   chmodSync(path.join(dir, "ss"), 0o755);
   return execFileSync("bash", ["-c", `. "${common}"; ${script}`], {
-    env: { PATH: `${dir}:${process.env.PATH}`, HQ_LO_ADDRS: loAddrs, HQ_OPS_CONF: "/nonexistent", HQ_ETC: dir },
+    env: { NODE_ENV: "test", PATH: `${dir}:${process.env.PATH}`, HQ_LO_ADDRS: loAddrs, HQ_OPS_CONF: "/nonexistent", HQ_ETC: dir },
     encoding: "utf8",
   });
 }
