@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Issue a READ-ONLY, expiring token for one external AI identity. Requires founder approval first.
+#   hq-token <researcher|qa-auditor|chatgpt> [days, default 90]
+# The token is printed once. Paste it straight into the client's credential store (an Anthropic vault,
+# for example) and nowhere else. Revoke it on the founder's "AI & API access" screen.
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+handle="${1:?usage: hq-token <researcher|qa-auditor|chatgpt> [days]}"
+days="${2:-90}"
+case "$handle" in researcher|qa-auditor|chatgpt) ;; *) die "only researcher, qa-auditor or chatgpt (read-only identities)";; esac
+[[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -ge 1 ] && [ "$days" -le 365 ] || die "days must be 1-365"
+load_hq_env
+hq_node scripts/credentials.ts token "$handle" "$handle read-only $(date -u +%F)" --scopes read --days "$days"

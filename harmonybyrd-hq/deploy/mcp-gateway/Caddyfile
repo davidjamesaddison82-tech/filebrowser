@@ -1,0 +1,33 @@
+# HarmonyByrd HQ MCP gateway. NOT enabled by install.sh: it is installed only when the founder approves
+# connecting an AI client (deploy/README.md, "Connecting an AI client").
+#
+# Listens on 127.0.0.1:3211 only. Whatever reaches HQ through a tunnel or a future HTTPS endpoint is
+# pointed HERE, never at the application's own port, so only the MCP endpoint is reachable that way:
+# the founder screens, the REST API and the health endpoint all answer 404 through this gateway.
+{
+	admin off
+	auto_https off
+}
+
+http://127.0.0.1:3211 {
+	bind 127.0.0.1
+	@mcp path /api/mcp
+	handle @mcp {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:3210 {
+			# HQ answers same-origin checks by Origin; a bearer-token client sends none, which HQ accepts.
+			header_up -Cookie
+		}
+	}
+	handle {
+		respond "Not found" 404
+	}
+	log {
+		output file /var/log/hq-mcp-gateway/access.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+	}
+}

@@ -1,0 +1,8 @@
+[Unit]
+Description=HarmonyByrd HQ weekly integrity check (read only)
+After=postgresql.service
+OnFailure=hq-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hq-verify

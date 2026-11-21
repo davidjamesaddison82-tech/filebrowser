@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Migrate: create the production database from the preservation package, and prove nothing changed.
+# Run as root, once, on a server where the database does not yet exist:
+#   hq-restore-preservation <hq-preservation-2026-11-21-v1.zip>
+# It refuses to touch an existing database. Steps: verify the package checksums; create the HQ roles;
+# restore the backup; run the 38 restoration checks and require them to equal the preserved results
+# exactly; give the application role its password; run the migration command and require it to be a
+# no-op; run the 38 checks again. Any difference stops it, and the new database is left for inspection.
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+
+pkg="${1:?usage: hq-restore-preservation <hq-preservation-...zip>}"
+[ -f "$pkg" ] || die "no such file: $pkg"
+if pg psql -X -Atqc "select 1 from pg_database where datname = '$HQ_DB'" | grep -q 1; then
+  die "database '$HQ_DB' already exists: nothing done. To replace it, see 'Rollback' in deploy/README.md."
+fi
+
+tmp="$(mktemp -d)"; chmod 0755 "$tmp"; trap 'rm -rf "$tmp"' EXIT
+if [ -f "$pkg.sha256" ]; then (cd "$(dirname "$pkg")" && sha256sum -c "$(basename "$pkg").sha256") || die "package checksum mismatch"; fi
+unzip -q "$pkg" -d "$tmp"
+dir="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d -name 'hq-preservation-*' | head -1)"
+[ -n "$dir" ] || die "not a preservation package"
+(cd "$dir" && sha256sum -c --quiet SHA256SUMS) || die "a file in the package does not match SHA256SUMS"
+log "Package checksums: all $(wc -l < "$dir/SHA256SUMS") files OK"
+chmod -R a+rX "$dir"
+
+log "Roles (skipping any that exist)"
+while read -r role; do
+  if pg psql -X -Atqc "select 1 from pg_roles where rolname = '$role'" | grep -q 1; then log "  role $role exists"; else
+    grep -E "ROLE $role( |;)" "$dir/database/roles.sql" | pg psql -X -q -v ON_ERROR_STOP=1 -d postgres; log "  role $role created"; fi
+done < <(grep -oE '^CREATE ROLE [a-z_]+' "$dir/database/roles.sql" | awk '{print $3}')
+grep -E '^GRANT ' "$dir/database/roles.sql" | sed 's/ GRANTED BY postgres//' | pg psql -X -q -d postgres
+
+log "Restoring the database"
+pg createdb "$HQ_DB"
+pg pg_restore --exit-on-error -d "$HQ_DB" "$(ls "$dir"/database/*.dump)"
+
+expected="$dir/verification/expected-results.txt"
+check() {
+  local out; out="$(mktemp)"
+  psql_db "$HQ_DB" -At -f "$dir/verification/verify-restore.sql" > "$out"
+  if diff -u "$expected" "$out"; then log "  $1: all $(wc -l < "$expected") checks identical to the preserved database"; rm -f "$out"
+  else die "$1: the restored database differs from the preserved one (diff above). Nothing else was changed."; fi
+}
+check "after restore"
+# Keep the preserved results for hq-acceptance (they quote founder wordings, so they stay off the repository).
+install -m 0640 -o root -g hq "$expected" "$HQ_ETC/expected-results.txt" 2>/dev/null || install -m 0640 "$expected" "$HQ_ETC/expected-results.txt"
+
+log "Application role password (from $HQ_ETC/hq.env)"
+load_hq_env
+app_pw="$(printf '%s' "$DATABASE_URL" | sed -E 's#^[a-z]+://[^:]+:([^@]+)@.*#\1#')"
+printf "alter role hq_app password '%s';\n" "$app_pw" | pg psql -X -q -v ON_ERROR_STOP=1 -d postgres
+pg psql -X -q -d postgres -c "grant connect on database \"$HQ_DB\" to hq_app"
+
+log "Migration command (must report every migration as already applied)"
+hq_node scripts/migrate.ts | tee "$tmp/migrate.log"
+grep -q "applied 0" "$tmp/migrate.log" && die "a migration was applied: this release does not match the preserved schema"
+check "after migrate"
+
+log "Restored. The application can now be started: systemctl restart hq"

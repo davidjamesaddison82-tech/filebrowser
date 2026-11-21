@@ -1,7 +1,7 @@
 /**
  * Administrative credential management (uses the owner connection; for local setup and recovery).
  *
- *   npm run credentials -- add-client <handle> "<display name>" [--scopes read,propose]
+ *   npm run credentials -- add-client <handle> "<display name>" [--scopes read,propose] [--days 90] [--no-token]
  *   npm run credentials -- add-human <handle> "<display name>" <founder|developer|reader>
  *   npm run credentials -- token <handle> "<label>" [--scopes read,propose] [--days 90]
  *   npm run credentials -- passphrase <handle>
@@ -26,8 +26,15 @@ async function main() {
     if (command === "add-client") {
       const [handle, name] = rest;
       const p = await ensurePrincipal(client, { handle, displayName: name ?? handle, kind: "ai_client", appRole: "ai_agent" });
-      const c = await createCredential(client, p.id, "initial token", scopes);
-      console.log(`AI client "${handle}" ${p.created ? "created" : "already existed"}. New token (shown once):\n${c.token}`);
+      // --no-token: create the identity only; a token is issued later, when its use is approved.
+      if (rest.includes("--no-token")) {
+        console.log(`AI client "${handle}" ${p.created ? "created" : "already existed"}. No token issued.`);
+      } else {
+        const days = option("--days");
+        const expires = days ? new Date(Date.now() + Number(days) * 86_400_000) : null;
+        const c = await createCredential(client, p.id, "initial token", scopes, expires);
+        console.log(`AI client "${handle}" ${p.created ? "created" : "already existed"}. New token (shown once):\n${c.token}`);
+      }
     } else if (command === "add-human") {
       const [handle, name, role] = rest;
       if (!["founder", "developer", "reader"].includes(role)) throw new Error("role must be founder, developer or reader");

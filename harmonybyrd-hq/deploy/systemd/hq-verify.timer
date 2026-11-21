@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly HarmonyByrd HQ integrity check (Sunday 03:30 Sydney time)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00 Australia/Sydney
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Health check (run every 5 minutes by hq-health.timer). Writes health/status and exits non-zero on
+# any problem, which makes systemd run hq-alert@ (a notice at every SSH login, and in the journal).
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+
+problems=()
+curl -fsS --max-time 10 "http://127.0.0.1:$HQ_PORT/api/v1/health" >/dev/null 2>&1 || problems+=("application not answering on 127.0.0.1:$HQ_PORT")
+pg pg_isready -q || problems+=("PostgreSQL not ready")
+if [ -f "$HQ_VAR/backups/LAST_OK" ]; then
+  age_h=$(( ( $(date +%s) - $(stat -c %Y "$HQ_VAR/backups/LAST_OK") ) / 3600 ))
+  [ "$age_h" -le 26 ] || problems+=("last good backup is ${age_h} hours old")
+else
+  problems+=("no backup has succeeded yet")
+fi
+used="$(df --output=pcent "$HQ_VAR" | tail -1 | tr -dc 0-9)"
+[ "$used" -le 85 ] || problems+=("disk ${used}% full")
+# Nothing but SSH may listen on a public interface.
+public="$(ss -Hltn | awk '{print $4}' | grep -vE '^(127\.0\.0\.1|\[::1\]):' | grep -vE ':22$' || true)"
+[ -z "$public" ] || problems+=("unexpected public listener(s): $(echo "$public" | tr '\n' ' ')")
+
+mkdir -p "$HQ_VAR/health"
+if [ ${#problems[@]} -eq 0 ]; then
+  echo "OK $(date -u +%FT%TZ)" > "$HQ_VAR/health/status"; rm -f "$HQ_VAR/health/ALERT"; echo OK
+else
+  { echo "PROBLEM $(date -u +%FT%TZ)"; printf '  - %s\n' "${problems[@]}"; } | tee "$HQ_VAR/health/status"; exit 1
+fi

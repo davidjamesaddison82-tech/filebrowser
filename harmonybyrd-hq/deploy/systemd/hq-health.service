@@ -1,0 +1,7 @@
+[Unit]
+Description=HarmonyByrd HQ health check
+OnFailure=hq-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hq-health

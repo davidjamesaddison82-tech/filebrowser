@@ -4,7 +4,8 @@ import type { z } from "zod";
 import { principalFromRequest } from "@/lib/auth/authenticate";
 import { claimsFor, type Principal } from "@/lib/auth/principal";
 import { audit } from "./db";
-import { forbidden, fromDatabaseError, HqError, payloadTooLarge, unauthenticated } from "./errors";
+import { forbidden, fromDatabaseError, HqError, payloadTooLarge, tooManyRequests, unauthenticated } from "./errors";
+import { tokenRateLimiter } from "./token-rate";
 
 /** A client's X-Request-Id is kept, as a correlation id only, in this form (the rule hq.log_refusal applies). */
 const CLIENT_REQUEST_ID = /^[A-Za-z0-9._-]{1,64}$/;
@@ -42,6 +43,8 @@ export function errorResponse(error: unknown, requestId: string, clientRequestId
   const e = error instanceof HqError ? error : fromDatabaseError(error);
   const headers: Record<string, string> = idHeaders(requestId, clientRequestId);
   if (e.status === 401) headers["www-authenticate"] = 'Bearer realm="harmonybyrd-hq"';
+  const retryAfter = (e.detail as { retry_after_seconds?: unknown } | undefined)?.retry_after_seconds;
+  if (e.status === 429 && typeof retryAfter === "number") headers["retry-after"] = String(retryAfter);
   return json({ error: { code: e.code, message: e.message, ...(e.detail !== undefined ? { detail: e.detail } : {}), request_id: requestId } }, { status: e.status, headers });
 }
 
@@ -97,6 +100,7 @@ export async function withApi(
     principal = await principalFromRequest(request);
     if (!principal) throw unauthenticated("A valid API token (Authorization: Bearer …) or founder session is required.");
     if (options.mutating) assertSameOrigin(request);
+    await enforceTokenRate(principal, 1, options.action, requestId);
     if (options.scope) requireScope(principal, options.scope);
     const result = await handler({ principal, requestId });
     if (!options.allowedRecordedByDatabase) {
@@ -115,6 +119,33 @@ export async function withApi(
     }
     return errorResponse(e, requestId, clientRequestId);
   }
+}
+
+/**
+ * The per-token rate limit (src/lib/server/token-rate.ts): refuse an API-token caller that has used its
+ * bucket up, with 429 and Retry-After. Founder sessions are not limited. The refusal is audited at most
+ * once per token per minute, with how many were refused since the last row.
+ */
+export async function enforceTokenRate(principal: Principal, cost: number, action: string, requestId: string): Promise<void> {
+  if (principal.amr !== "api_token" || !principal.credentialId) return;
+  const limiter = tokenRateLimiter();
+  const decision = limiter.take(principal.credentialId, cost);
+  if (decision.allowed) return;
+  const { due, refused } = limiter.rateLimitAuditDue(principal.credentialId);
+  if (due) {
+    await audit(claimsFor(principal), {
+      action,
+      outcome: "denied",
+      requestId,
+      detail: { code: "rate_limited", refused_since_last_row: refused, cost },
+    });
+  }
+  throw tooManyRequests(
+    decision.tooLarge
+      ? `This request counts as ${cost} calls, more than this token may make at once. Send smaller batches.`
+      : `This token has made too many requests. Try again in ${decision.retryAfterSeconds} s.`,
+    decision.retryAfterSeconds,
+  );
 }
 
 export const DEFAULT_MAX_BODY_BYTES = 1_048_576;

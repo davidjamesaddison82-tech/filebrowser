@@ -1,0 +1,30 @@
+[Unit]
+Description=HarmonyByrd HQ (Next.js, listening on 127.0.0.1:3210 only)
+After=network-online.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=hq
+Group=hq
+EnvironmentFile=/etc/hq/hq.env
+WorkingDirectory=/opt/hq/current
+ExecStart=/usr/local/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3210
+Restart=on-failure
+RestartSec=5
+# Hardening: no new privileges, read-only system, private /tmp, no access to home directories.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/hq/releases
+OnFailure=hq-alert@%n.service
+
+[Install]
+WantedBy=multi-user.target

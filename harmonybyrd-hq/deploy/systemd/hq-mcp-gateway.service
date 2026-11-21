@@ -1,0 +1,17 @@
+[Unit]
+Description=HarmonyByrd HQ MCP gateway (127.0.0.1:3211, /api/mcp only). Enable only after approval.
+After=hq.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/caddy run --config /opt/hq/current/deploy/mcp-gateway/Caddyfile --adapter caddyfile
+Restart=on-failure
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+LogsDirectory=hq-mcp-gateway
+
+[Install]
+WantedBy=multi-user.target

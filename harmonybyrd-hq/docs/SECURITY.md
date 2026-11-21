@@ -347,7 +347,7 @@ described here.
 - No external penetration test or code review by a person outside the build.
 - No OAuth: tokens are static bearer tokens. This is adequate for a local prototype and for clients
   that accept a custom header; it is not what the ChatGPT application supports (docs/CONNECTING-AI-CLIENTS.md).
-- No rate limiting on API tokens (only the sign-in delay), no IP allow-listing, no multi-factor sign-in.
+- API tokens have a per-token rate limit (default 120 requests a minute, burst 30; HTTP 429 with `Retry-After`). It is held in the server's memory, so it resets on restart and is per process. There is no IP allow-listing and no multi-factor sign-in.
 - Anyone who can reach the sign-in page can, while they keep sending wrong passphrases, have sign-in
   refused for browsers that have never signed in. A browser that has signed in before keeps its own
   lane, limited per person and not shared between people (docs/KNOWN-GAPS.md).

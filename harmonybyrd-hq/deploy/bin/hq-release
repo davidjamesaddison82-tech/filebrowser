@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Install an application release from a source archive and switch to it. Run as root.
+#   hq-release <harmonybyrd-hq-source-<commit>.zip>
+# The archive is the output of `git archive` (see deploy/README.md); it holds code only, no records.
+# The previous release stays in place for `hq-rollback app`.
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+
+zip="${1:?usage: hq-release <source archive .zip>}"
+[ -f "$zip" ] || die "no such file: $zip"
+name="$(basename "$zip" .zip)-$(date -u +%Y%m%dT%H%M%SZ)"
+dest="$HQ_ROOT/releases/$name"
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+
+log "Unpacking $zip"
+unzip -q "$zip" -d "$tmp"
+[ -f "$tmp/harmonybyrd-hq/package.json" ] || die "the archive has no harmonybyrd-hq/package.json"
+mv "$tmp/harmonybyrd-hq" "$dest"
+chown -R hq:hq "$dest"
+
+log "Installing dependencies and building (as the hq user; takes a few minutes)"
+runuser -u hq -- bash -c "cd '$dest' && export HOME='$dest' NEXT_TELEMETRY_DISABLED=1 && npm ci --no-audit --no-fund && npx next build"
+
+previous="$(readlink -f "$HQ_ROOT/current" 2>/dev/null || true)"
+ln -sfn "$dest" "$HQ_ROOT/current.new" && mv -T "$HQ_ROOT/current.new" "$HQ_ROOT/current"
+[ -n "$previous" ] && echo "$previous" > "$HQ_ROOT/previous-release"
+install -m 0755 "$dest"/deploy/bin/hq-* /usr/local/bin/
+
+systemctl enable hq.service >/dev/null 2>&1 || true
+if pg psql -X -Atqc "select 1 from pg_database where datname = '$HQ_DB'" | grep -q 1; then
+  systemctl restart hq.service
+  sleep 3
+  curl -fsS "http://127.0.0.1:$HQ_PORT/api/v1/health" && echo
+  log "Release $name is running. Previous: ${previous:-none}"
+else
+  log "Release $name installed. The database '$HQ_DB' does not exist yet: run hq-restore-preservation next."
+fi

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Weekly integrity check of the live database (hq-verify.timer): seals recomputed from the data, the
+# hash chain, every citation's source and every quotation found verbatim. Read-only.
+#   hq-verify            # the live database
+#   hq-verify <db>       # another database (for example a restore test)
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+db="${1:-$HQ_DB}"
+if integrity_check "$db"; then log "integrity of $db: all checks PASS"; else log "integrity of $db: FAILED"; exit 1; fi

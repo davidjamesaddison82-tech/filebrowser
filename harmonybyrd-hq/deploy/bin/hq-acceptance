@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Independent acceptance check of an installed HQ. Run as root on the server:
+#   hq-acceptance                 # after migration: also compares with the 38 preserved results
+#   hq-acceptance --no-baseline   # later, once records have been added on purpose
+# It prints PASS/FAIL per check and exits non-zero if anything failed. It changes no HQ record: it
+# issues one temporary read-only token to the `researcher` identity (1 day), uses it, and revokes it.
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+
+set +e   # report every check, do not stop at the first failure
+baseline=1; [ "${1:-}" = "--no-baseline" ] && baseline=0
+fails=0
+pass() { printf 'PASS  %s\n' "$*"; }
+fail() { printf 'FAIL  %s\n' "$*"; fails=$((fails + 1)); }
+check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
+B="http://127.0.0.1:$HQ_PORT"
+
+echo "== 1. Nothing but SSH is reachable from outside"
+public="$(ss -Hltn | awk '{print $4}' | grep -vE '^(127\.0\.0\.1|\[::1\]):' | grep -vE ':22$' || true)"
+check "only SSH listens on a public interface${public:+ (found: $(echo $public))}" '[ -z "$public" ]'
+check "the application listens on 127.0.0.1:$HQ_PORT only" "ss -Hltn | awk '{print \$4}' | grep -qx '127.0.0.1:$HQ_PORT'"
+check "PostgreSQL listens on loopback only" "! ss -Hltn | awk '{print \$4}' | grep -E ':5432\$' | grep -vqE '^(127\.0\.0\.1|\[::1\]):'"
+if command -v ufw >/dev/null; then check "firewall active, incoming denied by default" "ufw status verbose | grep -q 'Status: active' && ufw status verbose | grep -q 'deny (incoming)'"; fi
+
+echo "== 2. The records are intact"
+seal_before="$(psql_db "$HQ_DB" -Atc "select content_hash from hq.dataset_revisions where rev = hq.head_rev()")"
+if out="$(integrity_check "$HQ_DB")"; then pass "integrity: seals, hash chain, citations, quotations"; else fail "integrity"; printf '%s\n' "$out" | grep FAIL; fi
+if [ "$baseline" = 1 ]; then
+  exp="$HQ_ETC/expected-results.txt"   # copied from the private package by hq-restore-preservation
+  if [ -f "$exp" ]; then
+    if diff -q "$exp" <(psql_db "$HQ_DB" -At -f "$HQ_DEPLOY/sql/verify-restore.sql") >/dev/null; then pass "the 38 restoration checks equal the preserved database"
+    else fail "the 38 restoration checks differ from the preserved database (run with --no-baseline only if records were added on purpose)"; fi
+  else fail "missing $exp"; fi
+fi
+
+echo "== 3. The founder screens need a signed-in session"
+code="$(curl -s -o /dev/null -w '%{http_code}' "$B/")"
+check "/ without a session redirects to sign-in (got $code)" '[ "$code" = 307 ] || [ "$code" = 302 ] || [ "$code" = 303 ]'
+code="$(curl -s -o /dev/null -w '%{http_code}' "$B/api/v1/whoami")"
+check "the API without a token answers 401 (got $code)" '[ "$code" = 401 ]'
+
+echo "== 4. A read-only AI identity can read and can do nothing else"
+load_hq_env
+tok="$(hq_node scripts/credentials.ts token researcher "acceptance-test $(date -u +%FT%TZ)" --scopes read --days 1 | grep -o 'hbq_[A-Za-z0-9_-]*' | head -1)"
+[ -n "$tok" ] || die "could not issue the temporary token (does the researcher identity exist? run hq-identities)"
+H="Authorization: Bearer $tok"
+mcp() { curl -s -X POST -H "$H" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' "$B/api/mcp" -d "$1"; }
+code="$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/api/v1/tools/get_ecosystem_overview")"
+check "REST read tool works (got $code)" '[ "$code" = 200 ]'
+tools="$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).result.tools.map(t=>t.name).sort().join(" "))}catch{console.log("")}})')"
+n="$(echo "$tools" | wc -w)"
+check "MCP lists exactly the 15 read tools to a read-only token (got $n)" '[ "$n" = 15 ]'
+check "MCP lists no write tool" '! echo "$tools" | grep -qE "submit_change_proposal|submit_defect_report|record_test_evidence"'
+r="$(mcp '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"submit_defect_report","arguments":{"title":"x","module_ids":[],"description":"x"}}}')"
+check "MCP refuses a write tool to a read-only token" 'echo "$r" | grep -q "not available to this credential"'
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$H" -H 'content-type: application/json' "$B/api/v1/decisions" -d '{}')"
+check "a founder act with an AI token is refused (got $code)" '[ "$code" = 403 ] || [ "$code" = 401 ]'
+codes=""; for i in $(seq 1 $(( ${HQ_TOKEN_BURST:-30} + 2 ))); do codes="$codes $(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/api/v1/whoami")"; done
+check "the per-token rate limit answers 429 past the burst" "echo '$codes' | grep -q 429"
+
+psql_db "$HQ_DB" -c "update hq.api_credentials set revoked_at = now() where label like 'acceptance-test %' and revoked_at is null" >/dev/null
+code="$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/api/v1/whoami")"
+check "the temporary token no longer works once revoked (got $code)" '[ "$code" = 401 ]'
+
+echo "== 5. Nothing changed"
+seal_after="$(psql_db "$HQ_DB" -Atc "select content_hash from hq.dataset_revisions where rev = hq.head_rev()")"
+check "the dataset seal is unchanged by these checks" '[ "$seal_before" = "$seal_after" ]'
+
+echo "== 6. Backups"
+check "a backup has succeeded in the last 26 hours" "[ -f '$HQ_VAR/backups/LAST_OK' ] && [ \$(( (\$(date +%s) - \$(stat -c %Y '$HQ_VAR/backups/LAST_OK')) / 3600 )) -le 26 ]"
+check "backups on the server are encrypted (no plain dump files)" "! ls '$HQ_VAR'/backups/*.dump >/dev/null 2>&1"
+
+echo
+if [ "$fails" = 0 ]; then echo "ALL CHECKS PASSED"; else echo "$fails CHECK(S) FAILED"; exit 1; fi

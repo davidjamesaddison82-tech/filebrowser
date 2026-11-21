@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Roll back. Run as root.
+#   hq-rollback app
+#       Switch back to the previous application release and restart. Data untouched.
+#   hq-rollback db <hq-YYYYmmddTHHMMSSZ.dump.age> <age private key file>
+#       Replace the live database with a backup. The live database is NOT deleted: it is renamed
+#       hq_replaced_<time> and kept until you drop it yourself. The key file is the founder's private
+#       key, brought to the server for this command only; delete it from the server afterwards.
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+
+case "${1:-}" in
+  app)
+    prev="$(cat "$HQ_ROOT/previous-release" 2>/dev/null || true)"
+    [ -n "$prev" ] && [ -d "$prev" ] || die "no previous release recorded"
+    cur="$(readlink -f "$HQ_ROOT/current")"
+    ln -sfn "$prev" "$HQ_ROOT/current.new" && mv -T "$HQ_ROOT/current.new" "$HQ_ROOT/current"
+    echo "$cur" > "$HQ_ROOT/previous-release"
+    systemctl restart hq.service
+    log "Now running $prev (the release you left: $cur)"
+    ;;
+  db)
+    backup="${2:?backup file}"; key="${3:?age private key file}"
+    [ -f "$backup" ] && [ -f "$key" ] || die "backup or key file not found"
+    if [ -f "$backup.sha256" ]; then (cd "$(dirname "$backup")" && sha256sum -c "$(basename "$backup").sha256") || die "backup checksum mismatch"; fi
+    work="$(pg mktemp -d)"; trap 'pg rm -rf "$work"' EXIT
+    age -d -i "$key" -o - "$backup" | pg tee "$work/restore.dump" >/dev/null
+    pg dropdb --if-exists hq_rollback_check; pg createdb hq_rollback_check
+    pg pg_restore --exit-on-error -d hq_rollback_check "$work/restore.dump"
+    integrity_check hq_rollback_check | sed 's/^/   /' || die "the backup failed its integrity checks; live database untouched (hq_rollback_check kept for inspection)"
+    systemctl stop hq.service || true
+    keep="hq_replaced_$(date -u +%Y%m%dT%H%M%SZ)"
+    pg psql -X -q -d postgres -c "select pg_terminate_backend(pid) from pg_stat_activity where datname = '$HQ_DB'" >/dev/null
+    pg psql -X -q -v ON_ERROR_STOP=1 -d postgres -c "alter database \"$HQ_DB\" rename to \"$keep\"" -c "alter database hq_rollback_check rename to \"$HQ_DB\"" -c "grant connect on database \"$HQ_DB\" to hq_app"
+    systemctl start hq.service || true
+    log "Database replaced from $backup. The previous live database is kept as $keep."
+    ;;
+  *) die "usage: hq-rollback app | hq-rollback db <backup.dump.age> <age private key file>";;
+esac

@@ -12,7 +12,7 @@ import { principalFromRequest } from "@/lib/auth/authenticate";
 import { claimsFor, type Principal, publicPrincipal } from "@/lib/auth/principal";
 import { audit } from "@/lib/server/db";
 import { fromDatabaseError, HqError } from "@/lib/server/errors";
-import { assertSameOrigin, json, otherMethods, readBodyText } from "@/lib/server/http";
+import { assertSameOrigin, enforceTokenRate, json, otherMethods, readBodyText } from "@/lib/server/http";
 import { HQ_NOTICE } from "@/lib/server/services";
 import { findTool, TOOLS, toolInputSchema } from "@/lib/server/tools";
 import { cutText } from "@/lib/text";
@@ -206,6 +206,17 @@ export async function POST(request: Request) {
     return json(rpcError(null, -32600, `Send at most ${MAX_BATCH} JSON-RPC messages in one batch.`), { status: 400, headers });
   }
   const messages: unknown[] = batch ? (payload as unknown[]) : [payload];
+  // Per-token rate limit: every message in a batch counts as one request.
+  try {
+    await enforceTokenRate(principal, messages.length, "mcp.rate_limit", requestId);
+  } catch (error) {
+    const e = error instanceof HqError ? error : fromDatabaseError(error);
+    const retryAfter = (e.detail as { retry_after_seconds?: number } | undefined)?.retry_after_seconds;
+    return json(rpcError(null, -32000, e.message, { code: e.code, status: e.status, ...(retryAfter ? { retry_after_seconds: retryAfter } : {}) }), {
+      status: e.status,
+      headers: { ...headers, ...(retryAfter ? { "retry-after": String(retryAfter) } : {}) },
+    });
+  }
   const responses: unknown[] = [];
   for (const message of messages) {
     try {

@@ -1,0 +1,8 @@
+[Unit]
+Description=HarmonyByrd HQ alert for %i
+
+[Service]
+Type=oneshot
+# Records the failure where the founder will see it: a notice shown at every SSH login, and the journal.
+# To also be emailed or messaged, add a command to /etc/hq/alert.sh (see deploy/README.md); it receives the unit name.
+ExecStart=/bin/sh -c 'mkdir -p /var/lib/hq/health; echo "$(date -u +%%FT%%TZ) %i failed: see journalctl -u %i" >> /var/lib/hq/health/ALERT; logger -p user.err -t hq-alert "%i failed"; [ -x /etc/hq/alert.sh ] && /etc/hq/alert.sh "%i" || true'

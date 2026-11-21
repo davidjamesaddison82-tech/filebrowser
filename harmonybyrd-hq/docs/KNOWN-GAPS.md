@@ -10,7 +10,7 @@ docs/TESTING.md does not show.
 | --- | --- |
 | HQ is not authoritative | The prerequisite HB-AI-P00 could not be shown to be completed or accepted. HQ says so on every screen and in every API answer |
 | HQ is not accepted | No founder acceptance of HQ exists. Building it satisfies no gate |
-| HQ is not deployed | It runs on a local machine only |
+| HQ is not deployed | It runs on a local machine only. A deployment package (deploy/, docs/HOSTING.md) is prepared and rehearsed locally, but nothing is installed on a server; its installer and release script have not been run on a real Ubuntu server yet |
 
 ## Sources HQ could not read
 
@@ -45,6 +45,7 @@ named — is in the application under *Sources*, and in the private findings rep
 ## Functional limits
 
 - **No OAuth.** Clients use static bearer tokens.
+- **The per-token rate limit is in memory.** It resets when HQ restarts and is per process; one process is all the deployment design runs.
 - **No editing in place, by design.** Records change only through proposals the founder accepts, founder decisions, or a new import.
 - **Search** is a simple all-words match over record text. No ranking, stemming or fuzzy matching.
 - **Importing new documents is a build step,** not a screen. Turning a document into cited records

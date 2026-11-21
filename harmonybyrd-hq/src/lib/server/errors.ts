@@ -20,6 +20,9 @@ export const conflict = (message: string, detail?: unknown) => new HqError(409, 
 export const invalid = (message: string, detail?: unknown) => new HqError(422, "invalid_request", message, detail);
 export const payloadTooLarge = (maxBytes: number) =>
   new HqError(413, "payload_too_large", `The request body is larger than ${maxBytes} bytes.`, { max_bytes: maxBytes });
+/** 429: a token used faster than its rate limit allows. `retryAfterSeconds` becomes the Retry-After header. */
+export const tooManyRequests = (message: string, retryAfterSeconds: number) =>
+  new HqError(429, "rate_limited", message, { retry_after_seconds: retryAfterSeconds });
 export const unavailable =(message: string, detail?: unknown) => new HqError(503, "service_unavailable", message, detail);
 
 const SQLSTATE: Record<string, { status: number; code: string }> = {

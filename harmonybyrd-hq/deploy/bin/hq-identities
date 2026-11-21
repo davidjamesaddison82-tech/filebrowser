@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Create the three external read-only AI identities, WITHOUT tokens. Run as root after the restore.
+# Each gets its own identity, audit trail and (later) its own token. A token is issued only with
+# hq-token, once the founder has approved connecting that client.
+. "$(dirname "$(readlink -f "$0")")/hq-common.sh"
+load_hq_env
+hq_node scripts/credentials.ts add-client researcher "Claude Researcher (Anthropic, read only)" --scopes read --no-token
+hq_node scripts/credentials.ts add-client qa-auditor "Claude QA Auditor (Anthropic, read only)" --scopes read --no-token
+hq_node scripts/credentials.ts add-client chatgpt "ChatGPT (OpenAI, read only)" --scopes read --no-token
+hq_node scripts/credentials.ts list

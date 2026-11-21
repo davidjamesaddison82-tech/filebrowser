@@ -186,6 +186,11 @@ attempt is refused *and* nothing changed. Examples:
   request id, the same as its audit row where it has one (`tests/api/mcp.test.ts`);
 - an oversized body, a bad MCP batch element, an argument a tool does not take, a live look-up by an
   API token (`tests/api/hardening.test.ts`).
+- a token past its rate limit, over REST and MCP: 429 with `Retry-After`, another token unaffected,
+  the allowance refilled with time, an MCP batch charged per message and one larger than the burst
+  refused outright, refusals audited at most once a minute, a founder session exempt
+  (`tests/unit/token-rate.test.ts`, `tests/api/token-rate.test.ts`). The shared test servers run with
+  `HQ_TOKEN_RATE_PER_MINUTE=0` so the other suites are not limited.
 
 ## Corrections made to tests during the build
 

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Shown at SSH login: HQ health and any unacknowledged alerts.
+echo
+echo "HarmonyByrd HQ: $(head -1 /var/lib/hq/health/status 2>/dev/null || echo 'no health check yet')"
+[ -f /var/lib/hq/backups/LAST_OK ] && echo "Last good backup: $(cut -d' ' -f1 /var/lib/hq/backups/LAST_OK 2>/dev/null)"
+if [ -s /var/lib/hq/health/ALERT ]; then
+  echo "ALERTS (clear with: sudo rm /var/lib/hq/health/ALERT once dealt with):"
+  tail -5 /var/lib/hq/health/ALERT
+fi

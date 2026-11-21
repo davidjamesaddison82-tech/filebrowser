@@ -25,6 +25,9 @@ export function serverEnv(baseUrl: string = TEST_BASE_URL, overrides: Record<str
     HQ_GOOGLE_DRIVE_FILE_IDS: "",
     // Sign-in delays are short on the test server (the production default is 500 ms; see throttle.ts).
     HQ_SIGNIN_BASE_DELAY_MS: "200",
+    // The per-token rate limit is off on the shared test server (its suites call far faster than any
+    // client should); tests/api/token-rate.test.ts runs its own server with the limit on.
+    HQ_TOKEN_RATE_PER_MINUTE: "0",
     HQ_TRUST_PROXY: "",
     HQ_MAX_BODY_BYTES: "",
     NEXT_TELEMETRY_DISABLED: "1",
